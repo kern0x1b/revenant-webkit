@@ -1,0 +1,35 @@
+{
+  "name": "Threads",
+  "bundle_id": "space.kern0x1b.webapp.threads",
+  "scheme": "threads",
+  "version": "1.0",
+  "start_url": "https://www.threads.com/",
+
+  "internal_hosts": ["www.threads.com", "threads.com", "www.instagram.com"],
+
+  "shell_hosts": ["www.threads.com", "static.cdninstagram.com"],
+  "precache": ["https://www.threads.com/"],
+
+  "user_agent": {
+    "product_version": "18.7",
+    "build_version": "604.1",
+    "bundle_version": "604.1",
+    "override": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+  },
+
+  "orientation": "portrait",
+  "status_bar_style": "default",
+  "background_color": "#ffffff",
+  "icon_color": "#000000",
+
+  "inject_css": "../inject/appchrome.css",
+  "inject_js": "../inject/threads.js",
+  "external_links": "open-in-safari",
+
+  "notes": [
+    "www.instagram.com is internal because sign-in is delegated to it: a Threads login redirects through instagram.com and back, and treating that as an external link would hand the sign-in to Safari and never come back.",
+    "static.cdninstagram.com carries the stylesheets and scripts; the images are on *.fbcdn.net, which is deliberately not shell — those are content, not interface, and the RFC 9111 cache handles them on its own terms.",
+    "The user agent claims a Mac. Told it is a phone, this site raises an install sheet for its own app after the first scroll, and that sheet has no dismissal at all in the form it comes back in - thirteen nodes, an icon, two lines of text and one link. While it is up the site puts the document at one screen tall and moves the feed into an inner scrolling container, so nothing can be scrolled and the page is unusable. Measured on the device: mobile agent, sheet after one flick, document 460; Mac agent, eight flicks, no sheet, document scrolls. Sign-in still goes through instagram.com.",
+    "precache lists only the document. The script and stylesheet URLs are content-hashed and change on every deploy, so naming them here would be a list that rots; the shell policy stores them as the first load meets them."
+  ]
+}

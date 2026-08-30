@@ -1,0 +1,1849 @@
+diff --git a/Source/JavaScriptCore/API/JSRemoteInspector.cpp b/Source/JavaScriptCore/API/JSRemoteInspector.cpp
+index 02279c2e7a..c965b5abcd 100644
+--- a/Source/JavaScriptCore/API/JSRemoteInspector.cpp
++++ b/Source/JavaScriptCore/API/JSRemoteInspector.cpp
+@@ -86,7 +86,9 @@ static bool mainProcessHasEntitlement(ASCIILiteral entitlement, std::optional<au
+ 
+ static bool defaultStateForRemoteInspectionEnabledByDefault(void)
+ {
+-#if PLATFORM(COCOA)
++#if PLATFORM(COCOA) && !ENABLE(REMOTE_INSPECTOR)
++    return false;
++#elif PLATFORM(COCOA)
+     auto parentProcessAuditToken = RemoteInspector::singleton().parentProcessAuditToken();
+ 
+     if (!linkedOnOrAfterSDKWithBehavior(SDKAlignedBehavior::InspectableDefaultsToDisabled)) {
+diff --git a/Source/JavaScriptCore/API/JSWrapperMap.h b/Source/JavaScriptCore/API/JSWrapperMap.h
+index a5946a8f83..794f64acdf 100644
+--- a/Source/JavaScriptCore/API/JSWrapperMap.h
++++ b/Source/JavaScriptCore/API/JSWrapperMap.h
+@@ -25,7 +25,7 @@
+ 
+ #import "JSValueInternal.h"
+ #import <JavaScriptCore/JavaScriptCore.h>
+-#import <objc/objc-runtime.h>
++#import <objc/runtime.h>
+ 
+ #if JSC_OBJC_API_ENABLED
+ 
+diff --git a/Source/JavaScriptCore/CMakeLists.txt b/Source/JavaScriptCore/CMakeLists.txt
+index 0cd2c74897..e787cbe43b 100644
+--- a/Source/JavaScriptCore/CMakeLists.txt
++++ b/Source/JavaScriptCore/CMakeLists.txt
+@@ -26,6 +26,7 @@ set(JavaScriptCore_PRIVATE_INCLUDE_DIRECTORIES
+     "${JAVASCRIPTCORE_DIR}/dfg"
+     "${JAVASCRIPTCORE_DIR}/disassembler"
+     "${JAVASCRIPTCORE_DIR}/disassembler/ARM64"
++    "${JAVASCRIPTCORE_DIR}/disassembler/ARMv7"
+     "${JAVASCRIPTCORE_DIR}/disassembler/zydis"
+     "${JAVASCRIPTCORE_DIR}/domjit"
+     "${JAVASCRIPTCORE_DIR}/ftl"
+@@ -1800,6 +1801,20 @@ add_dependencies(JavaScriptCore_CopyPrivateHeaders Bytecodes JSCBuiltins JSCWebP
+ target_include_directories(LowLevelInterpreterLib
+     PRIVATE "$<TARGET_PROPERTY:JavaScriptCore,INCLUDE_DIRECTORIES>" "${JavaScriptCore_PRIVATE_FRAMEWORK_HEADERS_DIR}/JavaScriptCore")
+ add_dependencies(LowLevelInterpreterLib Bytecodes JSCBuiltins JSCWebPreferenceOptions)
++
++# The interpreter is offline-generated assembly whose jump tables are label
++# differences computed at assembly time. Link-time optimization re-lays the
++# functions those labels live in, and the first entry into the interpreter
++# then jumps through a table pointing at the old layout - a clean SIGSEGV in
++# doVMEntry, reproduced twice on the device. Everything else takes LTO; this
++# one translation unit is compiled the ordinary way.
++target_compile_options(LowLevelInterpreterLib PRIVATE -fno-lto)
++
++if (WEBKIT_IOS6_SIZE_OPTIMIZED)
++    # The interpreter keeps -O3: it is the hot path for every line of script on
++    # the page and the one place where speed is worth its bytes.
++    target_compile_options(JavaScriptCore PRIVATE -Oz)
++endif ()
+ if (TARGET WTF_CopyHeaders)
+     add_dependencies(LowLevelInterpreterLib WTF_CopyHeaders)
+ endif ()
+diff --git a/Source/JavaScriptCore/PlatformCocoa.cmake b/Source/JavaScriptCore/PlatformCocoa.cmake
+index ed7f43aa78..7863f5c760 100644
+--- a/Source/JavaScriptCore/PlatformCocoa.cmake
++++ b/Source/JavaScriptCore/PlatformCocoa.cmake
+@@ -5,8 +5,20 @@ target_compile_options(JavaScriptCore PRIVATE
+ )
+ 
+ find_library(SECURITY_LIBRARY Security)
++
++if (NOT SECURITY_LIBRARY)  # ios6: allow missing frameworks
++
++    set(SECURITY_LIBRARY "")
++
++endif ()
+ find_library(COREGRAPHICS_LIBRARY CoreGraphics)
++if (NOT COREGRAPHICS_LIBRARY)  # ios6: allow missing frameworks
++    set(COREGRAPHICS_LIBRARY "")
++endif ()
+ find_library(CORETEXT_LIBRARY CoreText)
++if (NOT CORETEXT_LIBRARY)  # ios6: allow missing frameworks
++    set(CORETEXT_LIBRARY "")
++endif ()
+ list(APPEND JavaScriptCore_LIBRARIES
+     ${SECURITY_LIBRARY}
+     ${COREGRAPHICS_LIBRARY}
+diff --git a/Source/JavaScriptCore/PlatformIOS.cmake b/Source/JavaScriptCore/PlatformIOS.cmake
+index 5477481465..07ea81163b 100644
+--- a/Source/JavaScriptCore/PlatformIOS.cmake
++++ b/Source/JavaScriptCore/PlatformIOS.cmake
+@@ -26,7 +26,14 @@ set(PRODUCT_BUNDLE_IDENTIFIER "com.apple.JavaScriptCore")
+ configure_file(${JAVASCRIPTCORE_DIR}/Info.plist ${CMAKE_CURRENT_BINARY_DIR}/JavaScriptCore-Info.plist)
+ 
+ # Weak-linked: iOS 17.4+.
+-target_link_options(JavaScriptCore PRIVATE -weak_framework BrowserEngineCore)
++# ios6/armv7: the port's guard for this moved -- on trunk this line lives in
++# JavaScriptCore/PlatformCocoa.cmake, on 2.54 it is here. BrowserEngineCore (the
++# be_memory_* inline-JIT-permissions API) is iOS 17.4+ and absent from this SDK;
++# even weak-linking needs the framework to exist at link time.
++find_library(BROWSERENGINECORE_LIBRARY BrowserEngineCore)
++if (BROWSERENGINECORE_LIBRARY)
++    target_link_options(JavaScriptCore PRIVATE -weak_framework BrowserEngineCore)
++endif ()
+ 
+ target_compile_options(JavaScriptCore PRIVATE ${WEBKIT_PRIVATE_FRAMEWORKS_COMPILE_FLAG})
+ 
+diff --git a/Source/JavaScriptCore/Sources.txt b/Source/JavaScriptCore/Sources.txt
+index b1734e6885..9c09e5ca9c 100644
+--- a/Source/JavaScriptCore/Sources.txt
++++ b/Source/JavaScriptCore/Sources.txt
+@@ -467,6 +467,7 @@ dfg/DFGVariableEventStream.cpp
+ dfg/DFGVirtualRegisterAllocationPhase.cpp
+ 
+ disassembler/ARM64Disassembler.cpp
++disassembler/ARMv7Disassembler.cpp
+ disassembler/CapstoneDisassembler.cpp
+ disassembler/Disassembler.cpp
+ disassembler/RISCV64Disassembler.cpp
+@@ -475,6 +476,8 @@ disassembler/X86Disassembler.cpp
+ disassembler/ARM64/A64DOpcode.cpp
+ disassembler/ARM64/Binja.c @no-unify // C source; cannot bundle with C++.
+ 
++disassembler/ARMv7/ARMv7DOpcode.cpp
++
+ disassembler/zydis/Zydis.c
+ 
+ domjit/DOMJITAbstractHeap.cpp
+diff --git a/Source/JavaScriptCore/assembler/JITOperationValidation.h b/Source/JavaScriptCore/assembler/JITOperationValidation.h
+index c3f7ea4b3c..ad4be1ea2c 100644
+--- a/Source/JavaScriptCore/assembler/JITOperationValidation.h
++++ b/Source/JavaScriptCore/assembler/JITOperationValidation.h
+@@ -34,7 +34,13 @@
+ #include <WebKitAdditions/JITCageAdditions.h>
+ #pragma clang diagnostic pop
+ #else // ENABLE(JIT_CAGE)
+-#if OS(DARWIN)
++#if defined(WEBKIT_IOS6)
++// MAP_JIT arrived years after this system. Passing it to mmap here fails with
++// EINVAL, the executable region is never reserved, and JavaScriptCore falls back
++// to the interpreter without saying so.
++#define MAP_EXECUTABLE_FOR_JIT 0
++#define MAP_EXECUTABLE_FOR_JIT_WITH_JIT_CAGE 0
++#elif OS(DARWIN)
+ #define MAP_EXECUTABLE_FOR_JIT MAP_JIT
+ #define MAP_EXECUTABLE_FOR_JIT_WITH_JIT_CAGE MAP_JIT
+ #else // OS(DARWIN)
+diff --git a/Source/JavaScriptCore/assembler/LinkBuffer.cpp b/Source/JavaScriptCore/assembler/LinkBuffer.cpp
+index 63fdfb782e..3a71f6256b 100644
+--- a/Source/JavaScriptCore/assembler/LinkBuffer.cpp
++++ b/Source/JavaScriptCore/assembler/LinkBuffer.cpp
+@@ -275,11 +275,31 @@ private:
+ 
+ static ALWAYS_INLINE void recordLinkOffsets(AssemblerData& assemblerData, int32_t regionStart, int32_t regionEnd, int32_t offset)
+ {
++    // This table is read back by executableOffsetFor() as an array of int32_t
++    // slots, so the pattern has to land on slot boundaries. regionStart and
++    // regionEnd are instruction offsets, and on Thumb-2 instructions are two or
++    // four bytes - so roughly half of these regions start at 2 mod 4. On ARM64,
++    // the only other branch-compaction target, every instruction is four bytes
++    // and the question never comes up, which is why the Darwin path below has
++    // always been written as a byte-addressed fill.
++    //
++    // memset_pattern4() repeats the pattern from exactly the byte it is handed.
++    // Handed a 2-mod-4 address it writes every slot two bytes out of phase, so a
++    // compaction delta of 0x80 reads back as 0x00800000. applyOffset() subtracts
++    // that from a code offset, and JIT::link() then patches an address 8MB
++    // outside its own code buffer - a read-only mapping, hence SIGBUS.
++    //
++    // Round to slot boundaries, which is exactly what the portable path does.
++    const int32_t slotMask = ~static_cast<int32_t>(sizeof(int32_t) - 1);
++    const int32_t slotStart = regionStart & slotMask;
++    const int32_t slotEnd = regionEnd & slotMask;
++    if (slotEnd <= slotStart)
++        return;
+ #if OS(DARWIN)
+-    memset_pattern4(std::bit_cast<uint8_t*>(assemblerData.buffer()) + regionStart, &offset, regionEnd - regionStart);
++    memset_pattern4(std::bit_cast<uint8_t*>(assemblerData.buffer()) + slotStart, &offset, slotEnd - slotStart);
+ #else
+-    int32_t ptr = regionStart / sizeof(int32_t);
+-    const int32_t end = regionEnd / sizeof(int32_t);
++    int32_t ptr = slotStart / sizeof(int32_t);
++    const int32_t end = slotEnd / sizeof(int32_t);
+     int32_t* offsets = reinterpret_cast_ptr<int32_t*>(assemblerData.buffer());
+     while (ptr < end)
+         offsets[ptr++] = offset;
+@@ -405,7 +425,7 @@ void LinkBuffer::copyCompactAndLinkCode(MacroAssembler& macroAssembler, JITCompi
+ 
+ 
+     recordLinkOffsets(m_assemblerStorage, readPtr, initialSize, readPtr - writePtr);
+-        
++
+     for (unsigned i = 0; i < jumpCount; ++i) {
+         auto& linkRecord = jumpsToLink[i];
+         uint8_t* location = codeOutData + linkRecord.from();
+diff --git a/Source/JavaScriptCore/assembler/MacroAssemblerARMv7.h b/Source/JavaScriptCore/assembler/MacroAssemblerARMv7.h
+index d764ed66a9..5108547b92 100644
+--- a/Source/JavaScriptCore/assembler/MacroAssemblerARMv7.h
++++ b/Source/JavaScriptCore/assembler/MacroAssemblerARMv7.h
+@@ -4282,7 +4282,7 @@ protected:
+         if (cachedRegisterGetValue(cachedRegister, currentRegisterContents)) {
+             intptr_t addressDelta = addressAsInt - currentRegisterContents;
+             if (Bounds::within(addressDelta))
+-                return reinterpret_cast<int32_t>(addressDelta);
++                return static_cast<int32_t>(addressDelta);
+         }
+         return { };
+     }
+diff --git a/Source/JavaScriptCore/bytecode/CodeBlockInlines.h b/Source/JavaScriptCore/bytecode/CodeBlockInlines.h
+index d04dddf4b3..79ef608457 100644
+--- a/Source/JavaScriptCore/bytecode/CodeBlockInlines.h
++++ b/Source/JavaScriptCore/bytecode/CodeBlockInlines.h
+@@ -29,6 +29,9 @@
+ #include "BytecodeStructs.h"
+ #include "CodeBlock.h"
+ #include "DFGJITCode.h"
++#include "JumpTable.h"  // ios6/armv7: baselineSwitchJumpTable() below is #if ENABLE(JIT)
++                        // and indexes FixedVector<SimpleJumpTable>, which needs the
++                        // complete type; CodeBlock.h only forward-declares it.
+ #include "UnlinkedMetadataTableInlines.h"
+ 
+ namespace JSC {
+diff --git a/Source/JavaScriptCore/bytecode/InlineCacheCompiler.cpp b/Source/JavaScriptCore/bytecode/InlineCacheCompiler.cpp
+index c6ad00c2f2..188d423397 100644
+--- a/Source/JavaScriptCore/bytecode/InlineCacheCompiler.cpp
++++ b/Source/JavaScriptCore/bytecode/InlineCacheCompiler.cpp
+@@ -681,6 +681,21 @@ static bool NODELETE isStateless(AccessCase::AccessType type)
+ }
+ #endif
+ 
++#if !CPU(ADDRESS64)
++// ios6/armv7: JSC_FOR_EACH_COMMON_THUNK in jit/JITThunks.h is a backslash-continued macro
++// list, so its GetByIdMegamorphicGetterHandler entry cannot be #if'd out and
++// JITThunks::initialize() references this symbol on every architecture. The real
++// definition below is inside #if CPU(ADDRESS64) because it needs the 64-bit-only
++// AssemblyHelpers::loadMegamorphicGetterSetter. initialize() only stores the returned
++// code ref into m_commonThunks, and the only thing that would ever call through it is a
++// LoadMegamorphicGetter access case, which a 32-bit build never creates -- so an empty
++// code ref is stored and never dereferenced.
++MacroAssemblerCodeRef<JITThunkPtrTag> getByIdMegamorphicGetterHandler(VM&)
++{
++    return { };
++}
++#endif
++
+ bool NODELETE doesJSCalls(AccessCase::AccessType type)
+ {
+     switch (type) {
+@@ -2034,6 +2049,10 @@ void InlineCacheCompiler::generateWithGuard(unsigned index, AccessCase& accessCa
+         return;
+     }
+ 
++#if USE(JSVALUE64)
++    // ios6/armv7: this case is written entirely in 64-bit macro-assembler ops and has
++    // never had a 32-bit path. Repatch.cpp is guarded to match, so it is never created
++    // on a 32-bit build and this arm is unreachable there.
+     case AccessCase::ArrayLengthStore: {
+         ASSERT(!accessCase.viaGlobalProxy());
+ 
+@@ -2082,6 +2101,7 @@ void InlineCacheCompiler::generateWithGuard(unsigned index, AccessCase& accessCa
+             m_failAndIgnore.append(failAndIgnore);
+         return;
+     }
++#endif // USE(JSVALUE64)
+ 
+     case AccessCase::RegExpLastIndexStore: {
+         ASSERT(!accessCase.viaGlobalProxy());
+@@ -2468,7 +2488,7 @@ void InlineCacheCompiler::generateWithGuard(unsigned index, AccessCase& accessCa
+         fallThrough.append(jit.branchIfNotTrue(m_propertyCache.propertyGPR()));
+ #else
+         fallThrough.append(jit.branch32(CCallHelpers::NotEqual, m_propertyCache.propertyTagGPR(), CCallHelpers::TrustedImm32(JSValue::BooleanTag)));
+-        fallThrough.append(jit.branchTest32(CCallHelpers::Zero, m_propertyCache.propertyPayloadGPR(), CCallHelpers::TrustedImm32(1)));
++        fallThrough.append(jit.branchTest32(CCallHelpers::Zero, m_propertyCache.propertyGPR(), CCallHelpers::TrustedImm32(1)));
+ #endif
+         emitDefaultGuard();
+         break;
+@@ -2482,7 +2502,7 @@ void InlineCacheCompiler::generateWithGuard(unsigned index, AccessCase& accessCa
+         fallThrough.append(jit.branchIfNotFalse(m_propertyCache.propertyGPR()));
+ #else
+         fallThrough.append(jit.branch32(CCallHelpers::NotEqual, m_propertyCache.propertyTagGPR(), CCallHelpers::TrustedImm32(JSValue::BooleanTag)));
+-        fallThrough.append(jit.branchTest32(CCallHelpers::NonZero, m_propertyCache.propertyPayloadGPR(), CCallHelpers::TrustedImm32(1)));
++        fallThrough.append(jit.branchTest32(CCallHelpers::NonZero, m_propertyCache.propertyGPR(), CCallHelpers::TrustedImm32(1)));
+ #endif
+         emitDefaultGuard();
+         break;
+@@ -3535,7 +3555,13 @@ void InlineCacheCompiler::generateAccessCase(unsigned index, AccessCase& accessC
+ 
+             CCallHelpers::JumpList slowCases;
+             ASSERT(!useHandlerIC());
++#if USE(JSVALUE64)
+             slowCases.append(jit.loadMegamorphicGetterSetter(vm, baseGPR, InvalidGPRReg, uid, scratchGPR, scratch2GPR, scratch3GPR, scratch4GPR));
++#else
++            // ios6/armv7: unreachable -- the case is not created on 32-bit (see above).
++            UNUSED_PARAM(uid);
++            RELEASE_ASSERT_NOT_REACHED();
++#endif
+ 
+             allocator.restoreReusedRegistersByPopping(jit, preservedState);
+ 
+@@ -4878,8 +4904,14 @@ RefPtr<AccessCase> InlineCacheCompiler::tryFoldToMegamorphic(CodeBlock* codeBloc
+                         break;
+                     }
+                 }
++#if USE(JSVALUE64)
++                // ios6/armv7: LoadMegamorphicGetter is generated with
++                // AssemblyHelpers::loadMegamorphicGetterSetter, which lives in a
++                // #if USE(JSVALUE64) block and has no 32-bit implementation. Not creating
++                // the case leaves these sites as ordinary polymorphic getter ICs.
+                 if (allGetters)
+                     return AccessCase::create(vm(), codeBlock, AccessCase::LoadMegamorphicGetter, identifier);
++#endif
+             }
+ 
+             unsigned numberOfUndesiredMegamorphicAccessVariants = 0;
+diff --git a/Source/JavaScriptCore/bytecode/InlineCacheCompiler.h b/Source/JavaScriptCore/bytecode/InlineCacheCompiler.h
+index 41ac33486c..3bd66d93fe 100644
+--- a/Source/JavaScriptCore/bytecode/InlineCacheCompiler.h
++++ b/Source/JavaScriptCore/bytecode/InlineCacheCompiler.h
+@@ -31,6 +31,8 @@
+ #include "InlineCacheHandler.h"
+ #include "JITStubRoutine.h"
+ #include "JSFunctionInlines.h"
++#include "CCallHelpers.h"  // ios6/armv7: emitDataICCheckStructure/Uid below name
++                           // CCallHelpers::Jump and ::JumpList, needing the definition.
+ #include "MacroAssembler.h"
+ #include "PropertyInlineCacheClearingWatchpoint.h"
+ #include "ScratchRegisterAllocator.h"
+diff --git a/Source/JavaScriptCore/bytecode/PropertyInlineCache.h b/Source/JavaScriptCore/bytecode/PropertyInlineCache.h
+index 14ec550594..b73127558a 100644
+--- a/Source/JavaScriptCore/bytecode/PropertyInlineCache.h
++++ b/Source/JavaScriptCore/bytecode/PropertyInlineCache.h
+@@ -838,6 +838,36 @@ struct BaselineUnlinkedPropertyInlineCache : JSC::UnlinkedPropertyInlineCache {
+     BytecodeIndex bytecodeIndex;
+ };
+ 
++// ios6/armv7: hoisted out of dfg/DFGJITCode.h, which is wholly #if ENABLE(DFG_JIT).
++// JITInlineCacheGenerator.h puts DFG::UnlinkedPropertyInlineCache into
++// CompileTimePropertyInlineCache and dereferences it with no ENABLE(DFG_JIT) guard, so a
++// baseline-JIT-only build needs the complete type. Nothing in it depends on the DFG.
++namespace DFG {
++
++struct UnlinkedPropertyInlineCache : JSC::UnlinkedPropertyInlineCache {
++    void setUsedRegisters(ScalarRegisterSet value) { m_usedRegisters = value; }
++    void removeUsedRegister(GPRReg reg) { m_usedRegisters.remove(reg); }
++
++    CodeOrigin codeOrigin;
++    CallSiteIndex callSiteIndex;
++    GPRReg m_baseGPR { InvalidGPRReg };
++    GPRReg m_valueGPR { InvalidGPRReg };
++    GPRReg m_extraGPR { InvalidGPRReg };
++    GPRReg m_extra2GPR { InvalidGPRReg };
++    GPRReg m_propertyCacheGPR { InvalidGPRReg };
++#if USE(JSVALUE32_64)
++    GPRReg m_valueTagGPR { InvalidGPRReg };
++    GPRReg m_baseTagGPR { InvalidGPRReg };
++    GPRReg m_extraTagGPR { InvalidGPRReg };
++    GPRReg m_extra2TagGPR { InvalidGPRReg };
++#endif
++
++private:
++    ScalarRegisterSet m_usedRegisters;
++};
++
++} // namespace DFG
++
+ } // namespace JSC
+ 
+ SPECIALIZE_TYPE_TRAITS_BEGIN(JSC::HandlerPropertyInlineCache)
+diff --git a/Source/JavaScriptCore/bytecode/Repatch.cpp b/Source/JavaScriptCore/bytecode/Repatch.cpp
+index 8d01130c1b..6cf63c28f7 100644
+--- a/Source/JavaScriptCore/bytecode/Repatch.cpp
++++ b/Source/JavaScriptCore/bytecode/Repatch.cpp
+@@ -1042,8 +1042,13 @@ static InlineCacheAction tryCachePutBy(JSGlobalObject* globalObject, CodeBlock*
+         RefPtr<AccessCase> newCase;
+ 
+         if (propertyName == vm.propertyNames->length) {
++#if USE(JSVALUE64)
++            // ios6/armv7: InlineCacheCompiler has no 32-bit path for ArrayLengthStore,
++            // so do not create the case at all on a 32-bit build. Falling through leaves
++            // the store to the generic path, which is correct, just not inline-cached.
+             if (baseCell->type() == ArrayType)
+                 newCase = AccessCase::create(vm, codeBlock, AccessCase::ArrayLengthStore, propertyName);
++#endif
+         } else if (propertyName == vm.propertyNames->lastIndex) {
+             if (is<RegExpObject>(baseCell))
+                 newCase = AccessCase::create(vm, codeBlock, AccessCase::RegExpLastIndexStore, propertyName);
+diff --git a/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp b/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp
+index 2430b94c98..0f82d1392f 100644
+--- a/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp
++++ b/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp
+@@ -11059,6 +11059,17 @@ void ByteCodeParser::parseBlock(unsigned limit)
+                 NEXT_OPCODE(op_enumerator_put_by_val);
+             }
+ 
++            if (!is64Bit()) {
++                addVarArgChild(base);
++                addVarArgChild(propertyName);
++                addVarArgChild(value);
++                addVarArgChild(nullptr);
++                addVarArgChild(nullptr);
++                addToGraph(Node::VarArg, PutByVal, OpInfo(arrayMode.asWord()), OpInfo(bytecode.m_ecmaMode));
++                m_exitOK = false;
++                NEXT_OPCODE(op_enumerator_put_by_val);
++            }
++
+             // FIXME: Checking for a BadConstantValue causes us to always use the Generic variant if we switched from IndexedMode -> IndexedMode + OwnStructureMode even though that might be fine.
+             PutByStatus putByStatus = PutByStatus::computeFor(m_inlineStackTop->m_profiledBlock, m_inlineStackTop->m_baselineMap, m_icContextStack, currentCodeOrigin());
+             if (putByStatus.isMegamorphic()) {
+diff --git a/Source/JavaScriptCore/dfg/DFGJITCode.h b/Source/JavaScriptCore/dfg/DFGJITCode.h
+index 52e7a5d4fb..d72b7bcae1 100644
+--- a/Source/JavaScriptCore/dfg/DFGJITCode.h
++++ b/Source/JavaScriptCore/dfg/DFGJITCode.h
+@@ -52,27 +52,9 @@ namespace DFG {
+ class JITCode;
+ class JITCompiler;
+ 
+-struct UnlinkedPropertyInlineCache : JSC::UnlinkedPropertyInlineCache {
+-    void setUsedRegisters(ScalarRegisterSet value) { m_usedRegisters = value; }
+-    void removeUsedRegister(GPRReg reg) { m_usedRegisters.remove(reg); }
+-
+-    CodeOrigin codeOrigin;
+-    CallSiteIndex callSiteIndex;
+-    GPRReg m_baseGPR { InvalidGPRReg };
+-    GPRReg m_valueGPR { InvalidGPRReg };
+-    GPRReg m_extraGPR { InvalidGPRReg };
+-    GPRReg m_extra2GPR { InvalidGPRReg };
+-    GPRReg m_propertyCacheGPR { InvalidGPRReg };
+-#if USE(JSVALUE32_64)
+-    GPRReg m_valueTagGPR { InvalidGPRReg };
+-    GPRReg m_baseTagGPR { InvalidGPRReg };
+-    GPRReg m_extraTagGPR { InvalidGPRReg };
+-    GPRReg m_extra2TagGPR { InvalidGPRReg };
+-#endif
+-
+-private:
+-    ScalarRegisterSet m_usedRegisters;
+-};
++// ios6/armv7: UnlinkedPropertyInlineCache moved to bytecode/PropertyInlineCache.h
++// so it is defined even when ENABLE(DFG_JIT) is off -- JITInlineCacheGenerator.h
++// names it unconditionally in CompileTimePropertyInlineCache.
+ 
+ struct UnlinkedCallLinkInfo : JSC::UnlinkedCallLinkInfo {
+     void setUpCall(CallLinkInfo::CallType callType)
+diff --git a/Source/JavaScriptCore/dfg/DFGJITCompiler.cpp b/Source/JavaScriptCore/dfg/DFGJITCompiler.cpp
+index 4ae9d3bf21..5c25b53967 100644
+--- a/Source/JavaScriptCore/dfg/DFGJITCompiler.cpp
++++ b/Source/JavaScriptCore/dfg/DFGJITCompiler.cpp
+@@ -273,7 +273,26 @@ void JITCompiler::link(LinkBuffer& linkBuffer)
+     if (m_jitCode->m_unlinkedPropertyInlineCaches.size())
+         std::move(m_unlinkedPropertyInlineCaches.begin(), m_unlinkedPropertyInlineCaches.end(), m_jitCode->m_unlinkedPropertyInlineCaches.begin());
+     ASSERT(m_jitCode->common.m_handlerPropertyInlineCaches.isEmpty());
++#if USE(JSVALUE64)
+     ASSERT(m_jitCode->common.m_repatchingPropertyInlineCaches.isEmpty());
++#endif
++
++    auto finalizeInlineCaches = [&](auto& caches) {
++        for (auto& cache : caches)
++            cache.finalize(linkBuffer, linkBuffer);
++    };
++    finalizeInlineCaches(m_getByIds);
++    finalizeInlineCaches(m_getByIdsWithThis);
++    finalizeInlineCaches(m_getByVals);
++    finalizeInlineCaches(m_getByValsWithThis);
++    finalizeInlineCaches(m_putByIds);
++    finalizeInlineCaches(m_putByVals);
++    finalizeInlineCaches(m_delByIds);
++    finalizeInlineCaches(m_delByVals);
++    finalizeInlineCaches(m_inByIds);
++    finalizeInlineCaches(m_inByVals);
++    finalizeInlineCaches(m_instanceOfs);
++    finalizeInlineCaches(m_privateBrandAccesses);
+ 
+     for (auto& record : m_jsDirectCalls) {
+         auto& info = *record.info;
+@@ -621,9 +640,15 @@ LinkerIR::Constant JITCompiler::addToConstantPool(LinkerIR::Type type, void* pay
+ 
+ std::tuple<CompileTimePropertyInlineCache, PropertyInlineCacheIndex> JITCompiler::addPropertyInlineCache()
+ {
++#if USE(JSVALUE64)
+     unsigned index = m_unlinkedPropertyInlineCaches.size();
+     DFG::UnlinkedPropertyInlineCache* propertyCache = &m_unlinkedPropertyInlineCaches.alloc();
+     return std::tuple { propertyCache, PropertyInlineCacheIndex { index } };
++#else
++    RELEASE_ASSERT(!m_graph.m_plan.isUnlinked());
++    auto* propertyCache = static_cast<PropertyInlineCache*>(jitCode()->common.m_repatchingPropertyInlineCaches.add());
++    return std::tuple { propertyCache, PropertyInlineCacheIndex { 0 } };
++#endif
+ }
+ 
+ std::tuple<CompileTimeCallLinkInfo, JITCompiler::LinkableConstant> JITCompiler::addCallLinkInfo(CodeOrigin codeOrigin)
+diff --git a/Source/JavaScriptCore/dfg/DFGSpeculativeJIT.cpp b/Source/JavaScriptCore/dfg/DFGSpeculativeJIT.cpp
+index c7d292d2d9..eda5e5d40d 100644
+--- a/Source/JavaScriptCore/dfg/DFGSpeculativeJIT.cpp
++++ b/Source/JavaScriptCore/dfg/DFGSpeculativeJIT.cpp
+@@ -30,6 +30,7 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
+ #if ENABLE(DFG_JIT)
+ 
++#include "BaselineJITRegisters.h"
+ #include "BinarySwitch.h"
+ #include "CPUInlines.h"
+ #include "CodeBlockWithJITType.h"
+@@ -1860,8 +1861,12 @@ void SpeculativeJIT::compileStringSubstr(Node* node)
+ 
+     if (lengthGPR != InvalidGPRReg) {
+         // size = max(0, min(length, tempGPR))
+-        moveConditionally32(LessThan, lengthGPR, tempGPR, lengthGPR, tempGPR, tempGPR);
+-        moveConditionally32(LessThan, tempGPR, TrustedImm32(0), TrustedImm32(0), tempGPR, tempGPR);
++        Jump notAboveLength = branch32(LessThanOrEqual, tempGPR, lengthGPR);
++        move(lengthGPR, tempGPR);
++        notAboveLength.link(this);
++        Jump notNegative = branch32(GreaterThanOrEqual, tempGPR, TrustedImm32(0));
++        move(TrustedImm32(0), tempGPR);
++        notNegative.link(this);
+     }
+ 
+     JumpList doneCases;
+@@ -7936,7 +7941,11 @@ void SpeculativeJIT::compileStringEquality(
+         setupArguments<decltype(operationCompareStringEq)>(LinkableConstant::globalObject(*this, node), leftGPR, rightGPR);
+         prepareForExternalCall();
+         emitStoreCodeOrigin(node->origin.semantic);
++#if USE(JSVALUE64)
+         nearCallThunk(CodeLocationLabel<JITThunkPtrTag>(vm().getCTIStub(stringEqualThunkGenerator).code()));
++#else
++        appendCall(operationCompareStringEq);
++#endif
+         auto exceptionReg = tryHandleOrGetExceptionUnderSilentSpill<decltype(operationCompareStringEq)>(savePlans, leftTempGPR);
+         setupResults(leftTempGPR);
+         silentFill(savePlans);
+@@ -15769,14 +15778,14 @@ void SpeculativeJIT::compileGetCellButterflySlot(Node* node)
+ {
+     SpeculateCellOperand scratch(this, node->child1());
+     SpeculateInt32Operand index(this, node->child2());
+-    GPRTemporary result(this);
++    JSValueRegsTemporary result(this);
+ 
+     GPRReg scratchGPR = scratch.gpr();
+     GPRReg indexGPR = index.gpr();
+-    GPRReg resultGPR = result.gpr();
++    JSValueRegs resultRegs = result.regs();
+ 
+-    load64(BaseIndex(scratchGPR, indexGPR, TimesEight, JSCellButterfly::offsetOfData()), resultGPR);
+-    jsValueResult(resultGPR, node);
++    loadValue(BaseIndex(scratchGPR, indexGPR, TimesEight, JSCellButterfly::offsetOfData()), resultRegs);
++    jsValueResult(resultRegs, node);
+ }
+ 
+ void SpeculativeJIT::compilePutCellButterflySlot(Node* node)
+@@ -15789,7 +15798,7 @@ void SpeculativeJIT::compilePutCellButterflySlot(Node* node)
+     GPRReg indexGPR = index.gpr();
+     JSValueRegs valueRegs = value.jsValueRegs();
+ 
+-    store64(valueRegs.gpr(), BaseIndex(scratchGPR, indexGPR, TimesEight, JSCellButterfly::offsetOfData()));
++    storeValue(valueRegs, BaseIndex(scratchGPR, indexGPR, TimesEight, JSCellButterfly::offsetOfData()));
+     noResult(node);
+ }
+ 
+@@ -15803,12 +15812,12 @@ void SpeculativeJIT::compileArraySortCompact(Node* node)
+ 
+     GPRTemporary scratch(this);
+     GPRTemporary counter(this);
+-    GPRTemporary value(this);
++    JSValueRegsTemporary value(this);
+     GPRTemporary butterfly(this);
+ 
+     GPRReg scratchGPR = scratch.gpr();
+     GPRReg counterGPR = counter.gpr();
+-    GPRReg valueGPR = value.gpr();
++    JSValueRegs valueRegs = value.regs();
+     GPRReg butterflyGPR = butterfly.gpr();
+ 
+     loadPtr(&vm().m_cachedSortScratch, scratchGPR);
+@@ -15824,12 +15833,12 @@ void SpeculativeJIT::compileArraySortCompact(Node* node)
+     move(lengthGPR, counterGPR);
+     auto loop = label();
+     auto done = branchSub32(Signed, counterGPR, TrustedImm32(1), counterGPR);
+-    load64(BaseIndex(butterflyGPR, counterGPR, TimesEight, 0), valueGPR);
++    loadValue(BaseIndex(butterflyGPR, counterGPR, TimesEight, 0), valueRegs);
+     JumpList holes;
+-    holes.append(branchTest64(Zero, valueGPR));
++    holes.append(branchIfEmpty(valueRegs));
+     if (node->arrayMode().type() == Array::Contiguous)
+-        holes.append(branch64(Equal, valueGPR, TrustedImm64(JSValue::encode(jsUndefined()))));
+-    store64(valueGPR, BaseIndex(scratchGPR, counterGPR, TimesEight, JSCellButterfly::offsetOfData()));
++        holes.append(branchIfUndefined(valueRegs));
++    storeValue(valueRegs, BaseIndex(scratchGPR, counterGPR, TimesEight, JSCellButterfly::offsetOfData()));
+     jump().linkTo(loop, this);
+ 
+     holes.link(this);
+diff --git a/Source/JavaScriptCore/dfg/DFGSpeculativeJIT32_64.cpp b/Source/JavaScriptCore/dfg/DFGSpeculativeJIT32_64.cpp
+index b5cbfcb1f5..c8d54c9bb8 100644
+--- a/Source/JavaScriptCore/dfg/DFGSpeculativeJIT32_64.cpp
++++ b/Source/JavaScriptCore/dfg/DFGSpeculativeJIT32_64.cpp
+@@ -30,6 +30,7 @@
+ #if ENABLE(DFG_JIT)
+ 
+ #include "ArrayPrototype.h"
++#include "BaselineJITRegisters.h"
+ #include "CallFrameShuffler.h"
+ #include "ClonedArguments.h"
+ #include "DFGAbstractInterpreterInlines.h"
+@@ -1140,7 +1141,7 @@ GPRReg SpeculativeJIT::fillSpeculateCell(Edge edge)
+         if (edge->hasConstant()) {
+             GPRReg gpr = allocate();
+             m_gprs.retain(gpr, virtualRegister, SpillOrderConstant);
+-            move(TrustedImmPtr(edge->constant()), gpr);
++            loadLinkableConstant(LinkableConstant(*this, edge->constant()->cell()), gpr);
+             info.fillCell(m_stream, gpr);
+             return gpr;
+         }
+@@ -4045,6 +4046,10 @@ void SpeculativeJIT::compile(Node* node)
+         compileIsEmptyStorage(node);
+         break;
+ 
++    case MapStorage:
++        compileMapStorage(node);
++        break;
++
+     case MapStorageOrSentinel:
+         compileMapStorageOrSentinel(node);
+         break;
+@@ -4639,7 +4644,6 @@ void SpeculativeJIT::compile(Node* node)
+     case InByValMegamorphic:
+     case MultiGetByVal:
+     case MultiPutByVal:
+-    case MapStorage:
+     case ArrayShift:
+     case ArrayUnshift:
+         DFG_CRASH(m_graph, node, "unexpected node in DFG backend");
+@@ -5629,6 +5633,31 @@ void SpeculativeJIT::speculateInt32(Edge edge, JSValueRegs regs)
+     speculationCheck(BadType, regs, edge, branchIfNotInt32(regs.tagGPR()));
+ }
+ 
++void SpeculativeJIT::compileMapStorage(Node* node)
++{
++    SpeculateCellOperand map(this, node->child1());
++    JSValueRegsTemporary result(this);
++
++    GPRReg mapGPR = map.gpr();
++    JSValueRegs resultRegs = result.regs();
++
++    if (node->child1().useKind() == MapObjectUse) {
++        speculateMapObject(node->child1(), mapGPR);
++        loadPtr(Address(mapGPR, JSMap::offsetOfStorage()), resultRegs.payloadGPR());
++    } else if (node->child1().useKind() == SetObjectUse) {
++        speculateSetObject(node->child1(), mapGPR);
++        loadPtr(Address(mapGPR, JSSet::offsetOfStorage()), resultRegs.payloadGPR());
++    } else
++        RELEASE_ASSERT_NOT_REACHED();
++
++    move(TrustedImm32(JSValue::CellTag), resultRegs.tagGPR());
++    Jump notEmpty = branchTestPtr(NonZero, resultRegs.payloadGPR());
++    move(TrustedImm32(JSValue::EmptyValueTag), resultRegs.tagGPR());
++    notEmpty.link(this);
++
++    jsValueResult(resultRegs, node);
++}
++
+ void SpeculativeJIT::compileMapIteratorNext(Node* node)
+ {
+     bool isMapIterator = node->child2().useKind() == MapObjectUse;
+diff --git a/Source/JavaScriptCore/jit/AssemblyHelpers.h b/Source/JavaScriptCore/jit/AssemblyHelpers.h
+index dde84d431b..6d6c7ce6d9 100644
+--- a/Source/JavaScriptCore/jit/AssemblyHelpers.h
++++ b/Source/JavaScriptCore/jit/AssemblyHelpers.h
+@@ -2109,6 +2109,12 @@ public:
+         storePtr(TrustedImmPtr(nullptr), Address(resultGPR, JSObject::butterflyOffset()));
+     }
+ 
++#if USE(JSVALUE64)
++    // ios6/armv7: this helper is written entirely in 64-bit macro-assembler ops
++    // (store64/neg64/moveConditionally64) which MacroAssemblerARMv7 does not provide.
++    // Its only caller is DFGSpeculativeJIT64.cpp, so a 32-bit build never needs it.
++    // The names are non-dependent, so without this guard the template body fails to
++    // parse even though it is never instantiated.
+     template<typename StructureType>
+     void emitAllocateJSBigInt64(VM& vm, GPRReg resultGPR, GPRReg valueGPR, GPRReg scratchGPR1, GPRReg scratchGPR2, StructureType structure, bool isSigned, JumpList& slowCases)
+     {
+@@ -2141,6 +2147,7 @@ public:
+ 
+         done.link(this);
+     }
++#endif // USE(JSVALUE64)
+ 
+     enum LazyGlobalObjectLoadTag { LazyBaselineGlobalObject };
+     JumpList branchIfValue(VM&, JSValueRegs, GPRReg scratch, GPRReg scratchIfShouldCheckMasqueradesAsUndefined, FPRReg, FPRReg, bool shouldCheckMasqueradesAsUndefined, Variant<JSGlobalObject*, GPRReg, LazyGlobalObjectLoadTag>, bool negateResult);
+diff --git a/Source/JavaScriptCore/jit/BaselineJITRegisters.h b/Source/JavaScriptCore/jit/BaselineJITRegisters.h
+index 8545b8bd4f..48a7301ed1 100644
+--- a/Source/JavaScriptCore/jit/BaselineJITRegisters.h
++++ b/Source/JavaScriptCore/jit/BaselineJITRegisters.h
+@@ -188,7 +188,13 @@ namespace GetByVal {
+     static constexpr GPRReg propertyCacheGPR { preferredArgumentGPR<SlowOperation, 2>() };
+     static constexpr GPRReg profileGPR { preferredArgumentGPR<SlowOperation, 3>() };
+ 
+-    static_assert(noOverlap(baseJSR, propertyJSR, propertyCacheGPR, profileGPR), "Required for DataIC");
++    // GPRInfo::handlerGPR belongs in this set on every target, not only 64-bit ones:
++    // emitDataICHandlerDispatch() loads the InlineCacheHandler* into it and calls
++    // through it while every register named here is still live. It reads as
++    // 64-bit-only because on those targets it cannot collide - handlerGPR is outside
++    // the eight argument registers - whereas the ARM_THUMB2 preferred-argument list
++    // runs past r0-r3 into the temporaries and used to reach it.
++    static_assert(noOverlap(baseJSR, propertyJSR, propertyCacheGPR, profileGPR, GPRInfo::handlerGPR), "Required for DataIC");
+     static constexpr auto scratchRegisters = allocatedScratchRegisters<GPRInfo, baseJSR, propertyJSR, propertyCacheGPR, profileGPR, GPRInfo::handlerGPR>;
+     static constexpr GPRReg scratch1GPR { scratchRegisters[0] };
+ #if USE(JSVALUE64)
+@@ -268,8 +274,14 @@ namespace PutByVal {
+     static_assert(noOverlap(baseJSR, propertyJSR, valueJSR, propertyCacheGPR, profileGPR, scratch1GPR, GPRInfo::handlerGPR), "Required for call to slow operation");
+     static_assert(noOverlap(baseJSR, propertyJSR, valueJSR, propertyCacheGPR, profileGPR, scratch1GPR, scratch2GPR), "Required for HandlerIC");
+ #else
++    // scratch1GPR is deliberately allowed to be GPRInfo::handlerGPR here - it is dead
++    // after emitArrayProfilingSiteWithCellAndProfile(), before the dispatch loads the
++    // handler - but the operands are not, so they get the same guarantee as above.
++    // Excluding handlerGPR from the allocation as well would push scratch1GPR onto
++    // regCS1, the jitData register propertyCacheGPR is still to be materialised from.
+     static constexpr auto scratchRegisters = allocatedScratchRegisters<GPRInfo, baseJSR, propertyJSR, valueJSR, propertyCacheGPR, profileGPR>;
+     static constexpr GPRReg scratch1GPR { scratchRegisters[0] };
++    static_assert(noOverlap(baseJSR, propertyJSR, valueJSR, propertyCacheGPR, profileGPR, GPRInfo::handlerGPR), "Required for DataIC");
+ #endif
+ }
+ 
+diff --git a/Source/JavaScriptCore/jit/CCallHelpers.h b/Source/JavaScriptCore/jit/CCallHelpers.h
+index c336a6f553..3b05d30e92 100644
+--- a/Source/JavaScriptCore/jit/CCallHelpers.h
++++ b/Source/JavaScriptCore/jit/CCallHelpers.h
+@@ -288,6 +288,11 @@ private:
+             return ArgCollection<numGPRArgs, numGPRSources, numFPRArgs + 1, numFPRSources, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke>(*this);
+         }
+ 
++        ArgCollection<numGPRArgs, numGPRSources, numFPRArgs + 1, numFPRSources, numCrossSources, extraGPRArgs + 2, nonArgGPRs, extraPoke> addFPRArgInGPRs()
++        {
++            return ArgCollection<numGPRArgs, numGPRSources, numFPRArgs + 1, numFPRSources, numCrossSources, extraGPRArgs + 2, nonArgGPRs, extraPoke>(*this);
++        }
++
+         ArgCollection<numGPRArgs, numGPRSources, numFPRArgs, numFPRSources, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke + 1> addPoke()
+         {
+             return ArgCollection<numGPRArgs, numGPRSources, numFPRArgs, numFPRSources, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke + 1>(*this);
+@@ -423,6 +428,30 @@ private:
+ #else // USE(JSVALUE64)
+ #if CPU(ARM_THUMB2)
+ 
++#if OS(DARWIN)
++    template<typename OperationType, unsigned numGPRArgs, unsigned numGPRSources, unsigned numFPRArgs, unsigned numFPRSources, unsigned numCrossSources, unsigned extraGPRArgs, unsigned nonArgGPRs, unsigned extraPoke, typename... Args>
++    void setupArgumentsImpl(ArgCollection<numGPRArgs, numGPRSources, numFPRArgs, numFPRSources, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke> argSourceRegs, FPRReg arg, Args... args)
++    {
++        static_assert(std::is_same_v<CURRENT_ARGUMENT_TYPE, double>, "We should only be passing FPRRegs to a double. We use moveDouble / loadDouble / storeDouble exclusively");
++
++        unsigned numArgRegisters = GPRInfo::numberOfArgumentRegisters;
++        unsigned currentArgCount = argSourceRegs.argCount(InvalidGPRReg);
++
++        if (currentArgCount + 1 < numArgRegisters) {
++            setupArgumentsImpl<OperationType>(argSourceRegs.addFPRArgInGPRs(), args...);
++            moveDoubleToInts(arg, GPRInfo::toArgumentRegister(currentArgCount), GPRInfo::toArgumentRegister(currentArgCount + 1));
++        } else if (currentArgCount + 1 == numArgRegisters) {
++            unsigned pokeOffset = calculatePokeOffset(numGPRArgs, numFPRArgs, numCrossSources, extraGPRArgs + 1, nonArgGPRs, extraPoke);
++            setupArgumentsImpl<OperationType>(argSourceRegs.addFPRArgInGPRs(), args...);
++            RegisterID scratch = getCachedDataTempRegisterIDAndInvalidate();
++            moveDoubleToInts(arg, GPRInfo::toArgumentRegister(currentArgCount), scratch);
++            store32(scratch, addressForPoke(pokeOffset));
++        } else {
++            pokeForArgument(arg, numGPRArgs, numFPRArgs, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke);
++            setupArgumentsImpl<OperationType>(argSourceRegs.addFPRArgInGPRs(), args...);
++        }
++    }
++#else // OS(DARWIN)
+     template<typename OperationType, unsigned numGPRArgs, unsigned numGPRSources, unsigned numFPRArgs, unsigned numFPRSources, unsigned numCrossSources, unsigned extraGPRArgs, unsigned nonArgGPRs, unsigned extraPoke, typename... Args>
+     void setupArgumentsImpl(ArgCollection<numGPRArgs, numGPRSources, numFPRArgs, numFPRSources, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke> argSourceRegs, FPRReg arg, Args... args)
+     {
+@@ -447,6 +476,7 @@ private:
+             setupArgumentsImpl<OperationType>(argSourceRegs.addStackArg(arg).addPoke().addPoke(), args...);
+         }
+     }
++#endif // OS(DARWIN)
+ 
+     template<typename OperationType, unsigned numGPRArgs, unsigned numGPRSources, unsigned numFPRArgs, unsigned numFPRSources, unsigned numCrossSources, unsigned extraGPRArgs, unsigned nonArgGPRs, unsigned extraPoke, typename... Args>
+         requires (sizeof(CURRENT_ARGUMENT_TYPE) <= 4)
+@@ -485,6 +515,83 @@ private:
+         }
+     }
+ 
++#if OS(DARWIN)
++    // Both halves of a 64-bit argument land past the core registers. They are
++    // contiguous and 4-byte aligned, so this is the plain two-word case - it is
++    // pokeArgumentsAligned() with every alignment adjustment removed.
++    template<typename OperationType, typename ArgLow, typename ArgHigh, unsigned numGPRArgs, unsigned numGPRSources, unsigned numFPRArgs, unsigned numFPRSources, unsigned numCrossSources, unsigned extraGPRArgs, unsigned nonArgGPRs, unsigned extraPoke, typename... Args>
++    void pokeWideArgument(ArgCollection<numGPRArgs, numGPRSources, numFPRArgs, numFPRSources, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke> argSourceRegs, ArgLow low, ArgHigh high, Args... args)
++    {
++        pokeForArgument(low, numGPRArgs, numFPRArgs, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke);
++        pokeForArgument(high, numGPRArgs, numFPRArgs, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke + 1);
++        setupArgumentsImpl<OperationType>(argSourceRegs.addGPRArg().addPoke(), args...);
++    }
++
++    template<typename OperationType, unsigned numGPRArgs, unsigned numGPRSources, unsigned numFPRArgs, unsigned numFPRSources, unsigned numCrossSources, unsigned extraGPRArgs, unsigned nonArgGPRs, unsigned extraPoke, typename... Args>
++        requires std::same_as<CURRENT_ARGUMENT_TYPE, EncodedJSValue>
++    void setupArgumentsImpl(ArgCollection<numGPRArgs, numGPRSources, numFPRArgs, numFPRSources, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke> argSourceRegs, CellValue payload, Args... args)
++    {
++        unsigned numArgRegisters = GPRInfo::numberOfArgumentRegisters;
++        unsigned currentArgCount = argSourceRegs.argCount(payload.gpr());
++
++        if (currentArgCount + 1 < numArgRegisters) {
++            auto updatedArgSourceRegs = argSourceRegs.pushRegArg(payload.gpr(), GPRInfo::toArgumentRegister(currentArgCount));
++            setupArgumentsImpl<OperationType>(updatedArgSourceRegs.addGPRExtraArg(), args...);
++            move(TrustedImm32(JSValue::CellTag), GPRInfo::toArgumentRegister(currentArgCount + 1));
++        } else if (currentArgCount + 1 == numArgRegisters) {
++            pokeForArgument(TrustedImm32(JSValue::CellTag), numGPRArgs, numFPRArgs, numCrossSources, extraGPRArgs + 1, nonArgGPRs, extraPoke);
++            auto updatedArgSourceRegs = argSourceRegs.pushRegArg(payload.gpr(), GPRInfo::toArgumentRegister(currentArgCount));
++            setupArgumentsImpl<OperationType>(updatedArgSourceRegs.addGPRExtraArg(), args...);
++        } else
++            pokeWideArgument<OperationType>(argSourceRegs, payload.gpr(), TrustedImm32(JSValue::CellTag), args...);
++    }
++
++    // Apple's ARM32 ABI gives `long long` - and so EncodedJSValue - 4-byte alignment
++    // where AAPCS gives it 8, and two of AAPCS's parameter-passing rules are conditioned
++    // on that alignment:
++    //
++    //   C.3  round the next core register number up to even before an 8-byte-aligned
++    //        argument. Does not apply: a 64-bit argument starts at whichever core
++    //        register comes next, odd or even, and no register is skipped as padding.
++    //   C.4  an 8-byte-aligned argument that does not fit entirely in the core registers
++    //        goes wholly on the stack. Does not apply either: with exactly one core
++    //        register left the value is split, low word in that register and high word
++    //        in the first stack slot.
++    //
++    // Measured rather than assumed. For
++    //   op(void*, EncodedJSValue, EncodedJSValue, void*)
++    // clang targeting armv7-apple-ios6.0 emits
++    //   r0 = arg0, r1:r2 = arg1, r3:[sp+0] = arg2, [sp+4] = arg3
++    // and the same source targeting armv7-unknown-linux-gnueabihf emits
++    //   r0 = arg0, r1 skipped, r2:r3 = arg1, [sp+0..7] = arg2, [sp+8] = arg3
++    // which is what the #else path below produces. Getting this wrong is not subtle:
++    // operationValueAddOptimize read its JSGlobalObject* out of the stack slot holding
++    // the second value's tag and dereferenced Int32Tag.
++    template<typename OperationType, unsigned numGPRArgs, unsigned numGPRSources, unsigned numFPRArgs, unsigned numFPRSources, unsigned numCrossSources, unsigned extraGPRArgs, unsigned nonArgGPRs, unsigned extraPoke, typename... Args>
++        requires std::same_as<CURRENT_ARGUMENT_TYPE, EncodedJSValue>
++    void setupArgumentsImpl(ArgCollection<numGPRArgs, numGPRSources, numFPRArgs, numFPRSources, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke> argSourceRegs, JSValueRegs arg, Args... args)
++    {
++        unsigned numArgRegisters = GPRInfo::numberOfArgumentRegisters;
++        unsigned currentArgCount = argSourceRegs.argCount(arg.tagGPR());
++
++        if (currentArgCount + 1 < numArgRegisters) {
++            // JSValueRegs is passed in two 32-bit registers on these architectures. Increase both numGPRArgs and extraGPRArgs by 1.
++            // We can't just add 2 to numGPRArgs, since it is used for CURRENT_ARGUMENT_TYPE. Adding 2 would lead to a skipped argument.
++            auto updatedArgSourceRegs1 = argSourceRegs.pushRegArg(arg.payloadGPR(), GPRInfo::toArgumentRegister(currentArgCount));
++            auto updatedArgSourceRegs2 = updatedArgSourceRegs1.pushExtraRegArg(arg.tagGPR(), GPRInfo::toArgumentRegister(currentArgCount + 1));
++            setupArgumentsImpl<OperationType>(updatedArgSourceRegs2, args...);
++        } else if (currentArgCount + 1 == numArgRegisters) {
++            // Split. The payload takes the last core register and the tag takes the first
++            // stack word; passing extraGPRArgs + 1 to calculatePokeOffset() accounts for
++            // that register, so the tag lands on the first overflow word rather than
++            // overwriting a slot the register file already covers.
++            pokeForArgument(arg.tagGPR(), numGPRArgs, numFPRArgs, numCrossSources, extraGPRArgs + 1, nonArgGPRs, extraPoke);
++            auto updatedArgSourceRegs = argSourceRegs.pushRegArg(arg.payloadGPR(), GPRInfo::toArgumentRegister(currentArgCount));
++            setupArgumentsImpl<OperationType>(updatedArgSourceRegs.addGPRExtraArg(), args...);
++        } else
++            pokeWideArgument<OperationType>(argSourceRegs, arg.payloadGPR(), arg.tagGPR(), args...);
++    }
++#else // OS(DARWIN)
+     template<typename OperationType, unsigned numGPRArgs, unsigned numGPRSources, unsigned numFPRArgs, unsigned numFPRSources, unsigned numCrossSources, unsigned extraGPRArgs, unsigned nonArgGPRs, unsigned extraPoke, typename... Args>
+         requires std::same_as<CURRENT_ARGUMENT_TYPE, EncodedJSValue>
+     void setupArgumentsImpl(ArgCollection<numGPRArgs, numGPRSources, numFPRArgs, numFPRSources, numCrossSources, extraGPRArgs, nonArgGPRs, extraPoke> argSourceRegs, CellValue payload, Args... args)
+@@ -528,6 +635,7 @@ private:
+         } else
+             pokeArgumentsAligned<OperationType>(argSourceRegs, arg.payloadGPR(), arg.tagGPR(), args...);
+     }
++#endif // OS(DARWIN)
+ 
+ #endif // CPU(ARM_THUMB2)
+ #endif // USE(JSVALUE64)
+@@ -742,8 +850,13 @@ public:
+     
+     void setupResults(FPRReg destA)
+     {
+-        if (destA != InvalidFPRReg)
+-            moveDouble(FPRInfo::returnValueFPR, destA);
++        if (destA == InvalidFPRReg)
++            return;
++#if CPU(ARM_THUMB2) && OS(DARWIN)
++        moveIntsToDouble(GPRInfo::returnValueGPR, GPRInfo::returnValueGPR2, destA);
++#else
++        moveDouble(FPRInfo::returnValueFPR, destA);
++#endif
+     }
+ 
+     void jumpToExceptionHandler(VM& vm)
+diff --git a/Source/JavaScriptCore/jit/ExecutableAllocator.cpp b/Source/JavaScriptCore/jit/ExecutableAllocator.cpp
+index c9e3589bac..978558cc16 100644
+--- a/Source/JavaScriptCore/jit/ExecutableAllocator.cpp
++++ b/Source/JavaScriptCore/jit/ExecutableAllocator.cpp
+@@ -145,7 +145,17 @@ static constexpr WTF::UUID jscJITNamespace { static_cast<UInt128>(0x325696c8e7cc
+ static bool NODELETE isJITEnabled()
+ {
+     bool jitEnabled = !g_jscConfig.jitDisabled;
+-#if HAVE(IOS_JIT_RESTRICTIONS)
++#if defined(WEBKIT_IOS6)
++    // The entitlement gate cannot be satisfied here and does not need to be.
++    // processHasEntitlement() goes through SecTaskCreateFromSelf and an XPC
++    // entitlement lookup, neither of which answers on this system, so it reports
++    // no dynamic-codesigning and the JIT is switched off before it is ever tried.
++    // The result was measured: a plain counting loop ran at about two million
++    // iterations a second and did not get faster over five runs - interpreter
++    // speed, no tier-up, for every line of script on every page. On a jailbroken
++    // system the restriction the entitlement exists to lift is already lifted.
++    return jitEnabled;
++#elif HAVE(IOS_JIT_RESTRICTIONS)
+     jitEnabled = jitEnabled && (processHasEntitlement("dynamic-codesigning"_s) || processHasEntitlement("com.apple.developer.cs.allow-jit"_s));
+ #elif HAVE(MAC_JIT_RESTRICTIONS) && USE(APPLE_INTERNAL_SDK)
+     jitEnabled = jitEnabled && processHasEntitlement("com.apple.security.cs.allow-jit"_s);
+@@ -405,6 +415,10 @@ static ALWAYS_INLINE JITReservation initializeJITPageReservation()
+ 
+     void* addressHint = reinterpret_cast<void*>(Options::jitMemoryReservationAddress());
+     reservation.pageReservation = tryCreatePageReservation(reservation.size, addressHint);
++#if defined(WEBKIT_IOS6)
++    WTFLogAlways("[jit] reservation of %lu bytes %s (useJIT %d)", (unsigned long)reservation.size,
++        reservation.pageReservation ? "succeeded" : "FAILED", (int)Options::useJIT());
++#endif
+     if (addressHint)
+         RELEASE_ASSERT(reservation.pageReservation.base() == addressHint && "Failed to accomodate JSC_jitMemoryReservationAddress");
+ 
+diff --git a/Source/JavaScriptCore/jit/GPRInfo.h b/Source/JavaScriptCore/jit/GPRInfo.h
+index 410cd9fa39..386d9f8d10 100644
+--- a/Source/JavaScriptCore/jit/GPRInfo.h
++++ b/Source/JavaScriptCore/jit/GPRInfo.h
+@@ -1006,6 +1006,28 @@ class PreferredArgumentImpl {
+         }
+     }
+ #elif USE(JSVALUE32_64)
++    // Does AAPCS rule C.3 - round the next core register number up to even before an
++    // argument whose natural alignment is 8 - apply to a 64-bit argument here?
++    //
++    // On every ARM_THUMB2 platform but Darwin it does, and the caller then never splits
++    // such an argument between registers and the stack (rule C.4 sends the whole value
++    // to the stack instead). Apple's ARM32 ABI gives `long long`, and so EncodedJSValue,
++    // 4-byte alignment rather than 8, so neither rule fires: the value starts at
++    // whichever core register comes next, odd or even, and if only one register is left
++    // it is split across that register and the first stack word. Measured, not assumed -
++    // see the comment on setupArgumentsImpl(..., JSValueRegs, ...) in CCallHelpers.h.
++    static constexpr bool wideArgumentSkipsOddRegister(GPRReg first, GPRReg second, GPRReg third)
++    {
++#if OS(DARWIN)
++        UNUSED_PARAM(first);
++        UNUSED_PARAM(second);
++        UNUSED_PARAM(third);
++        return false;
++#else
++        return first == GPRInfo::argumentGPR1 && second == GPRInfo::argumentGPR2 && third == GPRInfo::argumentGPR3;
++#endif
++    }
++
+     template <typename OperationType, size_t ArgNum, size_t Index = ArgNum, typename... Args>
+     static constexpr JSValueRegs pickJSR(GPRReg first, GPRReg second, GPRReg third, Args... rest)
+     {
+@@ -1017,7 +1039,7 @@ class PreferredArgumentImpl {
+                 UNUSED_PARAM(second); // Otherwise warning due to constexpr
+                 UNUSED_PARAM(third); // Otherwise warning due to constexpr
+                 return JSValueRegs::payloadOnly(first);
+-            } else if (first == GPRInfo::argumentGPR1 && second == GPRInfo::argumentGPR2 && third == GPRInfo::argumentGPR3) {
++            } else if (wideArgumentSkipsOddRegister(first, second, third)) {
+                 // Wide argument passed in GPRs needs to start with even register number, so skip argumentGPR1
+                 return JSValueRegs { third, second };
+             } else {
+@@ -1029,7 +1051,7 @@ class PreferredArgumentImpl {
+                 // Fits in single GPR
+                 UNUSED_PARAM(first); // Otherwise warning due to constexpr
+                 return pickJSR<OperationType, ArgNum, Index - 1>(second, third, rest...);
+-            } else if (first == GPRInfo::argumentGPR1 && second == GPRInfo::argumentGPR2 && third == GPRInfo::argumentGPR3) {
++            } else if (wideArgumentSkipsOddRegister(first, second, third)) {
+                 // Wide argument passed in GPRs needs to start with even register number, so skip argumentGPR1, but reuse it later
+                 return pickJSR<OperationType, ArgNum, Index - 1>(first, rest...);
+             } else {
+@@ -1086,11 +1108,28 @@ public:
+ #if CPU(ARM_THUMB2)
+         // Be careful about GPRInfo::regCS0. It is used as a metadataTable register.
+         // So, if you clobber it, you need to restore it.
++        //
++        // regT7 is deliberately absent. It is GPRInfo::handlerGPR, and
++        // emitDataICHandlerDispatch() overwrites that register with the
++        // InlineCacheHandler* while every operand of the access is still live:
++        //
++        //     loadPtr(Address(propertyCacheGPR, offsetOfHandler()), handlerGPR)
++        //     call(Address(handlerGPR, offsetOfCallTarget()))
++        //
++        // so anything an inline cache holds across its own dispatch must not live
++        // there. On 64-bit targets that is free - there are eight argument registers
++        // and handlerGPR is not one of them - which is why the only list that reaches
++        // this far is this one, and why the noOverlap() assertions in
++        // BaselineJITRegisters.h name GPRInfo::handlerGPR only under USE(JSVALUE64).
++        // With regT7 in the list, PutByVal's fifth argument landed on it and the
++        // dispatch destroyed the ArrayProfile* the handler was about to use; the
++        // handler then wrote a StructureID over the handler's own callTarget and the
++        // next dispatch jumped to it.
+         return pickJSR<OperationType, ArgNum>(
+             GPRInfo::argumentGPR0, GPRInfo::argumentGPR1,
+             GPRInfo::argumentGPR2, GPRInfo::argumentGPR3,
+             GPRInfo::regT4,        GPRInfo::regT5,
+-            GPRInfo::regT6,        GPRInfo::regT7,
++            GPRInfo::regT6,
+             GPRInfo::regCS0);
+ #else
+ #  error "Unsupported architecture"
+diff --git a/Source/JavaScriptCore/jit/GdbJIT.cpp b/Source/JavaScriptCore/jit/GdbJIT.cpp
+index 7333e898e8..4830539893 100644
+--- a/Source/JavaScriptCore/jit/GdbJIT.cpp
++++ b/Source/JavaScriptCore/jit/GdbJIT.cpp
+@@ -29,7 +29,12 @@
+ #include <wtf/TZoneMallocInlines.h>
+ 
+ #if ENABLE(ASSEMBLER)
+-#if OS(DARWIN) || OS(LINUX)
++// ios6/armv7: the Mach-O/ELF writers below emit 64-bit object files only -- the
++// Mach-O path hardcodes MH_MAGIC_64 headers with a `reserved` field and 64-bit
++// load commands, and has #error'd on anything but ARM64/X86_64. This is only a
++// debugger aid (GdbJIT::log from LinkBuffer), so 32-bit targets fall through to
++// the existing no-op GdbJIT::log in the #else branch below.
++#if (OS(DARWIN) || OS(LINUX)) && CPU(ADDRESS64)
+ 
+ #include "CallFrame.h"
+ #include "CallFrameInlines.h"
+@@ -1489,5 +1494,5 @@ void GdbJIT::log(const CString&, MacroAssemblerCodeRef<LinkBufferPtrTag>) { }
+ 
+ } // namespace JSC
+ 
+-#endif // OS(DARWIN) || OS(LINUX)
++#endif // (OS(DARWIN) || OS(LINUX)) && CPU(ADDRESS64)
+ #endif // ENABLE(ASSEMBLER)
+diff --git a/Source/JavaScriptCore/jit/JITInlineCacheGenerator.cpp b/Source/JavaScriptCore/jit/JITInlineCacheGenerator.cpp
+index 3572aedaa6..816823fd88 100644
+--- a/Source/JavaScriptCore/jit/JITInlineCacheGenerator.cpp
++++ b/Source/JavaScriptCore/jit/JITInlineCacheGenerator.cpp
+@@ -72,12 +72,14 @@ JITInlineCacheGenerator::JITInlineCacheGenerator(CodeBlock*, CompileTimeProperty
+         [&](BaselineUnlinkedPropertyInlineCache* propertyCache) {
+             m_unlinkedPropertyCache = propertyCache;
+         }
+-#if ENABLE(DFG_JIT)
++        // ios6/armv7: CompileTimePropertyInlineCache always has three alternatives, so the
++        // visitor must always have three lambdas -- guarding this one on ENABLE(DFG_JIT)
++        // made the visitor non-exhaustive in a baseline-JIT-only build. The DFG alternative
++        // is simply never produced when the DFG is off.
+         ,
+         [&](DFG::UnlinkedPropertyInlineCache* propertyCache) {
+             m_unlinkedPropertyCache = propertyCache;
+         }
+-#endif
+         ), propertyCache);
+ }
+ 
+diff --git a/Source/JavaScriptCore/jit/JITInlineCacheGenerator.h b/Source/JavaScriptCore/jit/JITInlineCacheGenerator.h
+index 4572654ac6..e5df8f2d49 100644
+--- a/Source/JavaScriptCore/jit/JITInlineCacheGenerator.h
++++ b/Source/JavaScriptCore/jit/JITInlineCacheGenerator.h
+@@ -36,6 +36,8 @@
+ #include <JavaScriptCore/JITOperationValidation.h>
+ #include <JavaScriptCore/JITOperations.h>
+ #include <JavaScriptCore/JSCJSValue.h>
++#include "PropertyInlineCache.h"  // ios6/armv7: for the complete
++                                 // DFG::UnlinkedPropertyInlineCache used below.
+ #include <JavaScriptCore/RegisterSet.h>
+ 
+ namespace JSC {
+diff --git a/Source/JavaScriptCore/jit/Reg.h b/Source/JavaScriptCore/jit/Reg.h
+index 5a3c1523f5..d6f9f19dde 100644
+--- a/Source/JavaScriptCore/jit/Reg.h
++++ b/Source/JavaScriptCore/jit/Reg.h
+@@ -150,7 +150,7 @@ public:
+ 
+     ASCIILiteral debugName() const;
+ 
+-    void dump(PrintStream&) const;
++    JS_EXPORT_PRIVATE void dump(PrintStream&) const;
+ 
+     class AllRegsIterable {
+     public:
+diff --git a/Source/JavaScriptCore/jit/SpecializedThunkJIT.h b/Source/JavaScriptCore/jit/SpecializedThunkJIT.h
+index c5c687134f..a93b0ce824 100644
+--- a/Source/JavaScriptCore/jit/SpecializedThunkJIT.h
++++ b/Source/JavaScriptCore/jit/SpecializedThunkJIT.h
+@@ -183,7 +183,13 @@ namespace JSC {
+         // and return value. Like any sensible architecture would.
+         void callDoubleToDouble(CodePtr<CFunctionPtrTag> function)
+         {
++#if CPU(ARM_THUMB2) && OS(DARWIN)
++            moveDoubleToInts(fpRegT0, GPRInfo::argumentGPR0, GPRInfo::argumentGPR1);
++#endif
+             m_calls.append(std::make_pair(call(OperationPtrTag), function.retagged<OperationPtrTag>()));
++#if CPU(ARM_THUMB2) && OS(DARWIN)
++            moveIntsToDouble(GPRInfo::returnValueGPR, GPRInfo::returnValueGPR2, fpRegT0);
++#endif
+         }
+         
+         void callDoubleToDoublePreservingReturn(CodePtr<CFunctionPtrTag> function)
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+index d16072c11e..75907bb1f7 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.asm
+@@ -1445,8 +1445,15 @@ macro getterSetterOSRExitReturnPoint(opName, size)
+ end
+ 
+ macro arrayProfile(offset, cell, metadata, scratch)
+-    loadi JSCell::m_structureID[cell], scratch
+-    storei scratch, offset + ArrayProfile::m_lastSeenStructureID[metadata]
++    # ArrayProfile::m_lastSeenStructureID is drained by
++    # CodeBlock::updateAllArrayProfilePredictions -> ArrayProfile::computeUpdatedPrediction,
++    # which only writes m_observedArrayModes / m_arrayProfileFlags. Every reader of
++    # those lives in dfg/ or ftl/, neither of which is compiled with ENABLE(DFG_JIT) off.
++    # The field and the metadata layout stay; only the per-access store is elided.
++    if not C_LOOP
++        loadi JSCell::m_structureID[cell], scratch
++        storei scratch, offset + ArrayProfile::m_lastSeenStructureID[metadata]
++    end
+ end
+ 
+ # Note that index is already sign-extended to be a register width.
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+index dd0b44ded0..c5fb275373 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter.cpp
+@@ -633,9 +633,44 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+ #define OFFLINE_ASM_ALT_GLOBAL_LABEL(label)
+ #endif
+ 
++// The alt-entry global symbol is an alias for the local label, so the two have to
++// land on the same address. OFFLINE_ASM_ALT_GLOBAL_LABEL() expands to
++// OFFLINE_ASM_GLOBAL_LABEL(), which carries a .balign 4 - and on Thumb-2, where
++// instructions are two bytes, that alignment really can insert a nop between the
++// local label and the symbol that follows it.
++//
++// Everything offlineasm emits addresses code through the local labels, including
++// the .word table that builds the opcode map:
++//
++//     .word Lllint_program_prologue - Lllint_relativePCBase
++//
++// but the matching runtime base is a "mov r3, pc" sitting at the *symbol*
++// _llint_relativePCBase. When a nop separates the two labels, every opcode-map
++// entry comes out wrong by the difference of the two paddings. Measured here:
++// llint_relativePCBase was padded by 2 and llint_program_prologue by 0, so the
++// program entry point was llint_program_prologue + 2 - two bytes past the
++// "push {lr}" that opens the prologue. The frame is then four bytes off, and
++// CodeBlock[cfr] reads the tag half of the CodeBlock slot rather than the
++// payload, which is a null CodeBlock on the first script the process runs.
++//
++// Align first, then emit both labels with nothing in between. This is the same
++// alignment that was already being applied on this platform - only its position
++// moves - so code layout is unchanged and the .word literals keep the 4-byte
++// alignment that Thumb LDR (literal) requires.
++//
++// Only Darwin/Thumb-2 is affected: .alt_entry is Mach-O only, so on Linux ARMv7
++// OFFLINE_ASM_ALT_GLOBAL_LABEL() is empty and the local label is the only label,
++// and on every 4-byte-instruction ISA the .balign never has anything to pad.
++#if COMPILER(CLANG) && ENABLE(OFFLINE_ASM_ALT_ENTRY)
++#define OFFLINE_ASM_LOCAL_LABEL(label) \
++    OFFLINE_ASM_ALIGN4B \
++    LOCAL_LABEL_STRING(label) ":\n" \
++    OFFLINE_ASM_UNALIGNED_GLOBAL_LABEL(label)
++#else
+ #define OFFLINE_ASM_LOCAL_LABEL(label) \
+     LOCAL_LABEL_STRING(label) ":\n" \
+     OFFLINE_ASM_ALT_GLOBAL_LABEL(label)
++#endif
+ 
+ #if OS(LINUX)
+ #define OFFLINE_ASM_OPCODE_DEBUG_LABEL(label)  #label ":\n"
+diff --git a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+index 1f55698b71..5340d0757d 100644
+--- a/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
++++ b/Source/JavaScriptCore/llint/LowLevelInterpreter64.asm
+@@ -75,9 +75,18 @@ macro makeReturnProfiled(size, opcodeStruct, get, metadata, dispatch, fn)
+ end
+ 
+ macro valueProfile(size, opcodeStruct, profileName, value, scratch)
+-    getu(size, opcodeStruct, profileName, scratch)
+-    mulq constexpr (-sizeof(ValueProfile)), scratch
+-    storeq value, constexpr (-sizeof(UnlinkedMetadataTable::LinkingData)) + ValueProfile::m_buckets[metadataTable, scratch, 1]
++    # ValueProfile::m_buckets is only ever read back by the DFG/FTL prediction
++    # propagator (via CodeBlock::updateAllNonLazyValueProfilePredictions ->
++    # ValueProfileBase::computeUpdatedPrediction, whose result is consumed only
++    # under ENABLE(DFG_JIT)). A C_LOOP build compiles no DFG, so the operand
++    # load, the 64-bit multiply and the 64-bit store here are pure overhead on
++    # every get_by_id / get_by_val / get_length and every call return.
++    # The metadata layout is untouched; only the store is elided.
++    if not C_LOOP
++        getu(size, opcodeStruct, profileName, scratch)
++        mulq constexpr (-sizeof(ValueProfile)), scratch
++        storeq value, constexpr (-sizeof(UnlinkedMetadataTable::LinkingData)) + ValueProfile::m_buckets[metadataTable, scratch, 1]
++    end
+ end
+ 
+ # After calling, calling bytecode is claiming input registers are not used.
+@@ -2452,13 +2461,18 @@ end)
+ 
+ # we assume t5 contains the metadata, and we should not scratch that
+ macro arrayProfileForCall(opcodeStruct, getu)
+-    getu(m_argv, t3)
+-    negp t3
+-    loadq ThisArgumentOffset[cfr, t3, 8], t0
+-    btqnz t0, notCellMask, .done
+-    loadi JSCell::m_structureID[t0], t3
+-    storei t3, %opcodeStruct%::Metadata::m_arrayProfile.m_lastSeenStructureID[t5]
+-.done:
++    # Same as arrayProfile(): m_lastSeenStructureID is only folded into
++    # ArrayProfile::m_observedArrayModes by CodeBlock::updateAllArrayProfilePredictions,
++    # and observedArrayModes has no reader outside dfg/ and ftl/.
++    if not C_LOOP
++        getu(m_argv, t3)
++        negp t3
++        loadq ThisArgumentOffset[cfr, t3, 8], t0
++        btqnz t0, notCellMask, .done
++        loadi JSCell::m_structureID[t0], t3
++        storei t3, %opcodeStruct%::Metadata::m_arrayProfile.m_lastSeenStructureID[t5]
++    .done:
++    end
+ end
+ 
+ # t5 holds metadata.
+@@ -3326,12 +3340,15 @@ end
+ 
+ llintOpWithMetadata(op_iterator_open, OpIteratorOpen, macro (size, get, dispatch, metadata, return)
+     macro updateArrayProfile(get, metadata)
++        # callHelper() below requires t5 == metadata, so that load stays.
+         metadata(t5, t0)
+-        get(m_iterable, t0)
+-        btqnz t0, notCellMask, .iteratorOpenArrayProfileDone
+-        loadi JSCell::m_structureID[t0], t3
+-        storei t3, OpIteratorOpen::Metadata::m_arrayProfile.m_lastSeenStructureID[t5]
+-    .iteratorOpenArrayProfileDone:
++        if not C_LOOP
++            get(m_iterable, t0)
++            btqnz t0, notCellMask, .iteratorOpenArrayProfileDone
++            loadi JSCell::m_structureID[t0], t3
++            storei t3, OpIteratorOpen::Metadata::m_arrayProfile.m_lastSeenStructureID[t5]
++        .iteratorOpenArrayProfileDone:
++        end
+     end
+     iteratorOpenGenericImpl(size, get, dispatch, metadata, OpIteratorOpen, op_iterator_open, _iterator_open_try_fast_narrow, _iterator_open_try_fast_wide16, _iterator_open_try_fast_wide32, _llint_slow_path_iterator_open_get_next, updateArrayProfile)
+ end)
+diff --git a/Source/JavaScriptCore/offlineasm/arm.rb b/Source/JavaScriptCore/offlineasm/arm.rb
+index b2d65a915f..d448d1dc0a 100644
+--- a/Source/JavaScriptCore/offlineasm/arm.rb
++++ b/Source/JavaScriptCore/offlineasm/arm.rb
+@@ -1002,7 +1002,12 @@ class Instruction
+                 $asm.puts ".indirect_symbol #{operands[0].asmLabel}"
+                 $asm.puts ".long 0"
+                 
+-                $asm.puts "OFFLINE_ASM_TEXT_SECTION"
++                # ios6/armv7: puts() wraps its argument in a C string literal, so the
++                # OFFLINE_ASM_TEXT_SECTION macro was emitted verbatim into the inline asm
++                # and never preprocessed -- the assembler saw it as an instruction.
++                # putStr() emits it unquoted so the macro expands, exactly as the
++                # surrounding #if OS(DARWIN) directives are emitted.
++                $asm.putStr("OFFLINE_ASM_TEXT_SECTION")
+                 $asm.puts ".align 4"
+ 
+                 $asm.putStr("#elif OS(LINUX)")
+diff --git a/Source/JavaScriptCore/runtime/CallData.cpp b/Source/JavaScriptCore/runtime/CallData.cpp
+index ecec37eb02..6ada189fbb 100644
+--- a/Source/JavaScriptCore/runtime/CallData.cpp
++++ b/Source/JavaScriptCore/runtime/CallData.cpp
+@@ -84,18 +84,45 @@ JSValue call(JSGlobalObject* globalObject, JSValue functionObject, const CallDat
+     return result;
+ }
+ 
++
++#if defined(WEBKIT_IOS6)
++#include <unistd.h>
++#include <stdio.h>
++#include "JSCInlines.h"
++#include "JSFunction.h"
++#include "FunctionExecutable.h"
++
++// Set while the engine is inside a call from C++ into script, so a sampler can
++// record only the passes that matter instead of the whole session.
++extern "C" { __attribute__((visibility("default"))) volatile int g_webkitIOS6InsideScript = 0; }
++#endif
++
+ JSValue profiledCall(JSGlobalObject* globalObject, ProfilingReason reason, JSValue functionObject, const CallData& callData, JSValue thisValue, const ArgList& args)
+ {
+     VM& vm = globalObject->vm();
+     ScriptProfilingScope profilingScope(vm.deprecatedVMEntryGlobalObject(globalObject), reason);
++#if defined(WEBKIT_IOS6)
++    g_webkitIOS6InsideScript++;
++    JSValue result = call(globalObject, functionObject, callData, thisValue, args);
++    g_webkitIOS6InsideScript--;
++    return result;
++#else
+     return call(globalObject, functionObject, callData, thisValue, args);
++#endif
+ }
+ 
+ JSValue profiledCall(JSGlobalObject* globalObject, ProfilingReason reason, JSValue functionObject, const CallData& callData, JSValue thisValue, const ArgList& args, NakedPtr<Exception>& returnedException)
+ {
+     VM& vm = globalObject->vm();
+     ScriptProfilingScope profilingScope(vm.deprecatedVMEntryGlobalObject(globalObject), reason);
++#if defined(WEBKIT_IOS6)
++    g_webkitIOS6InsideScript++;
++    JSValue result = call(globalObject, functionObject, callData, thisValue, args, returnedException);
++    g_webkitIOS6InsideScript--;
++    return result;
++#else
+     return call(globalObject, functionObject, callData, thisValue, args, returnedException);
++#endif
+ }
+ 
+ } // namespace JSC
+diff --git a/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp b/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp
+index 26e825ace4..b457fd5238 100644
+--- a/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp
++++ b/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp
+@@ -33,8 +33,10 @@
+ 
+ #if OS(UNIX)
+ #include <dlfcn.h>
++#include <sys/stat.h>
+ #if OS(DARWIN)
+ #include <mach-o/dyld.h>
++#include <mach-o/loader.h>
+ #include <uuid/uuid.h>
+ #include <wtf/spi/darwin/dyldSPI.h>
+ #elif OS(QNX)
+@@ -50,6 +52,86 @@ namespace JSCBytecodeCacheVersionInternal {
+ static constexpr bool verbose = false;
+ }
+ 
++#if OS(DARWIN)
++static bool readMachOUUID(const void* imageBase, std::span<uint8_t, 16> result)
++{
++    if (!imageBase)
++        return false;
++
++    const auto* header = static_cast<const mach_header*>(imageBase);
++    uint32_t commandCount = 0;
++    const uint8_t* cursor = nullptr;
++
++    if (header->magic == MH_MAGIC_64 || header->magic == MH_CIGAM_64) {
++        const auto* header64 = static_cast<const mach_header_64*>(imageBase);
++        commandCount = header64->ncmds;
++        cursor = std::bit_cast<const uint8_t*>(header64 + 1);
++    } else if (header->magic == MH_MAGIC || header->magic == MH_CIGAM) {
++        commandCount = header->ncmds;
++        cursor = std::bit_cast<const uint8_t*>(header + 1);
++    } else
++        return false;
++
++    for (uint32_t i = 0; i < commandCount; ++i) {
++        const auto* command = std::bit_cast<const load_command*>(cursor);
++        if (command->cmdsize < sizeof(load_command))
++            return false;
++        if (command->cmd == LC_UUID) {
++            if (command->cmdsize < sizeof(uuid_command))
++                return false;
++            const auto* uuidCommand = std::bit_cast<const uuid_command*>(command);
++            for (size_t byte = 0; byte < 16; ++byte)
++                result[byte] = uuidCommand->uuid[byte];
++            return true;
++        }
++        cursor += command->cmdsize;
++    }
++    return false;
++}
++#endif
++
++uint64_t computeJSCBinaryIdentity()
++{
++    static LazyNeverDestroyed<uint64_t> identity;
++    static std::once_flag onceFlag;
++    std::call_once(onceFlag, [] {
++        uint64_t value = 0;
++#if OS(UNIX)
++        Dl_info info { };
++        if (dladdr(std::bit_cast<void*>(&computeJSCBinaryIdentity), &info)) {
++#if OS(DARWIN)
++            std::array<uint8_t, 16> uuid { };
++            if (readMachOUUID(info.dli_fbase, std::span<uint8_t, 16> { uuid })) {
++                uint64_t high = 0;
++                uint64_t low = 0;
++                for (size_t i = 0; i < 8; ++i) {
++                    high = (high << 8) | uuid[i];
++                    low = (low << 8) | uuid[i + 8];
++                }
++                value = high ^ (low * 0x9e3779b97f4a7c15ull);
++                dataLogLnIf(JSCBytecodeCacheVersionInternal::verbose, "JavaScriptCore LC_UUID identity: ", value);
++            }
++#endif
++            if (!value && info.dli_fname) {
++                struct stat statBuffer { };
++                if (!stat(info.dli_fname, &statBuffer)) {
++                    value = static_cast<uint64_t>(statBuffer.st_size);
++                    value = (value * 0x100000001b3ull) ^ static_cast<uint64_t>(statBuffer.st_mtime);
++                    value = (value * 0x100000001b3ull) ^ static_cast<uint64_t>(statBuffer.st_ino);
++                    dataLogLnIf(JSCBytecodeCacheVersionInternal::verbose, "JavaScriptCore stat identity: ", value);
++                }
++            }
++        }
++#endif
++        if (!value) {
++            static constexpr uint32_t stamp = SuperFastHash::computeHash(__DATE__ " " __TIME__);
++            value = (static_cast<uint64_t>(stamp) << 32) | stamp | 1;
++        }
++        identity.construct(value);
++    });
++    return identity.get();
++}
++
+ uint32_t computeJSCBytecodeCacheVersion()
+ {
+     UNUSED_VARIABLE(JSCBytecodeCacheVersionInternal::verbose);
+@@ -66,8 +148,11 @@ uint32_t computeJSCBytecodeCacheVersion()
+             dataLogLnIf(JSCBytecodeCacheVersionInternal::verbose, "UUID of JavaScriptCore.framework:", uuidString);
+             return;
+         }
+-        cacheVersion.construct(0);
+-        dataLogLnIf(JSCBytecodeCacheVersionInternal::verbose, "Failed to get UUID for JavaScriptCore framework");
++        {
++            uint64_t identity = computeJSCBinaryIdentity();
++            cacheVersion.construct(static_cast<uint32_t>(identity ^ (identity >> 32)));
++        }
++        dataLogLnIf(JSCBytecodeCacheVersionInternal::verbose, "Failed to get UUID for JavaScriptCore framework, using binary identity");
+ #elif OS(UNIX) && !PLATFORM(PLAYSTATION) && !OS(HAIKU) && !OS(QNX)
+         auto result = ([&] -> std::optional<uint32_t> {
+             Dl_info info { };
+@@ -150,8 +235,11 @@ uint32_t computeJSCBytecodeCacheVersion()
+             cacheVersion.construct(result.value());
+             return;
+         }
+-        cacheVersion.construct(0);
+-        dataLogLnIf(JSCBytecodeCacheVersionInternal::verbose, "Failed to get UUID for JavaScriptCore framework");
++        {
++            uint64_t identity = computeJSCBinaryIdentity();
++            cacheVersion.construct(static_cast<uint32_t>(identity ^ (identity >> 32)));
++        }
++        dataLogLnIf(JSCBytecodeCacheVersionInternal::verbose, "Failed to get UUID for JavaScriptCore framework, using binary identity");
+ #else
+         UNUSED_VARIABLE(jsFunctionAddr);
+         static constexpr uint32_t precomputedCacheVersion = SuperFastHash::computeHash(__TIMESTAMP__);
+diff --git a/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.h b/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.h
+index d34d7e9c57..44818d4c63 100644
+--- a/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.h
++++ b/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.h
+@@ -31,5 +31,6 @@
+ namespace JSC {
+ 
+ JS_EXPORT_PRIVATE NEVER_INLINE uint32_t computeJSCBytecodeCacheVersion();
++JS_EXPORT_PRIVATE NEVER_INLINE uint64_t computeJSCBinaryIdentity();
+ 
+ }
+diff --git a/Source/JavaScriptCore/runtime/JSCJSValue.h b/Source/JavaScriptCore/runtime/JSCJSValue.h
+index a135398c5d..aaf76eff5e 100644
+--- a/Source/JavaScriptCore/runtime/JSCJSValue.h
++++ b/Source/JavaScriptCore/runtime/JSCJSValue.h
+@@ -27,6 +27,8 @@
+ #include <JavaScriptCore/PureNaN.h>
+ #include <atomic>
+ #include <cmath>
++#include <wtf/Atomics.h>  // ios6/armv7: updateEncodedJSValueConcurrent() in the
++                          // USE(JSVALUE32_64) branch calls WTF::storeStoreFence().
+ #include <wtf/Forward.h>
+ #include <wtf/HashFunctions.h>
+ #include <wtf/HashTraits.h>
+@@ -1329,10 +1331,40 @@ ALWAYS_INLINE void clearEncodedJSValueConcurrent(EncodedJSValue& dest)
+ 
+ inline JSValue JSValue::decodeConcurrent(const volatile EncodedJSValue *encodedJSValue)
+ {
++    // Read the two halves separately rather than taking one 64-bit snapshot.
++    //
++    // The snapshot spelling - casting to std::atomic<EncodedJSValue> and calling
++    // load() - compiles on ARMv7 to LDREXD, which raises an alignment fault
++    // unless the address is 8-byte aligned. On this ABI it frequently is not:
++    // alignof(long long) is 8 as a scalar but 4 inside an aggregate, which is
++    // Apple's ARM32 deviation from AAPCS, so alignof(WriteBarrier<Unknown>) is 4
++    // and TrailingArray::offsetOfData() places FixedVector<WriteBarrier<Unknown>>'s
++    // elements at offset 4. Every even-indexed constant of a CodeBlock is then
++    // 4 mod 8 and CodeBlock::setConstantRegisters() takes SIGBUS on the first
++    // one. Linux ARMv7 keeps AAPCS's 8-byte aggregate alignment for long long
++    // and so never sees it, and 64-bit builds do not compile this function.
++    //
++    // Halves are all the protocol needs. updateEncodedJSValueConcurrent() below
++    // does not use a 64-bit atomic either: it publishes through the tag, as
++    // InvalidTag / store-store fence / payload / store-store fence / real tag.
++    // Reading tag, payload, then the tag again and retrying whenever the tag
++    // reads InvalidTag or changed underneath us yields the same guarantee the
++    // snapshot gave - a tag and a payload that were paired at one instant -
++    // because every torn state passes through InvalidTag.
++    auto* descriptor = reinterpret_cast<const volatile EncodedValueDescriptor*>(encodedJSValue);
++    const volatile int32_t* tagPointer = &descriptor->asBits.tag;
++    const volatile int32_t* payloadPointer = &descriptor->asBits.payload;
++
+     for (;;) {
+-        auto v = JSValue::decode(reinterpret_cast<const volatile std::atomic<EncodedJSValue>*>(encodedJSValue)->load());
+-        if (v.tag() != InvalidTag)
+-            return v;
++        int32_t tag = *tagPointer;
++        if (static_cast<uint32_t>(tag) == InvalidTag)
++            continue;
++        WTF::loadLoadFence();
++        int32_t payload = *payloadPointer;
++        WTF::loadLoadFence();
++        if (*tagPointer != tag)
++            continue;
++        return JSValue(tag, payload);
+     }
+ }
+ 
+diff --git a/Source/JavaScriptCore/runtime/JSRegExpStringIterator.cpp b/Source/JavaScriptCore/runtime/JSRegExpStringIterator.cpp
+index 701ebef226..c00977d33e 100644
+--- a/Source/JavaScriptCore/runtime/JSRegExpStringIterator.cpp
++++ b/Source/JavaScriptCore/runtime/JSRegExpStringIterator.cpp
+@@ -24,6 +24,7 @@
+  */
+ 
+ #include "config.h"
++#include <unistd.h>
+ #include "JSRegExpStringIterator.h"
+ 
+ #include "Error.h"
+diff --git a/Source/JavaScriptCore/runtime/JSString.h b/Source/JavaScriptCore/runtime/JSString.h
+index 6cf7914918..50805d095d 100644
+--- a/Source/JavaScriptCore/runtime/JSString.h
++++ b/Source/JavaScriptCore/runtime/JSString.h
+@@ -1140,7 +1140,7 @@ ALWAYS_INLINE JSString* jsStringWithCache(VM& vm, const String& s)
+ 
+     auto& stringImpl = *s.impl();
+     if (length == 1) {
+-        if (auto c = stringImpl[0]; c <= maxSingleCharacterString)
++        if (auto c = stringImpl.at(0); c <= maxSingleCharacterString)
+             return vm.smallStrings.singleCharacterString(c);
+     }
+ 
+diff --git a/Source/JavaScriptCore/runtime/MachineContext.h b/Source/JavaScriptCore/runtime/MachineContext.h
+index 2ac8b24f00..c5126d1989 100644
+--- a/Source/JavaScriptCore/runtime/MachineContext.h
++++ b/Source/JavaScriptCore/runtime/MachineContext.h
+@@ -233,6 +233,8 @@ static inline void*& framePointerImpl(PlatformRegisters& regs)
+     return reinterpret_cast<void*&>(regs.__rbp);
+ #elif CPU(ARM64)
+     return reinterpret_cast<void*&>(regs.__x[29]);
++#elif CPU(ARM_THUMB2) || CPU(ARM)
++    return reinterpret_cast<void*&>(regs.__r[7]);
+ #else
+ #error Unknown Architecture
+ #endif
+@@ -577,6 +579,8 @@ inline void* wasmInstancePointer(const PlatformRegisters& regs)
+     return reinterpret_cast<void*>(regs.__rbx);
+ #elif CPU(ARM64)
+     return reinterpret_cast<void*>(regs.__x[19]);
++#elif CPU(ARM_THUMB2) || CPU(ARM)
++    return reinterpret_cast<void*>(regs.__r[10]);
+ #else
+ #error Unknown Architecture
+ #endif
+@@ -751,6 +755,12 @@ inline void*& llintInstructionPointer(PlatformRegisters& regs)
+ #elif CPU(ARM64)
+     static_assert(LLInt::LLIntPC == ARM64Registers::x4, "Wrong LLInt PC.");
+     return reinterpret_cast<void*&>(regs.__x[4]);
++#elif CPU(ARM_THUMB2) || CPU(ARM)
++    // ios6/armv7: GPRInfo gives regT4 == ARMRegisters::r4 for ARM_THUMB2, and
++    // LLIntPC is regT4. This block is #if !ENABLE(C_LOOP), so it was never
++    // compiled while ARMv7 was on the interpreter and no case was ever added.
++    static_assert(LLInt::LLIntPC == ARMRegisters::r4, "Wrong LLInt PC.");
++    return reinterpret_cast<void*&>(regs.__r[4]);
+ #else
+ #error Unknown Architecture
+ #endif
+diff --git a/Source/JavaScriptCore/runtime/MemoryStatistics.cpp b/Source/JavaScriptCore/runtime/MemoryStatistics.cpp
+index 8aa9a75f17..dd14c7c818 100644
+--- a/Source/JavaScriptCore/runtime/MemoryStatistics.cpp
++++ b/Source/JavaScriptCore/runtime/MemoryStatistics.cpp
+@@ -26,7 +26,12 @@
+ #include "config.h"
+ #include "MemoryStatistics.h"
+ 
++#include "CodeBlock.h"
+ #include "ExecutableAllocator.h"
++#include "HeapIterationScope.h"
++#include "MarkedSpaceInlines.h"
++#include "ScriptExecutable.h"
++#include "UnlinkedCodeBlock.h"
+ #include "VM.h"
+ 
+ namespace JSC {
+@@ -43,6 +48,36 @@ GlobalMemoryStatistics globalMemoryStatistics()
+     return stats;
+ }
+ 
++
++CodeMemoryStatistics codeMemoryStatistics(VM& vm)
++{
++    CodeMemoryStatistics statistics;
++
++    HeapIterationScope iterationScope(vm.heap);
++    vm.heap.objectSpace().forEachLiveCell(iterationScope,
++        [&](HeapCell* cell, HeapCell::Kind kind) -> IterationStatus {
++            if (!isJSCellKind(kind))
++                return IterationStatus::Continue;
++            auto* jsCell = static_cast<JSCell*>(cell);
++            auto* classInfo = jsCell->classInfo();
++            if (!classInfo)
++                return IterationStatus::Continue;
++            if (classInfo->isSubClassOf(UnlinkedCodeBlock::info())) {
++                statistics.unlinkedCodeBlockCount++;
++                statistics.unlinkedCodeBlockBytes += jsCell->estimatedSizeInBytes(vm);
++            } else if (classInfo->isSubClassOf(CodeBlock::info())) {
++                statistics.codeBlockCount++;
++                statistics.codeBlockBytes += jsCell->estimatedSizeInBytes(vm);
++            } else if (classInfo->isSubClassOf(ScriptExecutable::info())) {
++                statistics.executableCount++;
++                statistics.sourceBytes += jsCell->estimatedSizeInBytes(vm);
++            }
++            return IterationStatus::Continue;
++        });
++
++    return statistics;
++}
++
+ }
+ 
+ 
+diff --git a/Source/JavaScriptCore/runtime/MemoryStatistics.h b/Source/JavaScriptCore/runtime/MemoryStatistics.h
+index d8857200f4..454984a687 100644
+--- a/Source/JavaScriptCore/runtime/MemoryStatistics.h
++++ b/Source/JavaScriptCore/runtime/MemoryStatistics.h
+@@ -39,4 +39,16 @@ struct GlobalMemoryStatistics {
+ 
+ JS_EXPORT_PRIVATE GlobalMemoryStatistics globalMemoryStatistics();
+ 
++struct CodeMemoryStatistics {
++    size_t unlinkedCodeBlockCount = 0;
++    size_t unlinkedCodeBlockBytes = 0;
++    size_t codeBlockCount = 0;
++    size_t codeBlockBytes = 0;
++    size_t executableCount = 0;
++    size_t sourceBytes = 0;
++};
++
++class VM;
++JS_EXPORT_PRIVATE CodeMemoryStatistics codeMemoryStatistics(VM&);
++
+ } // namespace JSC
+diff --git a/Source/JavaScriptCore/runtime/Options.cpp b/Source/JavaScriptCore/runtime/Options.cpp
+index 683bc60a7a..260e3fc3e5 100644
+--- a/Source/JavaScriptCore/runtime/Options.cpp
++++ b/Source/JavaScriptCore/runtime/Options.cpp
+@@ -578,10 +578,14 @@ static void overrideDefaults()
+         Options::concurrentGCMaxHeadroom() = 1.4;
+         Options::minimumGCPauseMS() = 1;
+         Options::useStochasticMutatorScheduler() = false;
++#if defined(WEBKIT_IOS6)
++        Options::gcIncrementScale() = 1;
++#else
+         if (WTF::numberOfProcessorCores() <= 1)
+             Options::gcIncrementScale() = 1;
+         else
+             Options::gcIncrementScale() = 0;
++#endif
+     }
+ 
+ #if OS(DARWIN) && CPU(ARM64)
+diff --git a/Source/JavaScriptCore/runtime/Options.h b/Source/JavaScriptCore/runtime/Options.h
+index 308c8da9dd..6b87ab0174 100644
+--- a/Source/JavaScriptCore/runtime/Options.h
++++ b/Source/JavaScriptCore/runtime/Options.h
+@@ -174,7 +174,45 @@ private:
+     static unsigned computeNumberOfGCMarkers(unsigned maxNumberOfGCMarkers);
+     static unsigned computeNumberOfWorkerThreads(int maxNumberOfWorkerThreads, int minimum = 1);
+     static int32_t computePriorityDeltaOfWorkerThreads(int32_t twoCorePriorityDelta, int32_t multiCorePriorityDelta);
++#if defined(WEBKIT_IOS6)
++    // The runtime twin of the ENABLE(JIT) predicate in PlatformEnable.h. Upstream
++    // ties the default to the pointer width because no 32-bit port has shipped a
++    // JIT for years; this one builds the baseline JIT for armv7, so the default
++    // has to follow what was actually built. Left as-is, Options::useJIT() is
++    // false from the first line of JSC::initialize(), VM never calls
++    // ExecutableAllocator::initializeUnderlyingAllocator(), and the engine runs
++    // the LLInt for the life of the process while still linking every
++    // MacroAssemblerARMv7 symbol.
++#if ENABLE(JIT)
++    static constexpr bool jitEnabledByDefault() { return true; }
++#else
++    static constexpr bool jitEnabledByDefault() { return false; }
++#endif
++#else
+     static constexpr bool jitEnabledByDefault() { return isAddress64Bit(); }
++#endif
++#if defined(WEBKIT_IOS6) && ENABLE(DFG_JIT)
++    static constexpr bool dfgJITEnabledByDefault() { return true; }
++#else
++    static constexpr bool dfgJITEnabledByDefault() { return is64Bit(); }
++#endif
++#if defined(WEBKIT_IOS6)
++    // The same gate again, one tier down. useRegExpJIT defaults to
++    // `jitEnabledByDefault() && is64Bit()`, and the second half is the same "no 32-bit
++    // port ships a JIT any more" assumption - it has nothing to do with what YARR can
++    // compile. ENABLE(YARR_JIT) follows ENABLE(JIT), which this port turns on for armv7,
++    // so the default has to follow what was actually built or the whole YARR backend is
++    // compiled, linked and never entered. Measured on the device: 200 passes of the
++    // benchmark's match loop take 13.5 s interpreted and 2.1 s compiled, unchanged
++    // results either way.
++#if ENABLE(YARR_JIT)
++    static constexpr bool regExpJITEnabledByDefault() { return jitEnabledByDefault(); }
++#else
++    static constexpr bool regExpJITEnabledByDefault() { return false; }
++#endif
++#else
++    static constexpr bool regExpJITEnabledByDefault() { return jitEnabledByDefault() && is64Bit(); }
++#endif
+     static constexpr bool ipintEnabledByDefault() { return isARM64() || isARM64E() || isX86_64(); }
+     static double defaultQuickDFGTierUpThresholdFactor()
+     {
+diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
+index 30507f47b3..7902197756 100644
+--- a/Source/JavaScriptCore/runtime/OptionsList.h
++++ b/Source/JavaScriptCore/runtime/OptionsList.h
+@@ -25,6 +25,44 @@
+ 
+ #pragma once
+ 
++#if defined(WEBKIT_IOS6)
++// Capturing a hundred frames of stack for every exception thrown means a large
++// allocation at exactly the moment a page is doing something unusual - and the
++// login page died in malloc inside Exception::finishCreation, out of memory, with
++// the interpreter nested dozens of frames deep. Twenty five frames is still a
++// usable trace and costs a quarter of the memory.
++#define WEBKIT_IOS6_STACK_TRACE_LIMIT 25u
++#else
++#define WEBKIT_IOS6_STACK_TRACE_LIMIT 100u
++#endif
++
++#if defined(WEBKIT_IOS6)
++// Compile sooner than upstream does.
++//
++// The thresholds upstream picks assume a processor where staying in the
++// interpreter a while is cheap and compiling early wastes work. Here the
++// arithmetic is the other way round: a measured tight loop runs at 56 million
++// iterations a second once compiled and about two before, and the freezes that
++// matter are single passes of the site's renderer running three to seven seconds
++// inside the interpreter. Paying for compilation five times sooner is a good
++// trade when the alternative is interpreting a whole render.
++// Upstream's numbers, kept after measuring. Compiling five times sooner sounded
++// right for a processor this slow and was worse on both axes: passes of 5.4, 12.6,
++// 10.3, 1.7 and 0.7 seconds against 3.9, 9.7, 10.3 and 1.0, and 174 MB resident
++// against 151. Paying baseline compilation for the thousands of functions a
++// bundle calls once costs more than the interpreter does.
++#define WEBKIT_IOS6_JIT_WARMUP 500
++#define WEBKIT_IOS6_JIT_SOON 100
++#define WEBKIT_IOS6_OPTIMIZE_WARMUP 1000
++#define WEBKIT_IOS6_OPTIMIZE_SOON 1000
++#else
++#define WEBKIT_IOS6_JIT_WARMUP 500
++#define WEBKIT_IOS6_JIT_SOON 100
++#define WEBKIT_IOS6_OPTIMIZE_WARMUP 1000
++#define WEBKIT_IOS6_OPTIMIZE_SOON 1000
++#endif
++
++
+ #include <JavaScriptCore/GCLogging.h>
+ #include <JavaScriptCore/JSCWebPreferenceOptions.h>
+ #include <JavaScriptCore/JSExportMacros.h>
+@@ -84,8 +122,8 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, useLLInt,  true, Normal, "allows the LLINT to be used if true"_s) \
+     v(Bool, useJIT, jitEnabledByDefault(), Normal, "allows the executable pages to be allocated for JIT and thunks if true"_s) \
+     v(Bool, useBaselineJIT, true, Normal, "allows the baseline JIT to be used if true"_s) \
+-    v(Bool, useDFGJIT, is64Bit(), Normal, "allows the DFG JIT to be used if true"_s) \
+-    v(Bool, useRegExpJIT, jitEnabledByDefault() && is64Bit(), Normal, "allows the RegExp JIT to be used if true"_s) \
++    v(Bool, useDFGJIT, dfgJITEnabledByDefault(), Normal, "allows the DFG JIT to be used if true"_s) \
++    v(Bool, useRegExpJIT, regExpJITEnabledByDefault(), Normal, "allows the RegExp JIT to be used if true"_s) \
+     v(Bool, useDOMJIT, is64Bit(), Normal, "allows the DOMJIT to be used if true"_s) \
+     \
+     v(Bool, reportMustSucceedExecutableAllocations, false, Normal, nullptr) \
+@@ -351,12 +389,12 @@ bool hasCapacityToUseLargeGigacage();
+     v(Double, dfgThresholdScaleForLowP0Cores, 2.0, Normal, "On low P0-core-count Apple silicon Macs, scale the DFG tier-up thresholds (thresholdForOptimize*) by this factor."_s) \
+     v(Double, ftlThresholdScaleForLowP0Cores, 1.5, Normal, "On low P0-core-count Apple silicon Macs, scale the FTL tier-up thresholds (thresholdForFTLOptimize*) by this factor."_s) \
+     v(Bool, forceEagerCompilation, false, Normal, nullptr) \
+-    v(Int32, thresholdForJITAfterWarmUp, 500, Normal, nullptr) \
+-    v(Int32, thresholdForJITSoon, 100, Normal, nullptr) \
++    v(Int32, thresholdForJITAfterWarmUp, WEBKIT_IOS6_JIT_WARMUP, Normal, nullptr) \
++    v(Int32, thresholdForJITSoon, WEBKIT_IOS6_JIT_SOON, Normal, nullptr) \
+     \
+-    v(Int32, thresholdForOptimizeAfterWarmUp, 1000, Normal, nullptr) \
++    v(Int32, thresholdForOptimizeAfterWarmUp, WEBKIT_IOS6_OPTIMIZE_WARMUP, Normal, nullptr) \
+     v(Int32, thresholdForOptimizeAfterLongWarmUp, 1000, Normal, nullptr) \
+-    v(Int32, thresholdForOptimizeSoon, 1000, Normal, nullptr) \
++    v(Int32, thresholdForOptimizeSoon, WEBKIT_IOS6_OPTIMIZE_SOON, Normal, nullptr) \
+     v(Int32, executionCounterIncrementForLoop, 1, Normal, nullptr) \
+     v(Int32, executionCounterIncrementForEntry, 15, Normal, nullptr) \
+     \
+@@ -458,8 +496,8 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, verifyHeap, false, Normal, nullptr) \
+     v(Unsigned, numberOfGCCyclesToRecordForVerification, 3, Normal, nullptr) \
+     \
+-    v(Unsigned, exceptionStackTraceLimit, 100, Normal, "Stack trace limit for internal Exception object"_s) \
+-    v(Unsigned, defaultErrorStackTraceLimit, 100, Normal, "The default value for Error.stackTraceLimit"_s) \
++    v(Unsigned, exceptionStackTraceLimit, WEBKIT_IOS6_STACK_TRACE_LIMIT, Normal, "Stack trace limit for internal Exception object"_s) \
++    v(Unsigned, defaultErrorStackTraceLimit, WEBKIT_IOS6_STACK_TRACE_LIMIT, Normal, "The default value for Error.stackTraceLimit"_s) \
+     v(Bool, exitOnResourceExhaustion, false, Normal, nullptr) \
+     v(Bool, useExceptionFuzz, false, Normal, nullptr) \
+     v(Unsigned, fireExceptionFuzzAt, 0, Normal, nullptr) \
+@@ -467,7 +505,7 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, validateDFGExceptionHandling, ASSERT_ENABLED, Normal, "Causes the DFG to emit code validating exception handling for each node that can exit"_s) \
+     v(Bool, dumpSimulatedThrows, false, Normal, "Dumps the call stack of the last simulated throw if exception scope verification fails"_s) \
+     v(Bool, validateExceptionChecks, false, Normal, "Verifies that needed exception checks are performed."_s) \
+-    v(Unsigned, unexpectedExceptionStackTraceLimit, 100, Normal, "Stack trace limit for debugging unexpected exceptions observed in the VM"_s) \
++    v(Unsigned, unexpectedExceptionStackTraceLimit, WEBKIT_IOS6_STACK_TRACE_LIMIT, Normal, "Stack trace limit for debugging unexpected exceptions observed in the VM"_s) \
+     \
+     v(Bool, validateDFGClobberize, false, Normal, "Emits code in the DFG/FTL to validate the Clobberize phase"_s) \
+     v(Bool, validateBoundsCheckElimination, false, Normal, "Emits code in the DFG/FTL to validate bounds check elimination"_s) \
+diff --git a/Source/JavaScriptCore/runtime/ScriptExecutable.cpp b/Source/JavaScriptCore/runtime/ScriptExecutable.cpp
+index 76a66a05be..1bf9a6a714 100644
+--- a/Source/JavaScriptCore/runtime/ScriptExecutable.cpp
++++ b/Source/JavaScriptCore/runtime/ScriptExecutable.cpp
+@@ -26,6 +26,8 @@
+ #include "config.h"
+ 
+ #include "CodeBlock.h"
++#include "CompilationResult.h"  // ios6/armv7: setupJIT() is #if ENABLE(JIT); with the
++                                  // JIT off this enum was only ever forward-declared.
+ #include "Debugger.h"
+ #include "EvalCodeBlock.h"
+ #include "FunctionCodeBlock.h"
+diff --git a/Source/JavaScriptCore/yarr/YarrJIT.cpp b/Source/JavaScriptCore/yarr/YarrJIT.cpp
+index fbaab7dfc0..759088a70a 100644
+--- a/Source/JavaScriptCore/yarr/YarrJIT.cpp
++++ b/Source/JavaScriptCore/yarr/YarrJIT.cpp
+@@ -6727,11 +6727,32 @@ class YarrGenerator final : public YarrJITInfo {
+             size_t stackSizeForCalleeSaves = WTF::roundUpToMultipleOf<stackAlignmentBytes()>(m_calleeSaves.registerCount() * sizeof(UCPURegister));
+ #if CPU(X86_64) || CPU(ARM64)
+             m_jit.subPtr(GPRInfo::callFrameRegister, CCallHelpers::TrustedImm32(stackSizeForCalleeSaves), MacroAssembler::stackPointerRegister);
++            m_jit.emitSaveCalleeSavesFor(&m_calleeSaves);
+ #else
++            // The registers are saved before one of them is used as scratch.
++            //
++            // On a target where the stack pointer cannot be written directly,
++            // the new value is computed into regT0 - and on ARM_THUMB2 regT0 is
++            // r4, which is itself in the callee-save set. Done in the other
++            // order, the caller's r4 is destroyed by the computation and then
++            // that destroyed value is what gets saved and later restored, so the
++            // caller resumes with a stack address where it left a live value.
++            //
++            // Diagnosed on an iPhone 4S: 'aaa'.matchAll(/\w+/g) followed by one
++            // next() took SIGBUS at `str r2, [r1, r4]` inside
++            // JSRegExpStringIterator::nextImpl, with r1 + r4 equal to the
++            // faulting address and r4 holding the frame pointer minus the
++            // callee-save area - exactly the value this prologue computes. Plain
++            // RegExp.prototype.exec survived only because the compiler happened
++            // not to keep anything in r4 across the call there.
++            //
++            // Saving first is safe: emitSaveCalleeSavesFor writes relative to the
++            // frame pointer, which emitFunctionPrologue has already established,
++            // so it does not depend on the stack pointer having moved yet.
++            m_jit.emitSaveCalleeSavesFor(&m_calleeSaves);
+             m_jit.subPtr(GPRInfo::callFrameRegister, CCallHelpers::TrustedImm32(stackSizeForCalleeSaves), m_regs.regT0);
+             m_jit.move(m_regs.regT0, MacroAssembler::stackPointerRegister);
+ #endif
+-            m_jit.emitSaveCalleeSavesFor(&m_calleeSaves);
+         }
+     }
+ 

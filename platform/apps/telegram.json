@@ -1,0 +1,31 @@
+{
+  "name": "Telegram",
+  "bundle_id": "space.kern0x1b.webapp.telegram",
+  "scheme": "telegramweb",
+  "version": "1.0",
+  "start_url": "https://web.telegram.org/a/",
+
+  "internal_hosts": ["web.telegram.org"],
+
+  "shell_hosts": ["web.telegram.org"],
+  "precache": ["https://web.telegram.org/a/"],
+
+  "user_agent": {
+    "product_version": "18.7",
+    "build_version": "604.1",
+    "bundle_version": "604.1"
+  },
+
+  "orientation": "portrait",
+  "status_bar_style": "default",
+  "background_color": "#ffffff",
+  "icon_color": "#229ed9",
+
+  "inject_css": "../inject/appchrome.css",
+  "external_links": "open-in-safari",
+
+  "notes": [
+    "web.telegram.org/a/ is the older, lighter web client (formerly webogram); the default web.telegram.org/k/ is a heavier React build that is a much worse bet for a CLoop/baseline-JIT armv7 engine.",
+    "The scheme is telegramweb, not telegram: the real Telegram app registers telegram:// and a collision would break LaunchServices resolution for both, same reasoning as Instagram's instagramweb."
+  ]
+}

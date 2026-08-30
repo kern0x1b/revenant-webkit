@@ -1,0 +1,30 @@
+{
+  "name": "Instagram",
+  "bundle_id": "space.kern0x1b.webapp.instagram",
+  "scheme": "instagramweb",
+  "version": "1.0",
+  "start_url": "https://www.instagram.com/",
+
+  "internal_hosts": ["www.instagram.com", "instagram.com"],
+
+  "shell_hosts": ["www.instagram.com", "static.cdninstagram.com"],
+  "precache": ["https://www.instagram.com/"],
+
+  "user_agent": {
+    "product_version": "18.7",
+    "build_version": "604.1",
+    "bundle_version": "604.1"
+  },
+
+  "orientation": "portrait",
+  "status_bar_style": "default",
+  "background_color": "#ffffff",
+  "icon_color": "#c13584",
+
+  "inject_css": "../inject/appchrome.css",
+  "external_links": "open-in-safari",
+
+  "notes": [
+    "The scheme is instagramweb, not instagram: the real Instagram app registers instagram:// and LaunchServices gives a duplicated scheme to whichever bundle it saw last, so a collision here would break both."
+  ]
+}

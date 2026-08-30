@@ -1,0 +1,10 @@
+--- a/build-app.sh	2026-08-25 03:16:47
++++ b/build-app.sh	2026-08-25 03:16:47
+@@ -17,6 +17,7 @@
+     -framework WebKitLegacy \
+     -Wl,-rpath,@executable_path/Frameworks \
+     "$P/app/main.m" "$P/app/ModernTLSURLProtocol.m" \
++    "$P/platform/runtime/WebAppManifest.m" "$P/platform/runtime/WebAppCookieJar.m" \
+     -I"$P/third_party/openssl-armv7/include" \
+     "$P/third_party/openssl-armv7/lib/libssl.a" "$P/third_party/openssl-armv7/lib/libcrypto.a" -lz \
+     -o "$APP/LegacyBrowser"

@@ -1,0 +1,1042 @@
+diff --git a/Source/WebCore/layout/integration/LayoutIntegrationBoxGeometryUpdater.cpp b/Source/WebCore/layout/integration/LayoutIntegrationBoxGeometryUpdater.cpp
+index bca8d7c3b8..d00198134f 100644
+--- a/Source/WebCore/layout/integration/LayoutIntegrationBoxGeometryUpdater.cpp
++++ b/Source/WebCore/layout/integration/LayoutIntegrationBoxGeometryUpdater.cpp
+@@ -25,6 +25,10 @@
+  */
+ 
+ #include "config.h"
++#include <wtf/MonotonicTime.h>
++
++extern "C" unsigned long long g_webkitIOS6BoxGeometryNs;
++extern "C" unsigned g_webkitIOS6BoxGeometryCount;
+ #include "LayoutIntegrationBoxGeometryUpdater.h"
+ 
+ #include "FontCascadeInlines.h"
+@@ -707,6 +711,17 @@ void BoxGeometryUpdater::updateInlineBoxDimensions(const RenderInline& renderInl
+ 
+ void BoxGeometryUpdater::setFormattingContextContentGeometry(std::optional<LayoutUnit> availableLogicalWidth, std::optional<Layout::IntrinsicWidthMode> intrinsicWidthMode)
+ {
++#if defined(WEBKIT_IOS6)
++    auto ios6PhaseStart = MonotonicTime::now();
++    struct Ios6PhaseScope {
++        MonotonicTime start;
++        ~Ios6PhaseScope()
++        {
++            g_webkitIOS6BoxGeometryNs += (MonotonicTime::now() - start).nanoseconds();
++            ++g_webkitIOS6BoxGeometryCount;
++        }
++    } ios6PhaseScope { ios6PhaseStart };
++#endif
+     ASSERT(availableLogicalWidth || intrinsicWidthMode);
+ 
+     if (rootLayoutBox().establishesInlineFormattingContext()) {
+diff --git a/Source/WebCore/layout/integration/inline/LayoutIntegrationLineLayout.cpp b/Source/WebCore/layout/integration/inline/LayoutIntegrationLineLayout.cpp
+index a19aad0865..5b6601db6c 100644
+--- a/Source/WebCore/layout/integration/inline/LayoutIntegrationLineLayout.cpp
++++ b/Source/WebCore/layout/integration/inline/LayoutIntegrationLineLayout.cpp
+@@ -24,6 +24,10 @@
+  */
+ 
+ #include "config.h"
++#include <wtf/MonotonicTime.h>
++
++extern "C" unsigned long long g_webkitIOS6InlineLayoutNs;
++extern "C" unsigned g_webkitIOS6InlineLayoutCount;
+ #include "LayoutIntegrationLineLayout.h"
+ 
+ #include "BlockFormattingState.h"
+@@ -469,6 +473,17 @@ static inline std::optional<Layout::BlockLayoutState::LineGrid> lineGrid(const R
+ 
+ std::optional<LayoutRect> LineLayout::layout(RenderBlockFlow::MarginInfo& marginInfo, ForceFullLayout forcedFullLayout)
+ {
++#if defined(WEBKIT_IOS6)
++    auto ios6PhaseStart = MonotonicTime::now();
++    struct Ios6PhaseScope {
++        MonotonicTime start;
++        ~Ios6PhaseScope()
++        {
++            g_webkitIOS6InlineLayoutNs += (MonotonicTime::now() - start).nanoseconds();
++            ++g_webkitIOS6InlineLayoutCount;
++        }
++    } ios6PhaseScope { ios6PhaseStart };
++#endif
+     if (forcedFullLayout == ForceFullLayout::Yes && m_lineDamage)
+         Layout::InlineInvalidation::resetInlineDamage(*m_lineDamage);
+ 
+diff --git a/Source/WebCore/rendering/GridTrackSizingAlgorithm.cpp b/Source/WebCore/rendering/GridTrackSizingAlgorithm.cpp
+index 009f214a35..c6aa969f0a 100644
+--- a/Source/WebCore/rendering/GridTrackSizingAlgorithm.cpp
++++ b/Source/WebCore/rendering/GridTrackSizingAlgorithm.cpp
+@@ -1058,6 +1058,11 @@ LayoutUnit GridTrackSizingAlgorithmStrategy::logicalHeightForGridItem(RenderBox&
+             return true;
+         return false;
+     };
++    // Keeping the overriding size instead of clearing it - so the item is not
++    // dirtied here at all - was tried and measured: the self-dirtied count per
++    // pass halved from 578 to 288, the total walk did not move (4500 blocks
++    // against 4351, 1360 ms either way), and the page rendered grey with empty
++    // boxes. The measurement it does here is load-bearing.
+     if (hasOverridingContainingBlockContentSizeForGridItem() && shouldClearOverridingContainingBlockContentSizeForGridItem(gridItem, Style::GridTrackSizingDirection::Rows)) {
+         setOverridingContainingBlockContentSizeForGridItem(*renderGrid(), gridItem, gridItemBlockDirection, std::nullopt);
+         gridItem.setNeedsLayout(MarkingBehavior::MarkOnlyThis);
+diff --git a/Source/WebCore/rendering/RenderBlock.cpp b/Source/WebCore/rendering/RenderBlock.cpp
+index 90893caea4..db147f6a85 100644
+--- a/Source/WebCore/rendering/RenderBlock.cpp
++++ b/Source/WebCore/rendering/RenderBlock.cpp
+@@ -744,6 +744,11 @@ void RenderBlock::updateBlockChildDirtyBitsBeforeLayout(RelayoutChildren relayou
+         auto& style = child.style();
+         return style.height().isPercentOrCalculated() || style.minHeight().isPercentOrCalculated() || style.maxHeight().isPercentOrCalculated();
+     };
++    // The FIXME above was implemented here - skipping the marking when this
++    // block cannot resolve a percentage anyway - and measured on the device to
++    // change nothing: the same five to nine thousand blocks were laid out. The
++    // dirt was coming from the grid code, not from here. Removed rather than
++    // carried unverified.
+     if (relayoutChildren == RelayoutChildren::Yes || (childHasRelativeHeight() && !isRenderView()))
+         child.setChildNeedsLayout(MarkingBehavior::MarkOnlyThis);
+ 
+diff --git a/Source/WebCore/rendering/RenderBlockFlow.cpp b/Source/WebCore/rendering/RenderBlockFlow.cpp
+index 8175de8e81..4d3eda8863 100644
+--- a/Source/WebCore/rendering/RenderBlockFlow.cpp
++++ b/Source/WebCore/rendering/RenderBlockFlow.cpp
+@@ -551,6 +551,19 @@ void RenderBlockFlow::layoutBlockWithNoChildren()
+ 
+ void RenderBlockFlow::layoutBlock(RelayoutChildren relayoutChildren, LayoutUnit pageLogicalHeight)
+ {
++#if defined(WEBKIT_IOS6)
++    extern unsigned g_webkitIOS6BlocksLaidOut;
++    extern unsigned g_webkitIOS6BlocksForced;
++    extern unsigned g_webkitIOS6BlocksDirty;
++    extern unsigned g_webkitIOS6BlocksViaChild;
++    ++g_webkitIOS6BlocksLaidOut;
++    if (relayoutChildren == RelayoutChildren::Yes)
++        ++g_webkitIOS6BlocksForced;
++    else if (selfNeedsLayout())
++        ++g_webkitIOS6BlocksDirty;
++    else if (normalChildNeedsLayout())
++        ++g_webkitIOS6BlocksViaChild;
++#endif
+     ASSERT(needsLayout());
+ 
+     if (relayoutChildren == RelayoutChildren::No && simplifiedLayout())
+diff --git a/Source/WebCore/rendering/RenderElement.cpp b/Source/WebCore/rendering/RenderElement.cpp
+index 0ebe778d06..c73ccb039a 100644
+--- a/Source/WebCore/rendering/RenderElement.cpp
++++ b/Source/WebCore/rendering/RenderElement.cpp
+@@ -592,6 +592,13 @@ static void logStyleDifference(const RenderElement& renderer, const Style::Compu
+ 
+ void RenderElement::setStyle(Style::ComputedStyle&& style, Style::DifferenceResult minimalStyleDifference)
+ {
++#if defined(WEBKIT_IOS6)
++    // How much of the tree the engine restyles between layouts. A layout that
++    // reports ten thousand dirty blocks is either a restyle of everything or a
++    // dirtying of everything; this separates the two.
++    extern unsigned g_webkitIOS6StylesSet;
++    ++g_webkitIOS6StylesSet;
++#endif
+     // FIXME: Should change RenderView so it can use initializeStyle too.
+     // If we do that, we can assert m_hasInitializedStyle unconditionally,
+     // and remove the check of m_hasInitializedStyle below too.
+diff --git a/Source/WebCore/rendering/RenderGrid.cpp b/Source/WebCore/rendering/RenderGrid.cpp
+index fdd748a27c..7f8ec62110 100644
+--- a/Source/WebCore/rendering/RenderGrid.cpp
++++ b/Source/WebCore/rendering/RenderGrid.cpp
+@@ -1847,13 +1847,57 @@ void RenderGrid::applyStretchAlignmentToGridItemIfNeeded(RenderBox& gridItem, Re
+         gridItem.setOverridingBorderBoxLogicalHeight(desiredLogicalHeight);
+ 
+         auto itemNeedsRelayoutForStretchAlignment = [&]() {
+-            if (desiredLogicalHeight != gridItem.logicalHeight())
++#if defined(WEBKIT_IOS6)
++            extern unsigned g_webkitIOS6GridStretchHeight;
++            extern unsigned g_webkitIOS6GridStretchRequirement;
++            extern unsigned g_webkitIOS6GridStretchPercent;
++#endif
++            if (desiredLogicalHeight != gridItem.logicalHeight()) {
++#if defined(WEBKIT_IOS6)
++                ++g_webkitIOS6GridStretchHeight;
++#endif
+                 return true;
++            }
+ 
+-            if (canSetColumnAxisStretchRequirementForItem(gridItem))
+-                return gridLayoutState.containsLayoutRequirementForGridItem(gridItem, ItemLayoutRequirement::NeedsColumnAxisStretchAlignment);
++            if (canSetColumnAxisStretchRequirementForItem(gridItem)) {
++                bool needed = gridLayoutState.containsLayoutRequirementForGridItem(gridItem, ItemLayoutRequirement::NeedsColumnAxisStretchAlignment);
++#if defined(WEBKIT_IOS6)
++                // Not honoured here, and this is the largest single win measured
++                // on this port.
++                //
++                // The requirement is raised by GridTrackSizingAlgorithmStrategy::
++                // logicalHeightForGridItem, which clears a grid item's overriding
++                // containing-block size and dirties the item, and then this asks
++                // for a second relayout of the same item to re-apply the stretch.
++                // On a feed built as a grid of cards the pair fires for every item
++                // on every pass, forever, with nothing having changed.
++                //
++                // Measured with the engine recording who marks renderers dirty and
++                // what each layout costs: 288 of 289 stretch relayouts came from
++                // this branch, and one to four renderers dirty on entry turned into
++                // 7800 blocks laid out at 2100 ms. Without it the same page lays
++                // out 710 blocks in 250 ms - eight times faster - and screenshots
++                // before and after are identical, cards, images and bars alike.
++                //
++                // What is given up: an item whose column-axis stretch genuinely has
++                // to be re-applied within a single layout gets it on the next pass
++                // instead. The flag file restores upstream behaviour for comparison.
++                static int honourRequirement = -1;
++                if (honourRequirement < 0)
++                    honourRequirement = access("/tmp/native-grid-stretch", F_OK) == 0 ? 1 : 0;
++                if (!honourRequirement)
++                    needed = false;
++#endif
++#if defined(WEBKIT_IOS6)
++                if (needed)
++                    ++g_webkitIOS6GridStretchRequirement;
++#endif
++                return needed;
++            }
+ 
+-            return is<RenderBlock>(gridItem) && downcast<RenderBlock>(gridItem).hasPercentHeightDescendants();
++            if (!is<RenderBlock>(gridItem) || !downcast<RenderBlock>(gridItem).hasPercentHeightDescendants())
++                return false;
++            return true;
+         }();
+         // Checking the logical-height of a grid item isn't enough. Setting an override logical-height
+         // changes the definiteness, resulting in percentages to resolve differently.
+diff --git a/Source/WebCore/rendering/RenderLayerBacking.cpp b/Source/WebCore/rendering/RenderLayerBacking.cpp
+index 7aeda963c2..de59abc57b 100644
+--- a/Source/WebCore/rendering/RenderLayerBacking.cpp
++++ b/Source/WebCore/rendering/RenderLayerBacking.cpp
+@@ -1661,6 +1661,11 @@ void RenderLayerBacking::updateGeometry(const RenderLayer* compositedAncestor)
+     m_graphicsLayer->setBackfaceVisibility(style.backfaceVisibility() == BackfaceVisibility::Visible);
+ 
+     m_graphicsLayer->setPosition(primaryLayerPosition);
++#if defined(WEBKIT_IOS6)
++    // Recorded with the position, so a viewport constraint built from this layer
++    // later pairs the two correctly. See viewportRectWhenPositioned().
++    m_viewportRectWhenPositioned = renderer().view().frameView().rectForFixedPositionLayout();
++#endif
+     m_graphicsLayer->setSize(primaryGraphicsLayerRect.size());
+     if (hasTiledBackingFlatteningLayer())
+         m_childContainmentLayer->setSize(primaryGraphicsLayerRect.size());
+diff --git a/Source/WebCore/rendering/RenderLayerBacking.h b/Source/WebCore/rendering/RenderLayerBacking.h
+index e85fa7aef1..43f5a3caa6 100644
+--- a/Source/WebCore/rendering/RenderLayerBacking.h
++++ b/Source/WebCore/rendering/RenderLayerBacking.h
+@@ -75,6 +75,19 @@ class RenderLayerBacking final : public GraphicsLayerClient {
+     WTF_MAKE_TZONE_ALLOCATED(RenderLayerBacking);
+     WTF_MAKE_NONCOPYABLE(RenderLayerBacking);
+ public:
++#if defined(WEBKIT_IOS6)
++    // The viewport rectangle in force when this layer's position was last set.
++    //
++    // A viewport constraint pairs a layer position with the rectangle that
++    // position was computed against. Pairing them by a single frame-wide
++    // snapshot is not enough: a layout updates the snapshot but does not
++    // necessarily recompute every layer's geometry, so a layer whose position
++    // came from an earlier pass gets matched with a newer rectangle and is moved
++    // by the difference - measured on the device as a bar exactly one flick out
++    // of place. Kept per layer, the two always describe the same moment.
++    WebCore::LayoutRect viewportRectWhenPositioned() const { return m_viewportRectWhenPositioned; }
++#endif
++
+     explicit RenderLayerBacking(RenderLayer&);
+     ~RenderLayerBacking();
+ 
+@@ -332,6 +345,9 @@ public:
+     void purgeBackBufferForTesting();
+     void markFrontBufferVolatileForTesting();
+ private:
++#if defined(WEBKIT_IOS6)
++    LayoutRect m_viewportRectWhenPositioned;
++#endif
+     friend class PaintedContentsInfo;
+ 
+     FloatRect backgroundBoxForSimpleContainerPainting() const;
+diff --git a/Source/WebCore/rendering/RenderLayerCompositor.cpp b/Source/WebCore/rendering/RenderLayerCompositor.cpp
+index 155de4b982..d19f65a91b 100644
+--- a/Source/WebCore/rendering/RenderLayerCompositor.cpp
++++ b/Source/WebCore/rendering/RenderLayerCompositor.cpp
+@@ -24,6 +24,7 @@
+  */
+ 
+ #include "config.h"
++#include <unistd.h>
+ #include "RenderLayerCompositor.h"
+ 
+ #include "AsyncScrollingCoordinator.h"
+@@ -710,7 +711,15 @@ bool RenderLayerCompositor::updateCompositingPolicy()
+ 
+     static auto cachedMemoryPolicy = WTF::MemoryUsagePolicy::Unrestricted;
+     bool nowUnderMemoryPressure = isCurrentlyUnderMemoryPressureOrWarning();
+-    static bool cachedIsUnderMemoryPressureOrWarning = nowUnderMemoryPressure;
++    // Seeded to false rather than to the first observation, so that it agrees
++    // with cachedMemoryPolicy above. Seeded from the observation, a process
++    // whose very first call already sees pressure records "under pressure" next
++    // to a policy of Unrestricted and never refreshes the policy until the flag
++    // happens to go false and true again - leaving m_compositingPolicy Normal
++    // for the life of the process. Reachable here because pressure now follows
++    // this process's own footprint, which can already be over the threshold by
++    // the first style recalc.
++    static bool cachedIsUnderMemoryPressureOrWarning = false;
+ 
+     if (cachedIsUnderMemoryPressureOrWarning != nowUnderMemoryPressure) {
+         cachedMemoryPolicy = MemoryPressureHandler::singleton().currentMemoryUsagePolicy();
+@@ -1040,6 +1049,37 @@ static std::optional<ScrollingNodeID> frameHostingNodeForFrame(LocalFrame& frame
+ // Returns true on a successful update.
+ bool RenderLayerCompositor::updateCompositingLayers(CompositingUpdateType updateType, RenderLayer* updateRootArg)
+ {
++#if defined(WEBKIT_IOS6)
++    // Every layer with a backing store costs a screen of pixels at retina scale -
++    // over two megabytes for a full-width one - and the process reports fifty two
++    // megabytes of graphics while the tile cache accounts for under five. This
++    // says how many there are.
++    {
++        static int recordLayers = -1;
++        if (recordLayers < 0)
++            recordLayers = access("/tmp/native-weblock-on", F_OK) == 0 ? 1 : 0;
++        static CFAbsoluteTime lastLayerReport;
++        CFAbsoluteTime layerNow = CFAbsoluteTimeGetCurrent();
++        if (recordLayers && layerNow - lastLayerReport > 3.0) {
++            lastLayerReport = layerNow;
++            unsigned backed = 0;
++            unsigned total = 0;
++            if (auto* root = m_renderView.layer()) {
++                Vector<const RenderLayer*> stack;
++                stack.append(root);
++                while (!stack.isEmpty()) {
++                    const RenderLayer* current = stack.takeLast();
++                    total++;
++                    if (current->isComposited())
++                        backed++;
++                    for (const RenderLayer* child = current->firstChild(); child; child = child->nextSibling())
++                        stack.append(child);
++                }
++            }
++            WTFLogAlways("[layers] %u composited of %u render layers", backed, total);
++        }
++    }
++#endif
+     LOG_WITH_STREAM(Compositing, stream << "RenderLayerCompositor " << this << " [" << m_renderView.frameView() << "] updateCompositingLayers " << updateType << " contentLayersCount " << m_contentLayersCount);
+ 
+     TraceScope tracingScope(CompositingUpdateStart, CompositingUpdateEnd);
+@@ -1243,6 +1283,25 @@ bool RenderLayerCompositor::allowBackingStoreDetachingForFixedPosition(RenderLay
+         fixedLayoutRect = frameView->rectForFixedPositionLayout();
+ 
+     bool allowDetaching = !fixedLayoutRect.intersects(absoluteBounds);
++
++#if defined(WEBKIT_IOS6)
++    // Never on this port.
++    //
++    // The rule above throws away a fixed layer's backing store when the engine
++    // believes the layer is outside the layout viewport. That belief is formed
++    // from where the element was laid out, and on this port the application
++    // moves pinned layers itself on every frame while layouts happen rarely - so
++    // the two drift apart as soon as the reader scrolls, the engine decides the
++    // page's own header and footer are far away, and their backing stores are
++    // discarded. The result on the device: the bars are in exactly the right
++    // place, measured at y 20 and y 430 in window coordinates, and nothing is
++    // drawn in them.
++    //
++    // The memory this rule is protecting is two bars at 320 by 74 and 320 by 50 -
++    // about 145 kilobytes. Keeping them is not a cost worth the page losing its
++    // furniture.
++    allowDetaching = false;
++#endif
+     LOG_WITH_STREAM(Compositing, stream << "RenderLayerCompositor (layer " << &layer << ") allowsBackingStoreDetaching - absoluteBounds " << absoluteBounds << " layoutViewportRect " << fixedLayoutRect << ", allowDetaching " << allowDetaching);
+     return allowDetaching;
+ }
+@@ -4125,16 +4184,28 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
+ 
+     auto position = renderer.style().position();
+     bool isFixed = renderer.isFixedPositioned();
++#if !defined(WEBKIT_IOS6)
+     if (isFixed && !layer.isStackingContext())
+         return false;
++#else
++    // A fixed element without a layer of its own is painted from the render
++    // tree, which on this port only learns the new scroll offset at the next
++    // layout - so a site's bars drift with the content and snap back, which is
++    // exactly what a person sees. With a layer, the scroll handler moves it
++    // directly in the same frame as the scroll. Narrowing this back to upstream
++    // behaviour was tried to save memory and saved none: the graphics figure did
++    // not move, because it is decoded images, not layer backing stores. The
++    // layer count on this feed is five to eleven.
++#endif
+     
+     bool isSticky = renderer.isInFlowPositioned() && position == PositionType::Sticky;
+     if (!isFixed && !isSticky)
+         return false;
+ 
+     // FIXME: acceleratedCompositingForFixedPositionEnabled should probably be renamed acceleratedCompositingForViewportConstrainedPositionEnabled().
+-    if (!m_renderView.settings().acceleratedCompositingForFixedPositionEnabled())
++    if (!m_renderView.settings().acceleratedCompositingForFixedPositionEnabled()) {
+         return false;
++    }
+ 
+     if (isSticky)
+         return isAsyncScrollableStickyLayer(layer);
+@@ -4149,10 +4220,17 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
+ 
+     // Don't promote fixed position elements that are descendants of a non-view container, e.g. transformed elements.
+     // They will stay fixed wrt the container rather than the enclosing frame.
++#if !defined(WEBKIT_IOS6)
+     if (container != &m_renderView) {
+         queryData.nonCompositedForPositionReason = RenderLayer::NotCompositedForNonViewContainer;
+         return false;
+     }
++#else
++    // Being fixed with respect to a transformed container is the lesser error
++    // here: left out of a layer, the element is painted at a stale offset, and a
++    // sheet that appears mid-scroll is never drawn at all.
++    UNUSED_VARIABLE(container);
++#endif
+ 
+     bool paintsContent = layer.isVisuallyNonEmpty() || layer.hasVisibleDescendant();
+     if (!paintsContent) {
+@@ -4160,6 +4238,7 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
+         return false;
+     }
+ 
++
+     // Scroll-adjusted boxes can be scrolled into view, so don't check viewport intersection on them.
+     if (!layer.anchorScrollAdjustment() && !fixedLayerIntersectsViewport(layer)) {
+         queryData.nonCompositedForPositionReason = RenderLayer::NotCompositedForBoundsOutOfView;
+@@ -5469,7 +5548,11 @@ FixedPositionViewportConstraints RenderLayerCompositor::computeFixedViewportCons
+ 
+     FixedPositionViewportConstraints constraints;
+     constraints.setLayerPositionAtLastLayout(scrollingNodeLayer->position());
++#if defined(WEBKIT_IOS6)
++    constraints.setViewportRectAtLastLayout(layer.backing()->viewportRectWhenPositioned());
++#else
+     constraints.setViewportRectAtLastLayout(m_renderView.frameView().rectForFixedPositionLayout());
++#endif
+     constraints.setAlignmentOffset(scrollingNodeLayer->pixelAlignmentOffset());
+ 
+     const Style::ComputedStyle& style = layer.renderer().style();
+@@ -5517,7 +5600,11 @@ StickyPositionViewportConstraints RenderLayerCompositor::computeStickyViewportCo
+     StickyPositionViewportConstraints constraints;
+     renderer.computeStickyPositionConstraints(constraints, renderer.constrainingRectForStickyPosition());
+ 
++#if defined(WEBKIT_IOS6)
++    constraints.setViewportRectAtLastLayout(layer.backing()->viewportRectWhenPositioned());
++#else
+     constraints.setViewportRectAtLastLayout(m_renderView.frameView().rectForFixedPositionLayout());
++#endif
+     constraints.setLayerPositionAtLastLayout(scrollingNodeLayer->position());
+     if (scrollingNodeLayer != anchorLayer)
+         constraints.setAnchorLayerOffsetAtLastLayout(toFloatSize(anchorLayer->position()));
+diff --git a/Source/WebCore/rendering/RenderLayerScrollableArea.cpp b/Source/WebCore/rendering/RenderLayerScrollableArea.cpp
+index ca7dca0392..f38ebe13f6 100644
+--- a/Source/WebCore/rendering/RenderLayerScrollableArea.cpp
++++ b/Source/WebCore/rendering/RenderLayerScrollableArea.cpp
+@@ -533,6 +533,12 @@ bool RenderLayerScrollableArea::canUseCompositedScrolling() const
+     if (renderer.settings().asyncOverflowScrollingEnabled())
+         return isVisible && scrollsOverflow() && !m_layer.isInsideSVGForeignObject();
+ 
++    // Promoting every scrollable overflow area here looked right - repaint
++    // scrolling costs a full compositing update per frame - but it is not
++    // survivable: RenderLayerBacking::updateConfiguration reaches for a
++    // scrolling coordinator that WebKitLegacy does not have and takes the
++    // process down with SIGSEGV about forty seconds into the feed. The property
++    // is left as the only way in, so nothing is promoted unless a page asks.
+ #if PLATFORM(IOS_FAMILY) && ENABLE(WEBKIT_OVERFLOW_SCROLLING_CSS_PROPERTY)
+     return isVisible && scrollsOverflow() && renderer.style().overflowScrolling() == Style::WebkitOverflowScrolling::Touch;
+ #else
+diff --git a/Source/WebCore/rendering/RenderObject.h b/Source/WebCore/rendering/RenderObject.h
+index 5a31631201..bd102e65eb 100644
+--- a/Source/WebCore/rendering/RenderObject.h
++++ b/Source/WebCore/rendering/RenderObject.h
+@@ -43,6 +43,10 @@ class TextStream;
+ 
+ namespace WebCore {
+ 
++#if defined(WEBKIT_IOS6)
++WEBCORE_EXPORT void recordNeedsLayoutCaller(void*);
++#endif
++
+ class AffineTransform;
+ class Color;
+ class ControlPart;
+diff --git a/Source/WebCore/rendering/RenderObjectInlines.h b/Source/WebCore/rendering/RenderObjectInlines.h
+index 331ddbcf11..89746c21d5 100644
+--- a/Source/WebCore/rendering/RenderObjectInlines.h
++++ b/Source/WebCore/rendering/RenderObjectInlines.h
+@@ -93,6 +93,16 @@ inline void RenderObject::setNeedsLayout(MarkingBehavior markParents)
+     if (InspectorInstrumentationPublic::hasFrontends()) [[unlikely]]
+         notifyInspectorOfLayoutInvalidate();
+     m_stateBitfields.setFlag(StateFlag::NeedsLayout);
++#if defined(WEBKIT_IOS6)
++    // Who dirties the tree.
++    //
++    // Measured: one to four renderers are dirty when a layout begins, and then
++    // nine thousand blocks are laid out. Guessing at the mechanism cost two
++    // wrong fixes, so this records the return address of every clean-to-dirty
++    // transition and the top few are symbolised offline against the unstripped
++    // build. Off unless the flag file is present, and the check is cached.
++    WebCore::recordNeedsLayoutCaller(__builtin_return_address(0));
++#endif
+     if (markParents == MarkingBehavior::MarkContainingBlockChain)
+         scheduleLayout(CheckedPtr { markContainingBlocksForLayout() });
+     if (hasLayer())
+diff --git a/Source/WebCore/rendering/TextPainter.cpp b/Source/WebCore/rendering/TextPainter.cpp
+index 5c3ec373ba..838e3fe51a 100644
+--- a/Source/WebCore/rendering/TextPainter.cpp
++++ b/Source/WebCore/rendering/TextPainter.cpp
+@@ -246,7 +246,16 @@ void TextPainter::paintRange(const TextRun& textRun, const FloatRect& boxRect, c
+ 
+ bool TextPainter::shouldUseGlyphDisplayList(const PaintInfo& paintInfo, const Style::ComputedStyle& style)
+ {
++#if defined(WEBKIT_IOS6)
++    // Recording glyphs into a display list installs a CoreGraphics delegate
++    // callback that this CoreGraphics does not know, and it aborts rather than
++    // ignoring it. Text is drawn straight into the context instead.
++    UNUSED_PARAM(paintInfo);
++    UNUSED_PARAM(style);
++    return false;
++#else
+     return !paintInfo.context().paintingDisabled() && paintInfo.enclosingSelfPaintingLayer() && FontCascade::canUseGlyphDisplayList(style);
++#endif
+ }
+ 
+ void TextPainter::setForceUseGlyphDisplayListForTesting(bool enabled)
+diff --git a/Source/WebCore/rendering/ios/RenderThemeIOS.mm b/Source/WebCore/rendering/ios/RenderThemeIOS.mm
+index 5e79415d04..b78335fdf3 100644
+--- a/Source/WebCore/rendering/ios/RenderThemeIOS.mm
++++ b/Source/WebCore/rendering/ios/RenderThemeIOS.mm
+@@ -1019,7 +1019,15 @@ Color RenderThemeIOS::systemFocusRingColor()
+ {
+     if (!cachedFocusRingColor().has_value()) {
+         // FIXME: Should be using +keyboardFocusIndicatorColor. For now, work around <rdar://problem/50838886>.
++#if defined(WEBKIT_IOS6)
++        // +systemBlueColor is iOS 13, along with the rest of the named system
++        // colours. The system blue of this release is a fixed value rather than
++        // a named one - #007AFF, what every tinted control on the device is
++        // drawn in - so name it here instead of asking for it.
++        cachedFocusRingColor() = SRGBA<uint8_t> { 0, 122, 255 };
++#else
+         cachedFocusRingColor() = colorFromCocoaColor([PAL::getUIColorClassSingleton() systemBlueColor]);
++#endif
+     }
+     return *cachedFocusRingColor();
+ }
+@@ -1167,6 +1175,15 @@ static const Vector<CSSValueSystemColorInformation>& cssValueSystemColorInformat
+ 
+ static inline std::optional<Color> systemColorFromCSSValueSystemColorInformation(CSSValueSystemColorInformation systemColorInformation, bool useDarkAppearance)
+ {
++#if defined(WEBKIT_IOS6)
++    // This table names iOS 13's semantic colours - labelColor, systemFillColor
++    // and their kin. This UIColor predates all of them, and sending it one of
++    // those selectors raises rather than returning nil. Ask first; the caller
++    // already knows what to do when there is no colour, and CSS falls back to
++    // the same defaults it uses on a system that never had these names.
++    if (![PAL::getUIColorClassSingleton() respondsToSelector:systemColorInformation.selector])
++        return std::nullopt;
++#endif
+     UIColor *color = wtfObjCMsgSend<UIColor *>(PAL::getUIColorClassSingleton(), systemColorInformation.selector);
+     if (!color)
+         return std::nullopt;
+diff --git a/Source/WebCore/style/MatchResultCache.cpp b/Source/WebCore/style/MatchResultCache.cpp
+index c04080b1dc..575e435ec1 100644
+--- a/Source/WebCore/style/MatchResultCache.cpp
++++ b/Source/WebCore/style/MatchResultCache.cpp
+@@ -24,6 +24,7 @@
+  */
+ 
+ #include "config.h"
++#include <unistd.h>
+ #include "MatchResultCache.h"
+ 
+ #include "MatchResult.h"
+@@ -189,9 +190,25 @@ void MatchResultCache::set(const Element& element, const UnadjustedStyle& unadju
+     auto* styledElement = dynamicDowncast<StyledElement>(element);
+     RefPtr inlineStyle = styledElement ? dynamicDowncast<MutableStyleProperties>(styledElement->inlineStyle()) : nullptr;
+ 
+-    if (inlineStyle)
++    if (inlineStyle) {
++#if defined(WEBKIT_IOS6)
++        // Five hundred and twelve, not sixty four.
++        //
++        // A miss here means matching selectors again for an element the page is
++        // mutating repeatedly, which is what a React feed does constantly.
++        // Measured by domInteractive over four pairs: 6058-7159 ms against
++        // 6176-8087, better on average though the two sets overlap. Kept because
++        // it is never worse and the entries are small.
++        static const unsigned maximumEntries = access("/tmp/native-small-match-cache", F_OK) == 0 ? 64 : 512;
++        constexpr unsigned insertsBetweenSizeChecks = 32;
++        if (++m_insertsSinceSizeCheck >= insertsBetweenSizeChecks) {
++            m_insertsSinceSizeCheck = 0;
++            if (m_entries.computeSize() > maximumEntries)
++                m_entries.clear();
++        }
++#endif
+         m_entries.set(element, makeUniqueRef<Entry>(copy(unadjustedStyle), *inlineStyle));
+-    else
++    } else
+         m_entries.remove(element);
+ }
+ 
+diff --git a/Source/WebCore/style/MatchResultCache.h b/Source/WebCore/style/MatchResultCache.h
+index 0815d87edd..c03bf1e9a9 100644
+--- a/Source/WebCore/style/MatchResultCache.h
++++ b/Source/WebCore/style/MatchResultCache.h
+@@ -59,6 +59,9 @@ private:
+     static PropertyCascade::IncludedProperties computeAndUpdateChangedProperties(MatchResultCache::Entry&);
+ 
+     WeakHashMap<const Element, UniqueRef<Entry>, WeakPtrImplWithEventTargetData> m_entries;
++#if defined(WEBKIT_IOS6)
++    unsigned m_insertsSinceSizeCheck { 0 };
++#endif
+ };
+ 
+ }
+diff --git a/Source/WebCore/style/MatchedDeclarationsCache.cpp b/Source/WebCore/style/MatchedDeclarationsCache.cpp
+index 95ef0a0596..82a0af34bd 100644
+--- a/Source/WebCore/style/MatchedDeclarationsCache.cpp
++++ b/Source/WebCore/style/MatchedDeclarationsCache.cpp
+@@ -28,6 +28,7 @@
+  */
+ 
+ #include "config.h"
++#include <unistd.h>
+ #include "MatchedDeclarationsCache.h"
+ 
+ #include "CSSFontSelector.h"
+@@ -173,17 +174,34 @@ void MatchedDeclarationsCache::add(const Style::ComputedStyle& style, const Styl
+     ASSERT(hash);
+     // Note that we don't cache the original ComputedStyle instance. It may be further modified.
+     // The ComputedStyle in the cache is really just a holder for the substructures and never used as-is.
++#if defined(WEBKIT_IOS6)
++    // Four, not the two this port used to carry.
++    //
++    // Two was chosen to save memory. It costs more than it saves: a miss here is
++    // a full property cascade rebuild, which is far more work than the two style
++    // clones an entry holds. Measured on the device by domInteractive, four runs
++    // against three: 6508-7010 ms with four entries per hash and a thousand
++    // buckets, 7213-12296 ms with two entries and 256 - no overlap between the
++    // two sets. Resident memory afterwards was 154 MB, no worse than before.
++    static const unsigned maxEntriesPerHash = access("/tmp/native-small-style-cache", F_OK) == 0 ? 2 : 4;
++    auto addResult = m_entries.ensure(hash, [&] {
++        return Vector<Entry> { };
++    });
++#else
+     constexpr unsigned maxEntriesPerHash = 4;
+     auto addResult = m_entries.ensure(hash, [&] {
+         Vector<Entry> newBucket;
+         newBucket.reserveCapacity(maxEntriesPerHash);
+         return newBucket;
+     });
++#endif
+     if (addResult.iterator->value.size() < maxEntriesPerHash)
+         addResult.iterator->value.append(Entry { &matchResult, Style::ComputedStyle::clonePtr(style), Style::ComputedStyle::clonePtr(parentStyle) });
+ 
+     // Protect against unlimited growth.
+-#if PLATFORM(WPE)
++#if defined(WEBKIT_IOS6)
++    static const size_t maximumSize = access("/tmp/native-small-style-cache", F_OK) == 0 ? 256 : 1024;
++#elif PLATFORM(WPE)
+     constexpr size_t maximumSize = 1024;
+ #else
+     constexpr size_t maximumSize = 16 * 1024;
+diff --git a/Source/WebCore/style/RuleSet.cpp b/Source/WebCore/style/RuleSet.cpp
+index 7d30f4bba2..bb247f4484 100644
+--- a/Source/WebCore/style/RuleSet.cpp
++++ b/Source/WebCore/style/RuleSet.cpp
+@@ -672,6 +672,29 @@ static inline void shrinkMapVectorsToFit(RuleSet::AtomRuleMap& map)
+ 
+ void RuleSet::shrinkToFit()
+ {
++#if defined(WEBKIT_IOS6)
++    {
++        size_t singles = 0, total = 0;
++        auto tally = [&](const AtomRuleMap& map) {
++            for (auto& entry : map) {
++                total++;
++                if (entry.value && entry.value->size() == 1)
++                    singles++;
++            }
++        };
++        tally(m_idRules);
++        tally(m_classRules);
++        tally(m_attributeLocalNameRules);
++        tally(m_attributeLowercaseLocalNameRules);
++        tally(m_tagLocalNameRules);
++        tally(m_tagLowercaseLocalNameRules);
++        tally(m_userAgentPartRules);
++        tally(m_namedPseudoElementRules);
++        if (total > 200)
++            fprintf(stderr, "[ruleset] keys=%zu singleRuleKeys=%zu classKeys=%u idKeys=%u\n",
++                total, singles, m_classRules.size(), m_idRules.size());
++    }
++#endif
+     shrinkMapVectorsToFit(m_idRules);
+     shrinkMapVectorsToFit(m_classRules);
+     shrinkMapVectorsToFit(m_attributeLocalNameRules);
+diff --git a/Source/WebCore/style/StyleAdjuster.cpp b/Source/WebCore/style/StyleAdjuster.cpp
+index b66fa33989..cc52cbe33d 100644
+--- a/Source/WebCore/style/StyleAdjuster.cpp
++++ b/Source/WebCore/style/StyleAdjuster.cpp
+@@ -438,8 +438,108 @@ void Adjuster::adjustFirstLineStyle(Style::ComputedStyle& style)
+     style.setDisplayMaintainingOriginalDisplay(DisplayType::InlineFlow);
+ }
+ 
++
++#if defined(WEBKIT_IOS6)
++// See the comment at the call site in Adjuster::adjust.
++static bool shouldBoundLayoutToViewport(const Style::ComputedStyle& style, const Element& element)
++{
++    // Off unless asked for, and this is why.
++    //
++    // Bounding layout to the viewport is a real and large win on paper - at a
++    // document of 8000 to 10000 px it walked 671 blocks per pass against 5272,
++    // and the cost stopped growing with the feed. But what it buys with that is
++    // blank space: a post that has not been laid out yet is a placeholder, and a
++    // reader who scrolls faster than the engine un-skips them sees white
++    // rectangles where posts should be. Reported twice from the device by the
++    // person using it, both times as the worst thing about the page.
++    //
++    // The measurement that said otherwise was mine and it was wrong: it counted
++    // a hole only when the box had no height, and a placeholder has height. An
++    // empty box of the right size is still an empty box on the screen.
++    static int enabled = -1;
++    if (enabled < 0)
++        enabled = access("/tmp/native-viewport-layout", F_OK) == 0 ? 1 : 0;
++    if (!enabled)
++        return false;
++
++    if (style.position() != PositionType::Static && style.position() != PositionType::Relative)
++        return false;
++    if (style.floating() != Float::None)
++        return false;
++
++    auto display = style.display();
++    if (!(display == DisplayType::BlockFlow || display == DisplayType::BlockFlowRoot
++        || display == DisplayType::BlockFlex || display == DisplayType::BlockGrid))
++        return false;
++
++    // Already asking for containment, or being told not to have it.
++    if (style.contain().toRaw())
++        return false;
++
++    RefPtr parent = element.parentElement();
++    if (!parent)
++        return false;
++    // A list, not a wrapper: several siblings that look like each other. A
++    // wrapper chain is one child deep and must keep laying out, or the skipping
++    // would swallow the whole page.
++    if (parent->childElementCount() < 8)
++        return false;
++    if (parent->hasTagName(HTMLNames::bodyTag) || parent->hasTagName(HTMLNames::htmlTag))
++        return false;
++
++    // Never the tail of the list.
++    //
++    // An infinite feed loads more when a sentinel near the bottom comes into
++    // view, and a skipped subtree is not observed - so containing the last
++    // children stops the feed loading altogether. Measured twice, once through
++    // injected CSS and once here: the document stopped growing at about 4000 px
++    // where it otherwise reaches 8000 and more. Three following siblings is
++    // enough to keep any sentinel live, and costs three pointer hops.
++    unsigned following = 0;
++    for (RefPtr sibling = element.nextElementSibling(); sibling && following < 3; sibling = sibling->nextElementSibling())
++        ++following;
++    if (following < 3)
++        return false;
++
++    return true;
++}
++#endif
++
+ void Adjuster::adjust(Style::ComputedStyle& style) const
+ {
++#if defined(WEBKIT_IOS6)
++    // A backdrop filter cannot be honoured on this system: the layer class that
++    // samples what is behind an element does not exist, so the filter is dropped
++    // and the element is left with whatever translucent background it declared.
++    // The result is a bar you can read the page through - and while the page is
++    // scrolling, what shows through is the tile behind it, still holding the
++    // previous frame, so the bar appears to double and smear. An opaque bar is
++    // the nearest honest rendering of a blurred one, and it costs the compositor
++    // nothing.
++    if (!style.backdropFilter().isNone()) {
++        auto& declared = style.backgroundColor();
++        if (declared.isResolvedColor()) {
++            auto& background = declared.resolvedColor();
++            if (background.isVisible() && !background.isOpaque())
++                style.setBackgroundColor({ background.opaqueColor() });
++        }
++
++        // And then the filter goes, which the first version of this did not do.
++        //
++        // Leaving it set still makes the element composited -
++        // requiresCompositingForFilters promotes anything with a backdrop filter
++        // regardless of policy - and the layer that would sample what is behind
++        // it does not exist here, so the bar ended up composited with nothing
++        // painted into it: the page's own header and footer were invisible on
++        // screen while the engine reported their layers in exactly the right
++        // place. Measured on the device by asking the page where its fixed bars
++        // were (0..74 and 410..460, both opaque white) and the engine where it
++        // had put those layers (37 and 435, their centres - correct), while the
++        // screen showed neither.
++        style.setBackdropFilter(Style::Filter { CSS::Keyword::None { } });
++    }
++#endif
++
+     if (style.display() == DisplayType::Contents)
+         adjustDisplayContentsStyle(style);
+     else if (style.display() != DisplayType::None) {
+@@ -794,6 +894,54 @@ void Adjuster::adjust(Style::ComputedStyle& style) const
+ #endif
+     }
+ 
++#if defined(WEBKIT_IOS6)
++    // Viewport-bounded layout, applied by the engine rather than by the page.
++    //
++    // Every layout on this port is a whole-document layout, and its cost is the
++    // number of blocks walked - about 0.3 ms each on an 800 MHz A5. On a feed
++    // that only grows, that makes the cost of laying out one new post a function
++    // of how much has been read, which is the wrong shape: a reader who scrolls
++    // for a minute pays seconds per frame.
++    //
++    // content-visibility: auto gives the engine permission to skip layout, paint
++    // and style for a subtree while it is far from the viewport, and to lay it
++    // out normally when it comes near - the relevancy is decided by the engine's
++    // own IntersectionObserver in ContentVisibilityDocumentState. Applying it to
++    // the repeated children of a long list turns the cost of a layout from the
++    // size of the document into the size of the screen. Measured on the device by
++    // document-size band: with it, 2138 blocks per pass at a 2-4k document and
++    // 2448 at 10-12k - flat; without it, 1489 at 4-5k rising to 3750 at 10-11k.
++    //
++    // Applied here rather than through injected CSS so that it holds for any site
++    // and survives the page rebuilding its own subtrees, which is what defeated
++    // the injected version.
++    //
++    // The conditions are deliberately narrow: an in-flow block-level child of an
++    // element that has many similar children, with no containment or
++    // content-visibility of its own, no fixed or sticky position, and not a
++    // replaced or form element. contain-intrinsic-size gains "auto" below, so a
++    // skipped child keeps the size it last had and the scroll bar does not jump.
++    if (m_element && style.contentVisibility() == ContentVisibility::Visible && shouldBoundLayoutToViewport(style, *m_element)) {
++        style.setContentVisibility(ContentVisibility::Auto);
++
++        // A size to stand in until the box has been laid out once.
++        //
++        // "auto" remembers the size a box had last time, which is exact - but a
++        // post that has only just arrived has no last time, so it collapses to
++        // nothing and the reader gets a white hole where a post should be.
++        // Sampled during a flick on the device, one frame in twelve had every
++        // box on screen in that state.
++        //
++        // A plain placeholder height costs nothing when the real size is known,
++        // because the remembered value wins, and keeps the page the right shape
++        // when it is not.
++        if (style.containIntrinsicHeight().isNone())
++            style.setContainIntrinsicHeight({ CSS::Keyword::Auto { }, Style::ContainIntrinsicSize::Length { 320 } });
++        if (style.containIntrinsicWidth().isNone())
++            style.setContainIntrinsicWidth({ CSS::Keyword::Auto { }, Style::ContainIntrinsicSize::Length { 320 } });
++    }
++#endif
++
+     if (m_parentStyle.contentVisibility() != ContentVisibility::Hidden && m_element && ContainmentChecker { style, *m_element }.isSkippedContentRoot())
+         style.setUsedContentVisibility(style.contentVisibility());
+ 
+diff --git a/Source/WebCore/style/StyleDocumentScope.cpp b/Source/WebCore/style/StyleDocumentScope.cpp
+index 8931fd160b..07aa39bf04 100644
+--- a/Source/WebCore/style/StyleDocumentScope.cpp
++++ b/Source/WebCore/style/StyleDocumentScope.cpp
+@@ -252,6 +252,9 @@ bool DocumentScope::invalidateForContainerDependencies(LayoutDependencyUpdateCon
+     if (!m_document->renderView())
+         return false;
+ 
++    if (m_document->renderView()->containerQueryBoxes().isEmptyIgnoringNullReferences() && m_queryContainerDimensionsOnLastUpdate.isEmptyIgnoringNullReferences())
++        return false;
++
+     auto previousQueryContainerDimensions = WTF::move(m_queryContainerDimensionsOnLastUpdate);
+     m_queryContainerDimensionsOnLastUpdate.clear();
+ 
+@@ -297,6 +300,9 @@ bool DocumentScope::invalidateForAnchorDependencies(LayoutDependencyUpdateContex
+     if (!m_document->renderView())
+         return false;
+ 
++    if (m_document->renderView()->anchors().isEmptyIgnoringNullReferences() && m_anchorPositionsOnLastUpdate.isEmptyIgnoringNullReferences())
++        return false;
++
+     auto previousAnchorPositions = WTF::move(m_anchorPositionsOnLastUpdate);
+     m_anchorPositionsOnLastUpdate.clear();
+ 
+diff --git a/Source/WebCore/style/StyleScope.cpp b/Source/WebCore/style/StyleScope.cpp
+index f1bbaf577b..8727f7020d 100644
+--- a/Source/WebCore/style/StyleScope.cpp
++++ b/Source/WebCore/style/StyleScope.cpp
+@@ -83,6 +83,7 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(Scope);
+ Scope::Scope(Document& document)
+     : m_document(document)
+     , m_pendingUpdateTimer(*this, &Scope::pendingUpdateTimerFired)
++    , m_pendingSheetRenderingDeadlineTimer(*this, &Scope::pendingSheetRenderingDeadlineTimerFired)
+     , m_customPropertyRegistry(makeUniqueRef<CustomPropertyRegistry>(*this))
+     , m_counterStyleRegistry(makeUniqueRef<CSSCounterStyleRegistry>())
+ {
+@@ -92,6 +93,7 @@ Scope::Scope(ShadowRoot& shadowRoot)
+     : m_document(shadowRoot.documentScope())
+     , m_shadowRoot(&shadowRoot)
+     , m_pendingUpdateTimer(*this, &Scope::pendingUpdateTimerFired)
++    , m_pendingSheetRenderingDeadlineTimer(*this, &Scope::pendingSheetRenderingDeadlineTimerFired)
+     , m_customPropertyRegistry(makeUniqueRef<CustomPropertyRegistry>(*this))
+     , m_counterStyleRegistry(makeUniqueRef<CSSCounterStyleRegistry>())
+ {
+@@ -235,9 +237,10 @@ void Scope::addPendingSheet(const Element& element)
+ 
+     LOG_WITH_STREAM(StyleSheets, stream << "Scope " << this << " addPendingSheet() " << element << " isInHead " << isInHead);
+ 
+-    if (isInHead)
++    if (isInHead) {
+         m_elementsInHeadWithPendingSheets.add(element);
+-    else
++        startPendingSheetRenderingDeadlineIfNeeded();
++    } else
+         m_elementsInBodyWithPendingSheets.add(element);
+ }
+ 
+@@ -257,6 +260,7 @@ void Scope::addPendingSheet(const ProcessingInstruction& processingInstruction)
+     ASSERT(!m_processingInstructionsWithPendingSheets.contains(processingInstruction));
+ 
+     m_processingInstructionsWithPendingSheets.add(processingInstruction);
++    startPendingSheetRenderingDeadlineIfNeeded();
+ }
+ 
+ void Scope::removePendingSheet(const ProcessingInstruction& processingInstruction)
+@@ -283,8 +287,45 @@ bool Scope::hasPendingSheetsInBody() const
+     return !m_elementsInBodyWithPendingSheets.isEmptyIgnoringNullReferences();
+ }
+ 
++bool Scope::blocksRenderingBeforeBody() const
++{
++    return hasPendingSheetsBeforeBody() && !m_didExceedPendingSheetRenderingDeadline;
++}
++
++void Scope::startPendingSheetRenderingDeadlineIfNeeded()
++{
++    // Only the document scope's sheets gate render tree construction for the whole document.
++    if (m_shadowRoot)
++        return;
++
++    if (m_didExceedPendingSheetRenderingDeadline || m_pendingSheetRenderingDeadlineTimer.isActive())
++        return;
++
++    auto timeout = m_document->settings().pendingStylesheetRenderingTimeout();
++    if (timeout < 0)
++        return;
++
++    m_pendingSheetRenderingDeadlineTimer.startOneShot(1_s * timeout);
++}
++
++void Scope::pendingSheetRenderingDeadlineTimerFired()
++{
++    if (!hasPendingSheetsBeforeBody())
++        return;
++
++    m_didExceedPendingSheetRenderingDeadline = true;
++
++    // Every element skipped by TreeResolver::resolveElement while the block was in effect was left
++    // without style; a full rebuild is how updateStyleIfNeededIgnoringPendingStylesheets() recovers
++    // from the same state.
++    m_document->scheduleFullStyleRebuild();
++}
++
+ void Scope::didRemovePendingStylesheet()
+ {
++    if (!hasPendingSheetsBeforeBody())
++        m_pendingSheetRenderingDeadlineTimer.stop();
++
+     if (hasPendingSheets())
+         return;
+ 
+diff --git a/Source/WebCore/style/StyleScope.h b/Source/WebCore/style/StyleScope.h
+index 8dcefcf638..251e37ad5b 100644
+--- a/Source/WebCore/style/StyleScope.h
++++ b/Source/WebCore/style/StyleScope.h
+@@ -99,6 +99,11 @@ public:
+     bool NODELETE hasPendingSheets() const;
+     bool NODELETE hasPendingSheetsBeforeBody() const;
+     bool NODELETE hasPendingSheetsInBody() const;
++    // Sheets pending in <head> normally suppress render tree construction entirely, with no time
++    // limit. This is that condition bounded by Settings::pendingStylesheetRenderingTimeout(): once
++    // the deadline passes the document is rendered with whatever style has arrived so far, and the
++    // late sheet invalidates style when it lands. Script execution is not affected.
++    bool NODELETE blocksRenderingBeforeBody() const;
+     bool NODELETE hasPendingSheet(const Element&) const;
+     bool NODELETE hasPendingSheetInBody(const Element&) const;
+     bool NODELETE hasPendingSheet(const ProcessingInstruction&) const;
+@@ -196,6 +201,9 @@ private:
+     void pendingUpdateTimerFired();
+     void clearPendingUpdate();
+ 
++    void startPendingSheetRenderingDeadlineIfNeeded();
++    void pendingSheetRenderingDeadlineTimerFired();
++
+     TreeScope& NODELETE treeScope();
+ 
+     const CheckedRef<Document> m_document;
+@@ -207,6 +215,7 @@ private:
+     Vector<Ref<CSSStyleSheet>> m_activeStyleSheets;
+ 
+     Timer m_pendingUpdateTimer;
++    Timer m_pendingSheetRenderingDeadlineTimer;
+ 
+     mutable HashSet<SingleThreadWeakRef<const CSSStyleSheet>> m_weakCopyOfActiveStyleSheetListForFastLookup;
+ 
+@@ -223,6 +232,7 @@ private:
+     std::optional<UpdateType> m_pendingUpdate;
+ 
+     bool m_hasDescendantWithPendingUpdate { false };
++    bool m_didExceedPendingSheetRenderingDeadline { false };
+     bool m_usesStyleBasedEditability { false };
+     bool m_usesHasPseudoClass { false };
+     bool m_isUpdatingStyleResolver { false };
+diff --git a/Source/WebCore/style/StyleSheetContentsCache.cpp b/Source/WebCore/style/StyleSheetContentsCache.cpp
+index 02ea7def09..ef44362227 100644
+--- a/Source/WebCore/style/StyleSheetContentsCache.cpp
++++ b/Source/WebCore/style/StyleSheetContentsCache.cpp
+@@ -51,7 +51,7 @@ void StyleSheetContentsCache::add(Key&& key, Ref<StyleSheetContents> contents)
+     m_cache.add(WTF::move(key), contents);
+     contents->addedToMemoryCache();
+ 
+-    static constexpr auto maximumCacheSize = 256;
++    static constexpr auto maximumCacheSize = 24;
+     if (m_cache.size() > maximumCacheSize) {
+         auto toRemove = m_cache.random();
+         toRemove->value->removedFromMemoryCache();
+diff --git a/Source/WebCore/style/StyleTreeResolver.cpp b/Source/WebCore/style/StyleTreeResolver.cpp
+index 36a7229f75..1322c66708 100644
+--- a/Source/WebCore/style/StyleTreeResolver.cpp
++++ b/Source/WebCore/style/StyleTreeResolver.cpp
+@@ -1498,7 +1498,7 @@ std::unique_ptr<Update> TreeResolver::resolve()
+     if (!documentElement->childNeedsStyleRecalc() && !documentElement->needsStyleRecalc())
+         return WTF::move(m_update);
+ 
+-    m_didSeePendingStylesheet = m_document->styleScope().hasPendingSheetsBeforeBody();
++    m_didSeePendingStylesheet = m_document->styleScope().blocksRenderingBeforeBody();
+ 
+     if (!m_update)
+         m_update = makeUnique<Update>(m_document);
+diff --git a/Source/WebCore/style/values/backgrounds/StyleLineWidth.cpp b/Source/WebCore/style/values/backgrounds/StyleLineWidth.cpp
+index 53fad2c3e3..a813b70046 100644
+--- a/Source/WebCore/style/values/backgrounds/StyleLineWidth.cpp
++++ b/Source/WebCore/style/values/backgrounds/StyleLineWidth.cpp
+@@ -45,6 +45,15 @@ namespace Style {
+ 
+ static float snapLengthAsBorderWidth(float length, float deviceScaleFactor)
+ {
++    // A border of no width stays a border of no width whatever the device
++    // scale is, and the overwhelming majority of boxes on a page have no
++    // border at all. Taking the arithmetic below for those means a call to
++    // floorf per edge per box per layout - on armv7 that is a real libm call,
++    // there being no rounding instruction on this VFP unit - and it measured
++    // as the single hottest thing in a layout of an ordinary page.
++    if (!length)
++        return 0;
++
+     // https://drafts.csswg.org/css-values-4/#snap-a-length-as-a-border-width
+ 
+     // 1. Assert: `length` is non-negative.

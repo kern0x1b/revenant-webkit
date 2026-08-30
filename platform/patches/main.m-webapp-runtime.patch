@@ -1,0 +1,281 @@
+--- a/app/main.m	2026-08-25 03:14:05
++++ b/app/main.m	2026-08-25 03:16:26
+@@ -32,6 +32,10 @@
+ #import <WebKitLegacy/WebCoreThreadRun.h>
+ #import "ModernTLSURLProtocol.h"
+ #import <WebKitLegacy/WebViewPrivate.h>
++#import <WebKitLegacy/WebPolicyDelegate.h>
++#import <WebKitLegacy/WebFrameLoadDelegate.h>
++#import "../platform/runtime/WebAppManifest.h"
++#import "../platform/runtime/WebAppCookieJar.h"
+ 
+ /* Launched from SpringBoard there is no terminal, so the trace goes to a file. */
+ static void browserLog(const char *format, ...)
+@@ -57,9 +61,18 @@
+ extern void WebThreadLock(void);
+ extern void WebThreadUnlock(void);
+ 
+-/* The page to open, so a build can be pointed at a site without rebuilding. */
++/* The page to open.
++ *
++ * A packaged application says so in its own WebApp.plist, which is the whole
++ * difference between one bundle and another — see platform/package.py. A build
++ * with no manifest is the development browser this started as, and still reads
++ * /tmp/url.txt so that a site can be tried without packaging anything. */
+ static NSString *startPage(void)
+ {
++    NSURL *fromManifest = [WebAppManifest startURL];
++    if (fromManifest)
++        return [fromManifest absoluteString];
++
+     NSString *configured = [NSString stringWithContentsOfFile:@"/tmp/url.txt"
+         encoding:NSUTF8StringEncoding error:NULL];
+     configured = [configured stringByTrimmingCharactersInSet:
+@@ -94,7 +107,14 @@
+ - (id)initWithWebView:(WebView *)webView frame:(CGRect)frame;
+ @end
+ 
+-@interface BrowserViewController : UIViewController <UIScrollViewDelegate> {
++/* WebFrameLoadDelegate is named here as well as WebPolicyDelegate. It always
++ * should have been — the frame load methods below are already implemented and
++ * -setFrameLoadDelegate: has been warning about the missing conformance — and
++ * with a policy delegate on the same object the compiler is now the only thing
++ * that will notice a delegate method whose signature has drifted. */
++@interface BrowserViewController : UIViewController <UIScrollViewDelegate,
++                                                     WebFrameLoadDelegate,
++                                                     WebPolicyDelegate> {
+     WebView *_webView;
+     WAKWindow *_wakWindow;
+     CALayer *_hostLayer;
+@@ -115,7 +135,11 @@
+ - (void)loadView
+ {
+     UIView *root = [[UIView alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
+-    [root setBackgroundColor:[UIColor whiteColor]];
++    /* The colour the application is, not the colour a browser is. This is what
++     * shows before the first tile is painted and past the end of the document,
++     * and it is the same colour the generator writes into Default.png, so the
++     * launch image and the first frame meet without a white flash between. */
++    [root setBackgroundColor:[WebAppManifest backgroundColor]];
+     [self setView:root];
+     [root release];
+ }
+@@ -137,6 +161,33 @@
+     WebKitInitialize();
+     LOG_STEP("WebKit initialised");
+ 
++    /* Where the page's own storage lives, decided BEFORE the WebView exists.
++     *
++     * -[WebView _commonInitializationWithFrameName:groupName:] does
++     * `WebViewGroup::getOrCreate(groupName, [preferences _localStorageDatabasePath])`,
++     * and for an empty group name that constructs the group there and then with
++     * whatever the path was at that moment. WebStorageNamespaceProvider keeps it,
++     * and StorageNamespaceImpl builds a StorageSyncManager only when it is
++     * non-empty — so a path set after this line reaches nothing, localStorage
++     * lives in memory, and everything the site kept is gone at exit. Setting it
++     * afterwards did appear to work from the second launch onwards, because
++     * WebPreferences autosaves into NSUserDefaults and the next launch read it
++     * back before the WebView was made; the first launch after an install always
++     * lost its storage.
++     *
++     * The bundle identifier is in the path because these bundles are installed
++     * in /Applications and get no container of their own: NSHomeDirectory() is
++     * /var/mobile for every one of them, so without it Threads and Instagram
++     * would share one localStorage database. */
++    NSString *storage = [WebAppManifest storageDirectory];
++    [[WebPreferences standardPreferences] _setLocalStorageDatabasePath:storage];
++    /* WebDatabaseProvider reads this key out of NSUserDefaults by name, for both
++     * WebSQL and IndexedDB, and it reads it lazily at first use rather than at
++     * WebView construction — so unlike the path above this one is not order
++     * sensitive. It is set here anyway so that the two live together. */
++    [[NSUserDefaults standardUserDefaults] setObject:storage forKey:@"WebDatabaseDirectory"];
++    LOG_STEP("page storage at %s", [storage UTF8String]);
++
+     WebThreadLock();
+     _webView = [[WebView alloc] initWithFrame:bounds frameName:nil groupName:nil];
+     LOG_STEP("WebView %p", _webView);
+@@ -169,35 +220,22 @@
+ 
+     enableShippedFeatures(preferences);
+ 
+-    /* Where the page's own storage lives. A web app keeps its session and its
+-     * data in localStorage and in databases; without a path of our own those go
+-     * wherever the engine defaults to, which is not somewhere that survives.
+-     * This is the same idea as a site's offline mode, one layer down: the site
+-     * cannot ask for a Service Worker here, so the durability has to come from
+-     * the embedder. */
+-    NSString *library = [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory,
+-        NSUserDomainMask, YES) lastObject];
+-    NSString *storage = [library stringByAppendingPathComponent:@"WebKitStorage"];
+-    [[NSFileManager defaultManager] createDirectoryAtPath:storage
+-        withIntermediateDirectories:YES attributes:nil error:NULL];
+-    [preferences _setLocalStorageDatabasePath:storage];
++    /* The path above is only half of it: the site also has to be allowed to use
++     * the storage it now has somewhere to live in. */
+     [preferences setDatabasesEnabled:YES];
+     [preferences setLocalStorageEnabled:YES];
+-    /* The database directory is read from user defaults by name; the header that
+-     * declares the key drags in more of WebKitLegacy than this app can compile
+-     * against. */
+-    [[NSUserDefaults standardUserDefaults] setObject:storage
+-        forKey:@"WebDatabaseDirectory"];
+-    LOG_STEP("page storage at %s", [storage UTF8String]);
+ 
+-    /* Let WebKit build its own user agent, with the Safari version LightKit
+-     * uses on this same device — a hand-written string got threads.com to
+-     * serve an empty shell instead of the site. */
+-    [_webView _setBrowserUserAgentProductVersion:@"18.7" buildVersion:@"604.1" bundleVersion:@"604.1"];
++    /* The user agent is the manifest's, and it is expressed as the three version
++     * numbers rather than as a sentence because WebKit builds a better sentence
++     * than we do — a hand-written string got threads.com to serve an empty shell
++     * instead of the site. */
++    [WebAppManifest applyUserAgentToWebView:_webView];
+ 
+-    [[NSHTTPCookieStorage sharedHTTPCookieStorage] setCookieAcceptPolicy:NSHTTPCookieAcceptPolicyAlways];
+     LOG_STEP("modern TLS: %s", [ModernTLSURLProtocol install] ? "installed" : "unavailable");
+     [_webView setFrameLoadDelegate:self];
++    /* A wrapped application decides for itself where a link may go; see
++     * -webView:decidePolicyForNavigationAction:... below. */
++    [_webView setPolicyDelegate:self];
+     WebThreadUnlock();
+ 
+     /* UIKit's own UIWebBrowserView cannot host this WebView: it drives the view
+@@ -269,16 +307,21 @@
+     [self reportFootprint];
+     NSString *page = startPage();
+ 
+-    /* A wrapped web app is one site, so its own host may serve its shell —
++    /* A wrapped web app is one site, so its own hosts may serve its shell —
+      * document, stylesheets, scripts, fonts — from disk without asking the
+-     * network first, the way a cache-first service worker does. Only the start
+-     * page's host: a cache-first policy is a promise about a site we are
+-     * standing in for, not something to apply to whatever a link leads to. */
+-    NSString *shellHost = [[NSURL URLWithString:page] host];
+-    if ([shellHost length]) {
+-        [ModernTLSURLProtocol setShellCacheFirstEnabled:YES
+-                                               forHosts:[NSArray arrayWithObject:shellHost]];
+-        LOG_STEP("shell cache-first: %s", [shellHost UTF8String]);
++     * network first, the way a cache-first service worker does. Which hosts
++     * those are is the manifest's business and not a guess from the start URL:
++     * Threads draws its interface from static.cdninstagram.com, which no amount
++     * of looking at https://www.threads.com/ would reveal. */
++    if ([WebAppManifest loadManifest]) {
++        [WebAppManifest applyNetworkPolicy];
++    } else {
++        NSString *shellHost = [[NSURL URLWithString:page] host];
++        if ([shellHost length]) {
++            [ModernTLSURLProtocol setShellCacheFirstEnabled:YES
++                                                   forHosts:[NSArray arrayWithObject:shellHost]];
++            LOG_STEP("shell cache-first: %s", [shellHost UTF8String]);
++        }
+     }
+ 
+     LOG_STEP("loading %s", [page UTF8String]);
+@@ -733,6 +776,11 @@
+     if (frame != [sender mainFrame])
+         return;
+     LOG_STEP("finished %.2f s", -[_start timeIntervalSinceNow]);
++    /* The manifest's stylesheet, applied before anything is asked to paint, so
++     * the first frame the user sees is already the application's rather than the
++     * page's. It is a no-op for a document on a host this application does not
++     * own, and for a build with no manifest. */
++    [WebAppManifest injectIntoWebView:sender forURL:[NSURL URLWithString:[sender mainFrameURL]]];
+     [self settle];
+ }
+ 
+@@ -778,8 +826,79 @@
+     /* One picture of what the page actually looks like once it has settled, so
+      * a run that nobody is watching still says whether anything was drawn. */
+     [self performSelector:@selector(writeSnapshot) withObject:nil afterDelay:6.0];
++}
++
++/* Where a link is allowed to go.
++ *
++ * This is most of what separates an application from a browser showing one site.
++ * Today a link to a help page, a privacy policy or somebody's personal site
++ * navigates in place, and there is no back button, no address bar and no
++ * gesture — the application has silently become a browser on a page that is not
++ * it, with no way home. An application hands that to Safari and stays where it
++ * was.
++ *
++ * Only navigations reach here, not subresources, so the cost is one dictionary
++ * lookup per page rather than per request. A build with no manifest has no
++ * internal hosts and +opensExternalLinksInSafari is false, so everything is
++ * allowed through and the development browser behaves as it did. */
++- (void)webView:(WebView *)sender decidePolicyForNavigationAction:(NSDictionary *)action
++                                                          request:(NSURLRequest *)request
++                                                            frame:(WebFrame *)frame
++                                                 decisionListener:(id<WebPolicyDecisionListener>)listener
++{
++    if ([self sendToSafariIfExternal:[request URL]])
++        [listener ignore];
++    else
++        [listener use];
++}
++
++/* target="_blank" and window.open(). There is no second window in a wrapped
++ * application, so an external one goes to Safari and an internal one is loaded
++ * where the user already is — which is not what a browser would do, and is
++ * exactly what a native application does with a link to itself. Left alone,
++ * neither happens: this embedder has no UI delegate to create a window with, so
++ * every such link does nothing at all. */
++- (void)webView:(WebView *)sender decidePolicyForNewWindowAction:(NSDictionary *)action
++                                                          request:(NSURLRequest *)request
++                                                     newFrameName:(NSString *)frameName
++                                                 decisionListener:(id<WebPolicyDecisionListener>)listener
++{
++    [listener ignore];
++    if ([self sendToSafariIfExternal:[request URL]])
++        return;
++    NSURLRequest *here = [NSURLRequest requestWithURL:[request URL]];
++    WebFrame *mainFrame = [sender mainFrame];
++    WebThreadRun(^{ [mainFrame loadRequest:here]; });
+ }
+ 
++- (BOOL)sendToSafariIfExternal:(NSURL *)url
++{
++    if (![WebAppManifest opensExternalLinksInSafari])
++        return NO;
++    /* A scheme this application cannot load is external whatever its host says:
++     * mailto:, tel: and itms-apps: all belong to something else on the device. */
++    NSString *scheme = [[url scheme] lowercaseString];
++    BOOL loadable = [scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"]
++        || [scheme isEqualToString:@"about"] || [scheme isEqualToString:@"data"]
++        || [scheme isEqualToString:@"blob"];
++    if (loadable && [WebAppManifest isInternalURL:url])
++        return NO;
++    if ([scheme isEqualToString:@"about"] || [scheme isEqualToString:@"data"]
++        || [scheme isEqualToString:@"blob"])
++        return NO;
++
++    LOG_STEP("external link -> Safari: %s", [[url absoluteString] UTF8String]);
++    /* -openURL: is UIKit's, and this delegate is not promised to the main
++     * thread. Deciding is synchronous because the listener must be answered on
++     * the thread that asked; only the handover is deferred. */
++    NSURL *target = [url retain];
++    dispatch_async(dispatch_get_main_queue(), ^{
++        [[UIApplication sharedApplication] openURL:target];
++        [target release];
++    });
++    return YES;
++}
++
+ - (void)webView:(WebView *)sender didFailProvisionalLoadWithError:(NSError *)error forFrame:(WebFrame *)frame
+ {
+     LOG_STEP("provisional load failed: %s", [[error localizedDescription] UTF8String]);
+@@ -828,6 +947,15 @@
+ - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options
+ {
+     LOG_STEP("app launched");
++
++    /* Before the first request, because a cookie that arrives after the request
++     * that needed it is a login screen. The accept policy comes first for the
++     * same reason it always did, and now also because the jar is about to put
++     * cookies into that storage. */
++    [[NSHTTPCookieStorage sharedHTTPCookieStorage]
++        setCookieAcceptPolicy:NSHTTPCookieAcceptPolicyAlways];
++    [WebAppCookieJar start];
++
+     _window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
+     [_window setRootViewController:[[[BrowserViewController alloc] init] autorelease]];
+     [_window makeKeyAndVisible];

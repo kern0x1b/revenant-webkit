@@ -1,0 +1,88 @@
+/*
+ * The difference between a web page and an application, expressed in CSS.
+ *
+ * Every rule here is about something the browser does that an application does
+ * not, and every one of them is true of any site — none of it names a selector
+ * belonging to a particular web app, because a rule written against someone
+ * else's class names stops being true at their next deploy and then quietly
+ * hides the wrong thing.
+ *
+ * Injected by the runtime into every document on an internal host, from the
+ * manifest's inject_css.
+ */
+
+/* The grey rectangle that flashes under a finger. It is drawn by the engine, it
+ * is not part of anyone's design, and it is the single loudest signal that what
+ * is under the finger is a web page. iOS applications flash nothing; the control
+ * itself decides what a press looks like. */
+* {
+    -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+/*
+ * Selection and the long press.
+ *
+ * A long press on a web page raises the magnifier and the selection handles, and
+ * on a link it raises the "Open / Copy" sheet. Neither exists in an application,
+ * and both interrupt a press-and-hold that the site itself wanted — Threads and
+ * Instagram both use one for their own menus.
+ *
+ * Text that a person genuinely needs to copy is put back below: a message, a
+ * post, an input. Turning selection off everywhere and never back on is how a
+ * wrapped app becomes one you cannot get a phone number out of.
+ */
+body {
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
+input,
+textarea,
+[contenteditable],
+article,
+p,
+pre,
+code {
+    -webkit-user-select: text;
+    -webkit-touch-callout: default;
+}
+
+/* Rotating the phone must not resize the text. WebKit's text inflation is meant
+ * for desktop pages being read on a phone; on a site that already has a mobile
+ * layout it only makes headings jump. */
+html {
+    -webkit-text-size-adjust: 100%;
+}
+
+/* Scrollbars are drawn by the embedder here — the page is inside a UIScrollView
+ * with its own indicator — so a scrollbar the page draws is a second one. */
+::-webkit-scrollbar {
+    display: none;
+}
+
+/* The rubber band at the end of a scroll belongs to the UIScrollView, not to any
+ * element inside the document; an inner scroller that bands as well makes the
+ * page feel as though it is built of two surfaces, which it is, and which is
+ * exactly what should not show. */
+html,
+body {
+    overscroll-behavior: none;
+}
+
+/*
+ * Sideways panning of the whole screen.
+ *
+ * A web page is free to be wider than the window - the browser gives it a
+ * horizontal scrollbar and the reader pans. An application's screen has one
+ * axis; nothing about it slides sideways, and a layout that overflows by a
+ * dozen pixels reads as a bug rather than as content to be panned to.
+ *
+ * Only the document is pinned. Anything that scrolls horizontally on purpose -
+ * a carousel, a row of thumbnails, a code block - carries its own overflow and
+ * is untouched by this.
+ */
+html,
+body {
+    max-width: 100%;
+    overflow-x: hidden;
+}

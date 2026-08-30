@@ -1,0 +1,409 @@
+diff --git a/Source/ThirdParty/ANGLE/PlatformCocoa.cmake b/Source/ThirdParty/ANGLE/PlatformCocoa.cmake
+index cf59f064e4..fc66e30293 100644
+--- a/Source/ThirdParty/ANGLE/PlatformCocoa.cmake
++++ b/Source/ThirdParty/ANGLE/PlatformCocoa.cmake
+@@ -1,7 +1,22 @@
+ find_library(COREGRAPHICS_LIBRARY CoreGraphics)
++if (NOT COREGRAPHICS_LIBRARY)  # ios6: allow missing frameworks
++    set(COREGRAPHICS_LIBRARY "")
++endif ()
+ find_library(FOUNDATION_LIBRARY Foundation)
++if (NOT FOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++    set(FOUNDATION_LIBRARY "")
++endif ()
+ find_library(IOSURFACE_LIBRARY IOSurface)
++if (NOT IOSURFACE_LIBRARY)  # ios6: allow missing frameworks
++    set(IOSURFACE_LIBRARY "")
++endif ()
++if (NOT IOSURFACE_LIBRARY)
++    set(IOSURFACE_LIBRARY "")
++endif ()
+ find_library(METAL_LIBRARY Metal)
++if (NOT METAL_LIBRARY)  # ios6: allow missing frameworks
++    set(METAL_LIBRARY "")
++endif ()
+ if (NOT TARGET ZLIB::ZLIB)
+     find_package(ZLIB REQUIRED)
+ endif ()
+diff --git a/Source/WebKit/PlatformCocoa.cmake b/Source/WebKit/PlatformCocoa.cmake
+index b0e03a086e..fbac4d1821 100644
+--- a/Source/WebKit/PlatformCocoa.cmake
++++ b/Source/WebKit/PlatformCocoa.cmake
+@@ -5,9 +5,21 @@ list(APPEND WebKit_COMPILE_OPTIONS
+ )
+ 
+ find_library(NETWORK_LIBRARY Network)
++if (NOT NETWORK_LIBRARY)  # ios6: allow missing frameworks
++    set(NETWORK_LIBRARY "")
++endif ()
+ find_library(SECURITY_LIBRARY Security)
++if (NOT SECURITY_LIBRARY)  # ios6: allow missing frameworks
++    set(SECURITY_LIBRARY "")
++endif ()
+ find_library(UNIFORMTYPEIDENTIFIERS_LIBRARY UniformTypeIdentifiers)
++if (NOT UNIFORMTYPEIDENTIFIERS_LIBRARY)  # ios6: allow missing frameworks
++    set(UNIFORMTYPEIDENTIFIERS_LIBRARY "")
++endif ()
+ find_library(AVFOUNDATION_LIBRARY AVFoundation)
++if (NOT AVFOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++    set(AVFOUNDATION_LIBRARY "")
++endif ()
+ find_library(DEVICEIDENTITY_LIBRARY DeviceIdentity HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
+ if (NOT DEVICEIDENTITY_LIBRARY)
+     set(DEVICEIDENTITY_LIBRARY "" CACHE FILEPATH "" FORCE)
+@@ -384,9 +396,21 @@ list(APPEND WebKit_SOURCES
+ )
+ 
+ find_library(CRYPTOTOKENKIT_LIBRARY CryptoTokenKit)
++if (NOT CRYPTOTOKENKIT_LIBRARY)  # ios6: allow missing frameworks
++    set(CRYPTOTOKENKIT_LIBRARY "")
++endif ()
+ find_library(USERNOTIFICATIONS_LIBRARY UserNotifications)
++if (NOT USERNOTIFICATIONS_LIBRARY)  # ios6: allow missing frameworks
++    set(USERNOTIFICATIONS_LIBRARY "")
++endif ()
+ find_library(WRITINGTOOLS_LIBRARY WritingTools HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT WRITINGTOOLS_LIBRARY)  # ios6: allow missing frameworks
++    set(WRITINGTOOLS_LIBRARY "")
++endif ()
+ find_library(APPLEPUSHSERVICE_LIBRARY ApplePushService HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT APPLEPUSHSERVICE_LIBRARY)  # ios6: allow missing frameworks
++    set(APPLEPUSHSERVICE_LIBRARY "")
++endif ()
+ list(APPEND WebKit_PRIVATE_LIBRARIES
+     ${CRYPTOTOKENKIT_LIBRARY}
+     ${USERNOTIFICATIONS_LIBRARY}
+diff --git a/Source/bmalloc/CMakeLists.txt b/Source/bmalloc/CMakeLists.txt
+index 3abd89cfae..f000810879 100644
+--- a/Source/bmalloc/CMakeLists.txt
++++ b/Source/bmalloc/CMakeLists.txt
+@@ -210,6 +210,7 @@ set(bmalloc_C_SOURCES
+ set(bmalloc_PUBLIC_HEADERS
+     bmalloc/Algorithm.h
+     bmalloc/AllocationCounts.h
++    bmalloc/ClassicBmalloc.h
+     bmalloc/CompactAllocationMode.h
+     bmalloc/BAssert.h
+     bmalloc/BCompiler.h
+@@ -637,6 +638,23 @@ if (APPLE)
+     )
+ endif ()
+ 
++if (WEBKIT_IOS6_BMALLOC)
++    list(APPEND bmalloc_SOURCES
++        bmalloc/ios6/Allocator.cpp
++        bmalloc/ios6/Cache.cpp
++        bmalloc/ios6/ClassicBmalloc.cpp
++        bmalloc/ios6/Deallocator.cpp
++        bmalloc/ios6/Environment.cpp
++        bmalloc/ios6/Heap.cpp
++        bmalloc/ios6/LargeMap.cpp
++        bmalloc/ios6/Logging.cpp
++        bmalloc/ios6/ObjectType.cpp
++        bmalloc/ios6/StaticMutex.cpp
++        bmalloc/ios6/VMHeap.cpp
++        bmalloc/ios6/Zone.cpp
++    )
++endif ()
++
+ set(bmalloc_LIBRARIES
+     ${CMAKE_DL_LIBS}
+ )
+@@ -696,6 +714,10 @@ if (USE_SYSTEM_MALLOC)
+     add_definitions(-DUSE_SYSTEM_MALLOC=1)
+ endif ()
+ 
++if (WEBKIT_IOS6_BMALLOC)
++    add_definitions(-DWEBKIT_IOS6_BMALLOC=1)
++endif ()
++
+ if (MSVC)
+     add_compile_options(/wd4206)
+     if (WTF_CPU_X86_64)
+diff --git a/Source/bmalloc/PlatformCocoa.cmake b/Source/bmalloc/PlatformCocoa.cmake
+index 6b5d04308f..5e09be7395 100644
+--- a/Source/bmalloc/PlatformCocoa.cmake
++++ b/Source/bmalloc/PlatformCocoa.cmake
+@@ -9,6 +9,12 @@ list(APPEND bmalloc_SOURCES
+ )
+ 
+ find_library(FOUNDATION_LIBRARY Foundation)
++
++if (NOT FOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++
++    set(FOUNDATION_LIBRARY "")
++
++endif ()
+ list(APPEND bmalloc_LIBRARIES ${FOUNDATION_LIBRARY})
+ 
+ target_compile_options(bmalloc PRIVATE -fno-threadsafe-statics)
+diff --git a/Source/bmalloc/bmalloc/BPlatform.h b/Source/bmalloc/bmalloc/BPlatform.h
+index b561227848..cccf6bc7ce 100644
+--- a/Source/bmalloc/bmalloc/BPlatform.h
++++ b/Source/bmalloc/bmalloc/BPlatform.h
+@@ -388,7 +388,7 @@
+ #elif BTSAN_ENABLED
+ #define BUSE_SYSTEM_MALLOC 1
+ #else
+-#if BOS(DARWIN) && !BCPU(ADDRESS64)
++#if BOS(DARWIN) && !BCPU(ADDRESS64) && !defined(WEBKIT_IOS6_BMALLOC)
+ #define BUSE_SYSTEM_MALLOC 1
+ #else
+ #define BUSE_SYSTEM_MALLOC 0
+@@ -416,8 +416,16 @@
+ #endif
+ #endif
+ 
++#if !defined(BUSE_CLASSIC_BMALLOC)
++#if defined(WEBKIT_IOS6_BMALLOC) && !BUSE(LIBPAS) && !BUSE(MIMALLOC) && !BUSE(SYSTEM_MALLOC)
++#define BUSE_CLASSIC_BMALLOC 1
++#else
++#define BUSE_CLASSIC_BMALLOC 0
++#endif
++#endif
++
+ #if BUSE(LIBPAS)
+-#if BUSE(MIMALLOC) || BUSE(SYSTEM_MALLOC)
++#if BUSE(MIMALLOC) || BUSE(SYSTEM_MALLOC) || BUSE(CLASSIC_BMALLOC)
+ #error "libpas, mimalloc, and system malloc are exclusive"
+ #endif
+ #elif BUSE(MIMALLOC)
+@@ -431,6 +439,10 @@
+ #if BOS(WINDOWS)
+ #error "System malloc configuration is not supported in Windows since aligned memory cannot be freed via ::free. Use mimalloc instead"
+ #endif
++#elif BUSE(CLASSIC_BMALLOC)
++#if BUSE(LIBPAS) || BUSE(MIMALLOC) || BUSE(SYSTEM_MALLOC)
++#error "libpas, mimalloc, system malloc, and classic bmalloc are exclusive"
++#endif
+ #else
+ #error "libpas, mimalloc, or system malloc needs to be specified"
+ #endif
+diff --git a/Source/bmalloc/bmalloc/SystemHeap.cpp b/Source/bmalloc/bmalloc/SystemHeap.cpp
+index 6e43575c73..6cea8e9f85 100644
+--- a/Source/bmalloc/bmalloc/SystemHeap.cpp
++++ b/Source/bmalloc/bmalloc/SystemHeap.cpp
+@@ -99,6 +99,18 @@ void SystemHeap::scavenge()
+     // Currently |goal| does not affect on the behavior of malloc_zone_pressure_relief if (1) we only scavenge one zone and (2) it is not nanomalloc.
+     constexpr size_t goal = 0;
+     malloc_zone_pressure_relief(m_zone, goal);
++#if !BUSE(LIBPAS) && !BUSE(MIMALLOC)
++    // With neither libpas nor mimalloc built, bmalloc::api::malloc and friends
++    // forward straight to ::malloc/::free (bmalloc.h), so every byte WebKit
++    // allocates and frees lives in the default zone. m_zone is the private zone
++    // the constructor above makes, and nothing but memalignLarge/freeLarge -
++    // that is, tryLargeZeroedMemalignVirtual - ever puts anything in it. Without
++    // this, releaseFastMallocFreeMemory() relieves pressure on a zone that holds
++    // almost nothing and libmalloc keeps every freed page.
++    malloc_zone_t* defaultZone = malloc_default_zone();
++    if (defaultZone != m_zone)
++        malloc_zone_pressure_relief(defaultZone, goal);
++#endif
+ }
+ 
+ void SystemHeap::dump()
+diff --git a/Source/bmalloc/bmalloc/bmalloc.cpp b/Source/bmalloc/bmalloc/bmalloc.cpp
+index 6b5f3b6ed4..686583cead 100644
+--- a/Source/bmalloc/bmalloc/bmalloc.cpp
++++ b/Source/bmalloc/bmalloc/bmalloc.cpp
+@@ -105,6 +105,10 @@ void freeLargeVirtual(void* object, size_t size, HeapKind kind)
+     BUNUSED(size);
+     BUNUSED(kind);
+     mi_free(object);
++#elif BUSE(CLASSIC_BMALLOC)
++    BUNUSED(size);
++    BUNUSED(kind);
++    classic::free(object);
+ #else
+     BUNUSED(size);
+     BUNUSED(kind);
+@@ -119,6 +123,8 @@ void scavengeThisThread()
+                                   pas_lock_is_not_held);
+ #elif BUSE(MIMALLOC)
+     mi_theap_collect(mi_theap_get_default(), /* force */ true);
++#elif BUSE(CLASSIC_BMALLOC)
++    classic::scavengeThisThread();
+ #endif
+ }
+ 
+@@ -129,6 +135,8 @@ void scavenge()
+     scavengeThisThread();
+ #elif BUSE(MIMALLOC)
+     mi_collect(/* force */ true);
++#elif BUSE(CLASSIC_BMALLOC)
++    classic::scavenge();
+ #endif
+     if (SystemHeap* systemHeap = SystemHeap::tryGetIfShouldSupplantBmalloc()) {
+         systemHeap->scavenge();
+@@ -138,7 +146,11 @@ void scavenge()
+ 
+ bool isEnabled(HeapKind)
+ {
++#if BUSE(CLASSIC_BMALLOC)
++    return classic::isEnabled();
++#else
+     return !Environment::get()->shouldBmallocAllocateThroughSystemHeap();
++#endif
+ }
+ 
+ bool isMTEEnabled(HeapKind kind)
+@@ -157,6 +169,8 @@ void setScavengerThreadQOSClass(qos_class_t overrideClass)
+ {
+ #if BENABLE(LIBPAS)
+     pas_scavenger_set_requested_qos_class(overrideClass);
++#elif BUSE(CLASSIC_BMALLOC)
++    classic::setScavengerThreadQOSClass(overrideClass);
+ #else
+     BUNUSED(overrideClass);
+ #endif
+diff --git a/Source/bmalloc/bmalloc/bmalloc.h b/Source/bmalloc/bmalloc/bmalloc.h
+index b125f5dbe4..64afde0dd5 100644
+--- a/Source/bmalloc/bmalloc/bmalloc.h
++++ b/Source/bmalloc/bmalloc/bmalloc.h
+@@ -46,6 +46,47 @@ BALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ #include "mimalloc.h"
+ #endif
+ 
++#if BUSE(CLASSIC_BMALLOC)
++#include "ClassicBmalloc.h"
++#endif
++
++#include <stdlib.h>
++
++#if BUSE(CLASSIC_BMALLOC)
++
++static inline void* bmalloc_aligned_alloc_compat(size_t alignment, size_t size)
++{
++    if (alignment < sizeof(void*))
++        alignment = sizeof(void*);
++    return ::bmalloc::classic::tryMemalign(alignment, size);
++}
++
++static inline void* bmalloc_plain_malloc_compat(size_t size) { return ::bmalloc::classic::tryMalloc(size); }
++static inline void* bmalloc_zeroed_malloc_compat(size_t size) { return ::bmalloc::classic::tryZeroedMalloc(size); }
++static inline void* bmalloc_plain_realloc_compat(void* object, size_t size) { return ::bmalloc::classic::tryRealloc(object, size); }
++static inline void bmalloc_plain_free_compat(void* object) { ::bmalloc::classic::free(object); }
++
++#else
++
++// iOS 6 predates C11 aligned_alloc; posix_memalign has the same contract here
++// because every caller already passes a power-of-two alignment.
++static inline void* bmalloc_aligned_alloc_compat(size_t alignment, size_t size)
++{
++    void* memory = nullptr;
++    if (alignment < sizeof(void*))
++        alignment = sizeof(void*);
++    if (posix_memalign(&memory, alignment, size))
++        return nullptr;
++    return memory;
++}
++
++static inline void* bmalloc_plain_malloc_compat(size_t size) { return ::malloc(size); }
++static inline void* bmalloc_zeroed_malloc_compat(size_t size) { return ::calloc(1, size); }
++static inline void* bmalloc_plain_realloc_compat(void* object, size_t size) { return ::realloc(object, size); }
++static inline void bmalloc_plain_free_compat(void* object) { ::free(object); }
++
++#endif
++
+ namespace bmalloc {
+ namespace api {
+ 
+@@ -73,7 +114,7 @@ BINLINE void* tryMalloc(size_t size, CompactAllocationMode mode, HeapKind kind =
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    return ::malloc(size);
++    return bmalloc_plain_malloc_compat(size);
+ #endif
+ }
+ 
+@@ -93,7 +134,7 @@ BINLINE void* malloc(size_t size, CompactAllocationMode mode, HeapKind kind = He
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    void* memory = ::malloc(size);
++    void* memory = bmalloc_plain_malloc_compat(size);
+     RELEASE_BASSERT(memory);
+     return memory;
+ #endif
+@@ -112,7 +153,7 @@ BINLINE void* tryZeroedMalloc(size_t size, CompactAllocationMode mode, HeapKind
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    return ::calloc(1, size);
++    return bmalloc_zeroed_malloc_compat(size);
+ #endif
+ }
+ 
+@@ -132,7 +173,7 @@ BINLINE void* zeroedMalloc(size_t size, CompactAllocationMode mode, HeapKind kin
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    void* memory = ::calloc(1, size);
++    void* memory = bmalloc_zeroed_malloc_compat(size);
+     RELEASE_BASSERT(memory);
+     return memory;
+ #endif
+@@ -155,7 +196,7 @@ BINLINE void* tryMemalign(size_t alignment, size_t size, CompactAllocationMode m
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    return ::aligned_alloc(alignment, size);
++    return bmalloc_aligned_alloc_compat(alignment, size);
+ #endif
+ }
+ 
+@@ -176,7 +217,7 @@ BINLINE void* memalign(size_t alignment, size_t size, CompactAllocationMode mode
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    void* memory = ::aligned_alloc(alignment, size);
++    void* memory = bmalloc_aligned_alloc_compat(alignment, size);
+     RELEASE_BASSERT(memory);
+     return memory;
+ #endif
+@@ -197,7 +238,7 @@ BINLINE void* tryZeroedMemalign(size_t alignment, size_t size, CompactAllocation
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    void* memory = ::aligned_alloc(alignment, size);
++    void* memory = bmalloc_aligned_alloc_compat(alignment, size);
+     if (memory) [[likely]]
+         memset(memory, 0, size);
+     return memory;
+@@ -221,7 +262,7 @@ BINLINE void* zeroedMemalign(size_t alignment, size_t size, CompactAllocationMod
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    void* memory = ::aligned_alloc(alignment, size);
++    void* memory = bmalloc_aligned_alloc_compat(alignment, size);
+     RELEASE_BASSERT(memory);
+     memset(memory, 0, size);
+     return memory;
+@@ -245,7 +286,7 @@ BINLINE void* tryRealloc(void* object, size_t newSize, CompactAllocationMode mod
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    return ::realloc(object, newSize);
++    return bmalloc_plain_realloc_compat(object, newSize);
+ #endif
+ }
+ 
+@@ -266,7 +307,7 @@ BINLINE void* realloc(void* object, size_t newSize, CompactAllocationMode mode,
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    void* memory = ::realloc(object, newSize);
++    void* memory = bmalloc_plain_realloc_compat(object, newSize);
+     RELEASE_BASSERT(memory);
+     return memory;
+ #endif
+@@ -288,7 +329,7 @@ BINLINE void free(void* object, HeapKind kind = HeapKind::Primary)
+     mi_free(object);
+ #else
+     BUNUSED(kind);
+-    ::free(object);
++    bmalloc_plain_free_compat(object);
+ #endif
+ }
+ 

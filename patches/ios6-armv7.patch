@@ -1,0 +1,2597 @@
+diff --git a/Source/JavaScriptCore/PlatformCocoa.cmake b/Source/JavaScriptCore/PlatformCocoa.cmake
+index 780179b20..41345a055 100644
+--- a/Source/JavaScriptCore/PlatformCocoa.cmake
++++ b/Source/JavaScriptCore/PlatformCocoa.cmake
+@@ -5,8 +5,20 @@ target_compile_options(JavaScriptCore PRIVATE
+ )
+ 
+ find_library(SECURITY_LIBRARY Security)
++
++if (NOT SECURITY_LIBRARY)  # ios6: allow missing frameworks
++
++    set(SECURITY_LIBRARY "")
++
++endif ()
+ find_library(COREGRAPHICS_LIBRARY CoreGraphics)
++if (NOT COREGRAPHICS_LIBRARY)  # ios6: allow missing frameworks
++    set(COREGRAPHICS_LIBRARY "")
++endif ()
+ find_library(CORETEXT_LIBRARY CoreText)
++if (NOT CORETEXT_LIBRARY)  # ios6: allow missing frameworks
++    set(CORETEXT_LIBRARY "")
++endif ()
+ list(APPEND JavaScriptCore_LIBRARIES
+     ${SECURITY_LIBRARY}
+     ${COREGRAPHICS_LIBRARY}
+@@ -196,7 +208,10 @@ if (WEBKIT_SDK_IS_IOS_FAMILY)
+ 
+     # BrowserEngineCore provides the inline-JIT-permissions API (be_memory_*)
+     # that threadSelfRestrict uses; weak-linked (iOS 17.4+).
+-    target_link_options(JavaScriptCore PRIVATE -weak_framework BrowserEngineCore)
++    find_library(BROWSERENGINECORE_LIBRARY BrowserEngineCore)
++    if (BROWSERENGINECORE_LIBRARY)
++        target_link_options(JavaScriptCore PRIVATE -weak_framework BrowserEngineCore)
++    endif ()
+ 
+     target_compile_definitions(JavaScriptCore PRIVATE PAS_BMALLOC_HIDDEN=1)
+     target_compile_options(JavaScriptCore PRIVATE
+diff --git a/Source/JavaScriptCore/runtime/JSString.h b/Source/JavaScriptCore/runtime/JSString.h
+index a565ef1b0..b53ea0c68 100644
+--- a/Source/JavaScriptCore/runtime/JSString.h
++++ b/Source/JavaScriptCore/runtime/JSString.h
+@@ -1132,7 +1132,7 @@ ALWAYS_INLINE JSString* jsStringWithCache(VM& vm, const String& s)
+ 
+     auto& stringImpl = *s.impl();
+     if (length == 1) {
+-        if (auto c = stringImpl[0]; c <= maxSingleCharacterString)
++        if (auto c = stringImpl.at(0); c <= maxSingleCharacterString)
+             return vm.smallStrings.singleCharacterString(c);
+     }
+ 
+diff --git a/Source/JavaScriptCore/runtime/MachineContext.h b/Source/JavaScriptCore/runtime/MachineContext.h
+index 2ac8b24f0..f006abea5 100644
+--- a/Source/JavaScriptCore/runtime/MachineContext.h
++++ b/Source/JavaScriptCore/runtime/MachineContext.h
+@@ -233,6 +233,8 @@ static inline void*& framePointerImpl(PlatformRegisters& regs)
+     return reinterpret_cast<void*&>(regs.__rbp);
+ #elif CPU(ARM64)
+     return reinterpret_cast<void*&>(regs.__x[29]);
++#elif CPU(ARM_THUMB2) || CPU(ARM)
++    return reinterpret_cast<void*&>(regs.__r[7]);
+ #else
+ #error Unknown Architecture
+ #endif
+@@ -577,6 +579,8 @@ inline void* wasmInstancePointer(const PlatformRegisters& regs)
+     return reinterpret_cast<void*>(regs.__rbx);
+ #elif CPU(ARM64)
+     return reinterpret_cast<void*>(regs.__x[19]);
++#elif CPU(ARM_THUMB2) || CPU(ARM)
++    return reinterpret_cast<void*>(regs.__r[10]);
+ #else
+ #error Unknown Architecture
+ #endif
+diff --git a/Source/ThirdParty/ANGLE/PlatformCocoa.cmake b/Source/ThirdParty/ANGLE/PlatformCocoa.cmake
+index fbc06d296..40900f931 100644
+--- a/Source/ThirdParty/ANGLE/PlatformCocoa.cmake
++++ b/Source/ThirdParty/ANGLE/PlatformCocoa.cmake
+@@ -1,7 +1,22 @@
+ find_library(COREGRAPHICS_LIBRARY CoreGraphics)
++if (NOT COREGRAPHICS_LIBRARY)  # ios6: allow missing frameworks
++    set(COREGRAPHICS_LIBRARY "")
++endif ()
+ find_library(FOUNDATION_LIBRARY Foundation)
++if (NOT FOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++    set(FOUNDATION_LIBRARY "")
++endif ()
+ find_library(IOSURFACE_LIBRARY IOSurface)
++if (NOT IOSURFACE_LIBRARY)  # ios6: allow missing frameworks
++    set(IOSURFACE_LIBRARY "")
++endif ()
++if (NOT IOSURFACE_LIBRARY)
++    set(IOSURFACE_LIBRARY "")
++endif ()
+ find_library(METAL_LIBRARY Metal)
++if (NOT METAL_LIBRARY)  # ios6: allow missing frameworks
++    set(METAL_LIBRARY "")
++endif ()
+ if (NOT TARGET ZLIB::ZLIB)
+     find_package(ZLIB REQUIRED)
+ endif ()
+@@ -29,8 +44,13 @@ list(APPEND ANGLEGLESv2_LIBRARIES
+ 
+ if (WEBKIT_SDK_IS_MACOS)
+     find_library(IOKIT_LIBRARY IOKit)
++    if (NOT IOKIT_LIBRARY)  # ios6: allow missing frameworks
++        set(IOKIT_LIBRARY "")
++    endif ()
+     find_library(QUARTZ_LIBRARY Quartz)
+-
++    if (NOT QUARTZ_LIBRARY)  # ios6: allow missing frameworks
++        set(QUARTZ_LIBRARY "")
++    endif ()
+     list(APPEND ANGLE_SOURCES
+         ${libangle_gpu_info_util_mac_sources}
+     )
+@@ -41,7 +61,9 @@ if (WEBKIT_SDK_IS_MACOS)
+     )
+ else ()
+     find_library(QUARTZCORE_LIBRARY QuartzCore)
+-
++    if (NOT QUARTZCORE_LIBRARY)  # ios6: allow missing frameworks
++        set(QUARTZCORE_LIBRARY "")
++    endif ()
+     list(REMOVE_ITEM ANGLE_SOURCES
+         src/common/gl/cgl/FunctionsCGL.cpp
+         src/common/gl/cgl/FunctionsCGL.h
+diff --git a/Source/WTF/wtf/MallocCommon.cpp b/Source/WTF/wtf/MallocCommon.cpp
+index d211ae00b..ded299522 100644
+--- a/Source/WTF/wtf/MallocCommon.cpp
++++ b/Source/WTF/wtf/MallocCommon.cpp
+@@ -29,8 +29,13 @@
+ namespace WTF {
+ 
+ #if ASSERT_ENABLED
++#if defined(WEBKIT_IOS6)
++static IOS6ThreadLocal<unsigned> forbidMallocUseScopeCount;
++static IOS6ThreadLocal<unsigned> disableMallocRestrictionScopeCount;
++#else
+ thread_local static unsigned forbidMallocUseScopeCount;
+ thread_local static unsigned disableMallocRestrictionScopeCount;
++#endif
+ 
+ ForbidMallocUseForCurrentThreadScope::ForbidMallocUseForCurrentThreadScope()
+ {
+diff --git a/Source/WTF/wtf/PlatformCocoa.cmake b/Source/WTF/wtf/PlatformCocoa.cmake
+index 4162136c9..94070b9ac 100644
+--- a/Source/WTF/wtf/PlatformCocoa.cmake
++++ b/Source/WTF/wtf/PlatformCocoa.cmake
+@@ -1,6 +1,15 @@
+ find_library(COREFOUNDATION_LIBRARY CoreFoundation)
++if (NOT COREFOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++    set(COREFOUNDATION_LIBRARY "")
++endif ()
+ find_library(READLINE_LIBRARY Readline)
++if (NOT READLINE_LIBRARY)  # ios6: allow missing frameworks
++    set(READLINE_LIBRARY "")
++endif ()
+ find_library(SECURITY_LIBRARY Security)
++if (NOT SECURITY_LIBRARY)  # ios6: allow missing frameworks
++    set(SECURITY_LIBRARY "")
++endif ()
+ list(APPEND WTF_LIBRARIES
+     ${COREFOUNDATION_LIBRARY}
+     ${READLINE_LIBRARY}
+@@ -137,7 +146,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR USE_APPLE_INTERNAL_SDK)
+         WORKING_DIRECTORY ${WTF_DERIVED_SOURCES_DIR}
+         COMMAND ${Mig_EXECUTABLE} -header mach_exc.h -user mach_excUser.c
+             -sheader MachExceptionsServer.h -server mach_excServer.c
+-            -DMACH_EXC_SERVER_TASKIDTOKEN_STATE -isysroot ${CMAKE_OSX_SYSROOT}
++            -DMACH_EXC_SERVER_TASKIDTOKEN_STATE -isysroot ${MIG_SYSROOT}
+             MachExceptions.defs
+         VERBATIM)
+     list(APPEND WTF_SOURCES
+@@ -149,6 +158,9 @@ endif ()
+ 
+ if (WEBKIT_SDK_IS_MACOS)
+     find_library(COCOA_LIBRARY Cocoa)
++    if (NOT COCOA_LIBRARY)  # ios6: allow missing frameworks
++        set(COCOA_LIBRARY "")
++    endif ()
+     list(APPEND WTF_LIBRARIES
+         ${COCOA_LIBRARY}
+     )
+@@ -158,6 +170,9 @@ if (WEBKIT_SDK_IS_MACOS)
+     )
+ else ()
+     find_library(UIKIT_LIBRARY UIKit)
++    if (NOT UIKIT_LIBRARY)  # ios6: allow missing frameworks
++        set(UIKIT_LIBRARY "")
++    endif ()
+     list(APPEND WTF_LIBRARIES
+         ${UIKIT_LIBRARY}
+     )
+diff --git a/Source/WTF/wtf/PlatformEnableCocoa.h b/Source/WTF/wtf/PlatformEnableCocoa.h
+index 4d71a85c4..439a45bd1 100644
+--- a/Source/WTF/wtf/PlatformEnableCocoa.h
++++ b/Source/WTF/wtf/PlatformEnableCocoa.h
+@@ -76,7 +76,7 @@
+ #define ENABLE_AIRPLAY_PICKER 1
+ #endif
+ 
+-#if !defined(ENABLE_COCOA_WEBM_PLAYER) && !PLATFORM(MACCATALYST) && !PLATFORM(WATCHOS) && !PLATFORM(APPLETV)
++#if !defined(ENABLE_COCOA_WEBM_PLAYER) && !defined(WEBKIT_IOS6) && !PLATFORM(MACCATALYST) && !PLATFORM(WATCHOS) && !PLATFORM(APPLETV)
+ #define ENABLE_COCOA_WEBM_PLAYER 1
+ #endif
+ 
+@@ -1234,3 +1234,63 @@
+ #endif
+ 
+ #endif // PLATFORM(COCOA)
++
++/* ---- iOS 6 port: Apple Pay needs PassKit classes this SDK does not have ---- */
++#if defined(WEBKIT_IOS6)
++#undef ENABLE_PIXEL_FORMAT_RGBA16F
++#define ENABLE_PIXEL_FORMAT_RGBA16F 0
++#undef ENABLE_APPLE_PAY
++#define ENABLE_APPLE_PAY 0
++#undef ENABLE_APPLE_PAY_AMS_UI
++#define ENABLE_APPLE_PAY_AMS_UI 0
++#undef ENABLE_APPLE_PAY_AUTOMATIC_RELOAD_LINE_ITEM
++#define ENABLE_APPLE_PAY_AUTOMATIC_RELOAD_LINE_ITEM 0
++#undef ENABLE_APPLE_PAY_AUTOMATIC_RELOAD_PAYMENTS
++#define ENABLE_APPLE_PAY_AUTOMATIC_RELOAD_PAYMENTS 0
++#undef ENABLE_APPLE_PAY_COUPON_CODE
++#define ENABLE_APPLE_PAY_COUPON_CODE 0
++#undef ENABLE_APPLE_PAY_DEFERRED_LINE_ITEM
++#define ENABLE_APPLE_PAY_DEFERRED_LINE_ITEM 0
++#undef ENABLE_APPLE_PAY_DEFERRED_PAYMENTS
++#define ENABLE_APPLE_PAY_DEFERRED_PAYMENTS 0
++#undef ENABLE_APPLE_PAY_DELEGATED_REQUEST
++#define ENABLE_APPLE_PAY_DELEGATED_REQUEST 0
++#undef ENABLE_APPLE_PAY_DISBURSEMENTS
++#define ENABLE_APPLE_PAY_DISBURSEMENTS 0
++#undef ENABLE_APPLE_PAY_FEATURES
++#define ENABLE_APPLE_PAY_FEATURES 0
++#undef ENABLE_APPLE_PAY_INSTALLMENTS
++#define ENABLE_APPLE_PAY_INSTALLMENTS 0
++#undef ENABLE_APPLE_PAY_LATER
++#define ENABLE_APPLE_PAY_LATER 0
++#undef ENABLE_APPLE_PAY_LATER_AVAILABILITY
++#define ENABLE_APPLE_PAY_LATER_AVAILABILITY 0
++#undef ENABLE_APPLE_PAY_MERCHANT_CATEGORY_CODE
++#define ENABLE_APPLE_PAY_MERCHANT_CATEGORY_CODE 0
++#undef ENABLE_APPLE_PAY_MULTI_MERCHANT_PAYMENTS
++#define ENABLE_APPLE_PAY_MULTI_MERCHANT_PAYMENTS 0
++#undef ENABLE_APPLE_PAY_NEW_BUTTON_TYPES
++#define ENABLE_APPLE_PAY_NEW_BUTTON_TYPES 0
++#undef ENABLE_APPLE_PAY_PAYMENT_ORDER_DETAILS
++#define ENABLE_APPLE_PAY_PAYMENT_ORDER_DETAILS 0
++#undef ENABLE_APPLE_PAY_RECURRING_LINE_ITEM
++#define ENABLE_APPLE_PAY_RECURRING_LINE_ITEM 0
++#undef ENABLE_APPLE_PAY_RECURRING_PAYMENTS
++#define ENABLE_APPLE_PAY_RECURRING_PAYMENTS 0
++#undef ENABLE_APPLE_PAY_REMOTE_UI
++#define ENABLE_APPLE_PAY_REMOTE_UI 0
++#undef ENABLE_APPLE_PAY_REMOTE_UI_USES_SCENE
++#define ENABLE_APPLE_PAY_REMOTE_UI_USES_SCENE 0
++#undef ENABLE_APPLE_PAY_SELECTED_SHIPPING_METHOD
++#define ENABLE_APPLE_PAY_SELECTED_SHIPPING_METHOD 0
++#undef ENABLE_APPLE_PAY_SESSION_V11
++#define ENABLE_APPLE_PAY_SESSION_V11 0
++#undef ENABLE_APPLE_PAY_SETUP
++#define ENABLE_APPLE_PAY_SETUP 0
++#undef ENABLE_APPLE_PAY_SHIPPING_CONTACT_EDITING_MODE
++#define ENABLE_APPLE_PAY_SHIPPING_CONTACT_EDITING_MODE 0
++#undef ENABLE_APPLE_PAY_SHIPPING_METHOD_DATE_COMPONENTS_RANGE
++#define ENABLE_APPLE_PAY_SHIPPING_METHOD_DATE_COMPONENTS_RANGE 0
++#undef ENABLE_APPLE_PAY_UPDATE_SHIPPING_METHODS_WHEN_CHANGING_LINE_ITEMS
++#define ENABLE_APPLE_PAY_UPDATE_SHIPPING_METHODS_WHEN_CHANGING_LINE_ITEMS 0
++#endif
+diff --git a/Source/WTF/wtf/PlatformHave.h b/Source/WTF/wtf/PlatformHave.h
+index a1c3d14a7..5ef8798d9 100644
+--- a/Source/WTF/wtf/PlatformHave.h
++++ b/Source/WTF/wtf/PlatformHave.h
+@@ -96,7 +96,7 @@
+ #define HAVE_HISERVICES 1
+ #endif
+ 
+-#if PLATFORM(IOS_FAMILY)
++#if PLATFORM(IOS_FAMILY) && !defined(WEBKIT_IOS6_NO_READLINE)
+ #define HAVE_READLINE 1
+ #endif
+ 
+@@ -216,7 +216,7 @@
+ #define HAVE_PTHREAD_SETNAME_NP 1
+ #endif
+ 
+-#if OS(DARWIN)
++#if OS(DARWIN) && !defined(WEBKIT_IOS6_NO_READLINE)
+ #define HAVE_READLINE 1
+ #endif
+ 
+@@ -375,7 +375,7 @@
+ #define HAVE_AVASSETREADER 1
+ #endif
+ 
+-#if PLATFORM(COCOA)
++#if PLATFORM(COCOA) && !defined(WEBKIT_IOS6)
+ #define HAVE_IOSURFACE 1
+ #endif
+ 
+@@ -579,7 +579,7 @@
+ #define HAVE_NEAR_FIELD 1
+ #endif
+ 
+-#if PLATFORM(COCOA)
++#if PLATFORM(COCOA) && !defined(WEBKIT_IOS6)
+ #define HAVE_OS_SIGNPOST 1
+ #endif
+ 
+@@ -2004,3 +2004,51 @@
+     && (PLATFORM(IOS) && !PLATFORM(IOS_SIMULATOR) && __IPHONE_OS_VERSION_MIN_REQUIRED >= 270000)
+ #define HAVE_AVSYSTEMROUTING_FRAMEWORK 1
+ #endif
++
++/* ---- iOS 6 port: features whose SDK headers do not exist here ---- */
++#if defined(WEBKIT_IOS6)
++#undef HAVE_SUPPORT_HDR_DISPLAY_APIS
++#define HAVE_SUPPORT_HDR_DISPLAY_APIS 0
++#undef HAVE_TASK_IDENTITY_TOKEN
++#define HAVE_TASK_IDENTITY_TOKEN 0
++#undef HAVE_AVSAMPLEBUFFERVIDEORENDERER
++#define HAVE_AVSAMPLEBUFFERVIDEORENDERER 0
++#undef HAVE_VTDECOMPRESSIONSESSION_MULTIIMAGE
++#define HAVE_VTDECOMPRESSIONSESSION_MULTIIMAGE 0
++#undef HAVE_MULTI_IMAGE_DECODE
++#define HAVE_MULTI_IMAGE_DECODE 0
++#undef HAVE_IOSURFACE_SET_OWNERSHIP
++#define HAVE_IOSURFACE_SET_OWNERSHIP 0
++#undef HAVE_PASSKIT_AUTOMATIC_RELOAD_PAYMENTS
++#define HAVE_PASSKIT_AUTOMATIC_RELOAD_PAYMENTS 0
++#undef HAVE_PASSKIT_AUTOMATIC_RELOAD_SUMMARY_ITEM
++#define HAVE_PASSKIT_AUTOMATIC_RELOAD_SUMMARY_ITEM 0
++#undef HAVE_PASSKIT_DEFAULT_SHIPPING_METHOD
++#define HAVE_PASSKIT_DEFAULT_SHIPPING_METHOD 0
++#undef HAVE_PASSKIT_DEFERRED_PAYMENTS
++#define HAVE_PASSKIT_DEFERRED_PAYMENTS 0
++#undef HAVE_PASSKIT_DEFERRED_SUMMARY_ITEM
++#define HAVE_PASSKIT_DEFERRED_SUMMARY_ITEM 0
++#undef HAVE_PASSKIT_DISBURSEMENTS
++#define HAVE_PASSKIT_DISBURSEMENTS 0
++#undef HAVE_PASSKIT_INSTALLMENTS
++#define HAVE_PASSKIT_INSTALLMENTS 0
++#undef HAVE_PASSKIT_MAC_HELPER_TEMP
++#define HAVE_PASSKIT_MAC_HELPER_TEMP 0
++#undef HAVE_PASSKIT_MODULARIZATION
++#define HAVE_PASSKIT_MODULARIZATION 0
++#undef HAVE_PASSKIT_MULTI_MERCHANT_PAYMENTS
++#define HAVE_PASSKIT_MULTI_MERCHANT_PAYMENTS 0
++#undef HAVE_PASSKIT_PAYMENT_ORDER_DETAILS
++#define HAVE_PASSKIT_PAYMENT_ORDER_DETAILS 0
++#undef HAVE_PASSKIT_PAYMENT_SERVICES_MERCHANT_URL_IS_DELEGATED
++#define HAVE_PASSKIT_PAYMENT_SERVICES_MERCHANT_URL_IS_DELEGATED 0
++#undef HAVE_PASSKIT_RECURRING_PAYMENTS
++#define HAVE_PASSKIT_RECURRING_PAYMENTS 0
++#undef HAVE_PASSKIT_RECURRING_SUMMARY_ITEM
++#define HAVE_PASSKIT_RECURRING_SUMMARY_ITEM 0
++#undef HAVE_PASSKIT_SHIPPING_METHOD_DATE_COMPONENTS_RANGE
++#define HAVE_PASSKIT_SHIPPING_METHOD_DATE_COMPONENTS_RANGE 0
++#undef HAVE_AVCONTENTKEYREQUEST_PENDING_PROTECTION_STATUS
++#define HAVE_AVCONTENTKEYREQUEST_PENDING_PROTECTION_STATUS 0
++#endif
+diff --git a/Source/WTF/wtf/PlatformJSCOnly.cmake b/Source/WTF/wtf/PlatformJSCOnly.cmake
+index b78f74481..3418565ec 100644
+--- a/Source/WTF/wtf/PlatformJSCOnly.cmake
++++ b/Source/WTF/wtf/PlatformJSCOnly.cmake
+@@ -88,7 +88,7 @@ elseif (APPLE)
+         WORKING_DIRECTORY ${WTF_DERIVED_SOURCES_DIR}
+         COMMAND ${Mig_EXECUTABLE} -header mach_exc.h -user mach_excUser.c
+             -sheader MachExceptionsServer.h -server mach_excServer.c
+-            -DMACH_EXC_SERVER_TASKIDTOKEN_STATE -isysroot ${CMAKE_OSX_SYSROOT}
++            -DMACH_EXC_SERVER_TASKIDTOKEN_STATE -isysroot ${MIG_SYSROOT}
+             MachExceptions.defs
+         VERBATIM)
+     if (NOT USE_GLIB)
+diff --git a/Source/WTF/wtf/PlatformUse.h b/Source/WTF/wtf/PlatformUse.h
+index a49b2f86e..1d25890d7 100644
+--- a/Source/WTF/wtf/PlatformUse.h
++++ b/Source/WTF/wtf/PlatformUse.h
+@@ -396,3 +396,11 @@
+ #if PLATFORM(IOS) || PLATFORM(VISION)
+ #define USE_ITP_TCC_CHECK 1
+ #endif
++
++/* ---- iOS 6 port ---- */
++#if defined(WEBKIT_IOS6)
++#undef USE_CORE_IMAGE
++#define USE_CORE_IMAGE 0
++#undef USE_MEDIAPARSERD
++#define USE_MEDIAPARSERD 0
++#endif
+diff --git a/Source/WTF/wtf/cocoa/TollFreeBridging.h b/Source/WTF/wtf/cocoa/TollFreeBridging.h
+index ed50593f8..559b5a805 100644
+--- a/Source/WTF/wtf/cocoa/TollFreeBridging.h
++++ b/Source/WTF/wtf/cocoa/TollFreeBridging.h
+@@ -64,7 +64,9 @@ WTF_DECLARE_TOLL_FREE_BRIDGING_TRAITS(CTFont, NSFont)
+ #else
+ WTF_DECLARE_TOLL_FREE_BRIDGING_TRAITS(CTFont, UIFont)
+ #endif
++#if HAVE(IOSURFACE)
+ WTF_DECLARE_TOLL_FREE_BRIDGING_TRAITS(IOSurface, ::IOSurface)
++#endif
+ 
+ template<> struct CFTollFreeBridgingTraits<CFBooleanRef> { using BridgedType = NSNumber *; };
+ 
+diff --git a/Source/WTF/wtf/darwin/DispatchOSObject.h b/Source/WTF/wtf/darwin/DispatchOSObject.h
+index c41971daf..7e110fbb1 100644
+--- a/Source/WTF/wtf/darwin/DispatchOSObject.h
++++ b/Source/WTF/wtf/darwin/DispatchOSObject.h
+@@ -29,6 +29,18 @@
+ #include <wtf/OSObjectPtr.h>
+ #include <wtf/darwin/TypeCastsOSObject.h>
+ 
++// On the iOS 6 SDK dispatch_queue_global_t does not exist; the compat header
++// aliases it to dispatch_queue_t, so it must not get its own specializations.
++#if defined(WEBKIT_IOS6)
++#define WTF_OS_OBJECT_DISPATCH_TYPES(M) \
++    M(dispatch_data) \
++    M(dispatch_group) \
++    M(dispatch_io) \
++    M(dispatch_object) \
++    M(dispatch_queue) \
++    M(dispatch_semaphore) \
++    M(dispatch_source)
++#else
+ #define WTF_OS_OBJECT_DISPATCH_TYPES(M) \
+     M(dispatch_data) \
+     M(dispatch_group) \
+@@ -38,6 +50,7 @@
+     M(dispatch_queue_global) \
+     M(dispatch_semaphore) \
+     M(dispatch_source)
++#endif
+ 
+ // Forward declarations for dispatch base struct types.
+ WTF_EXTERN_C_BEGIN
+diff --git a/Source/WTF/wtf/darwin/NetworkOSObject.h b/Source/WTF/wtf/darwin/NetworkOSObject.h
+index 7fce6fa97..478d1d9e7 100644
+--- a/Source/WTF/wtf/darwin/NetworkOSObject.h
++++ b/Source/WTF/wtf/darwin/NetworkOSObject.h
+@@ -29,11 +29,17 @@
+ #include <wtf/OSObjectPtr.h>
+ #include <wtf/darwin/TypeCastsOSObject.h>
+ 
++#if defined(WEBKIT_IOS6)
++#define WTF_OS_OBJECT_NETWORK_TYPES(M) \
++    M(nw_endpoint) \
++    M(nw_path)
++#else
+ #define WTF_OS_OBJECT_NETWORK_TYPES(M) \
+     M(nw_endpoint) \
+     M(nw_path) \
+     M(nw_resolution_report) \
+     M(nw_resolver_config)
++#endif
+ 
+ // Forward declarations for network base struct types.
+ WTF_EXTERN_C_BEGIN
+diff --git a/Source/WTF/wtf/darwin/OSLogPrintStream.mm b/Source/WTF/wtf/darwin/OSLogPrintStream.mm
+index 25e98aff6..9ca042930 100644
+--- a/Source/WTF/wtf/darwin/OSLogPrintStream.mm
++++ b/Source/WTF/wtf/darwin/OSLogPrintStream.mm
+@@ -46,8 +46,9 @@ OSLogPrintStream::~OSLogPrintStream()
+ 
+ std::unique_ptr<OSLogPrintStream> OSLogPrintStream::open(const char* subsystem, const char* category, os_log_type_t logType)
+ {
+-    os_log_t log = os_log_create(subsystem, category);
+-    return makeUnique<OSLogPrintStream>(log, logType);
++    UNUSED_PARAM(subsystem);
++    UNUSED_PARAM(category);
++    return makeUnique<OSLogPrintStream>(nullptr, logType);
+ }
+ 
+ void OSLogPrintStream::vprintf(const char* format, va_list argList)
+@@ -75,7 +76,7 @@ ALLOW_NONLITERAL_FORMAT_END
+         if (buffer[offset] == '\n') {
+             // Set the new line to a null character so os_log stops copying there.
+             buffer[offset] = '\0';
+-            os_log_with_type(m_log, m_logType, "%{public}s", buffer.data());
++            fprintf(stderr, "%s\n", buffer.data());
+             skip(buffer, offset + 1);
+             newOffset -= offset + 1;
+             offset = 0;
+diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
+index d1c792446..b8e88e762 100644
+--- a/Source/WebCore/CMakeLists.txt
++++ b/Source/WebCore/CMakeLists.txt
+@@ -2270,7 +2270,7 @@ if (USE_ANGLE_EGL)
+     )
+ elseif (USE_LIBEPOXY)
+     list(APPEND WebCore_LIBRARIES Epoxy::Epoxy)
+-else ()
++elseif (ENABLE_WEBGL)
+     list(APPEND WebCore_LIBRARIES OpenGL::GLES)
+ 
+     list(APPEND WebCore_SYSTEM_INCLUDE_DIRECTORIES
+diff --git a/Source/WebCore/Modules/ShapeDetection/Implementation/Cocoa/VisionUtilities.mm b/Source/WebCore/Modules/ShapeDetection/Implementation/Cocoa/VisionUtilities.mm
+index 12e7c9280..108f4f82d 100644
+--- a/Source/WebCore/Modules/ShapeDetection/Implementation/Cocoa/VisionUtilities.mm
++++ b/Source/WebCore/Modules/ShapeDetection/Implementation/Cocoa/VisionUtilities.mm
+@@ -67,6 +67,12 @@ Vector<FloatPoint> convertCornerPoints(const FloatSize& imageSize, VNRectangleOb
+     return { topLeft, topRight, bottomRight, bottomLeft };
+ }
+ 
++#if defined(WEBKIT_IOS6)
++void configureRequestToUseCPUOrGPU(VNRequest *request)
++{
++    UNUSED_PARAM(request);
++}
++#else
+ void configureRequestToUseCPUOrGPU(VNRequest *request)
+ {
+     NSError *error = nil;
+@@ -95,6 +101,7 @@ void configureRequestToUseCPUOrGPU(VNRequest *request)
+         }
+     }
+ }
++#endif
+ 
+ } // namespace WebCore::ShapeDetection
+ 
+diff --git a/Source/WebCore/Modules/compression/CompressionStream.cpp b/Source/WebCore/Modules/compression/CompressionStream.cpp
+index a1cfae2a1..66be6c3f9 100644
+--- a/Source/WebCore/Modules/compression/CompressionStream.cpp
++++ b/Source/WebCore/Modules/compression/CompressionStream.cpp
+@@ -48,7 +48,7 @@ bool CompressionStream::initializeIfNecessary(Algorithm algorithm, Operation ope
+ {
+     if (m_isInitialized)
+         return true;
+-#if PLATFORM(COCOA)
++#if PLATFORM(COCOA) && !defined(WEBKIT_IOS6)
+     switch (algorithm) {
+     case Algorithm::Brotli:
+         auto result = compression_stream_init(&m_stream, operation == Operation::Compression ? COMPRESSION_STREAM_ENCODE : COMPRESSION_STREAM_DECODE, COMPRESSION_BROTLI);
+diff --git a/Source/WebCore/PAL/pal/SourcesCocoa.txt b/Source/WebCore/PAL/pal/SourcesCocoa.txt
+index c5e0823f6..4fc015176 100644
+--- a/Source/WebCore/PAL/pal/SourcesCocoa.txt
++++ b/Source/WebCore/PAL/pal/SourcesCocoa.txt
+@@ -53,11 +53,11 @@ cocoa/LockdownModeCocoa.mm @nonARC
+ cocoa/MediaToolboxSoftLink.cpp
+ cocoa/NaturalLanguageSoftLink.mm @nonARC
+ cocoa/OpenGLSoftLinkCocoa.mm @nonARC
+-cocoa/PassKitSoftLink.mm @nonARC
++// ios6: cocoa/PassKitSoftLink.mm @nonARC
+ cocoa/QuartzCoreSoftLink.mm @nonARC
+ cocoa/RevealSoftLink.mm @nonARC
+ cocoa/ScreenTimeSoftLink.mm @nonARC
+-cocoa/SpeechSoftLink.mm @nonARC
++// ios6: cocoa/SpeechSoftLink.mm @nonARC
+ cocoa/TranslationUIServicesSoftLink.mm @nonARC
+ cocoa/UsageTrackingSoftLink.mm @nonARC
+ cocoa/VisionKitCoreSoftLink.mm @nonARC
+@@ -67,16 +67,16 @@ cocoa/WebContentRestrictionsSoftLink.mm @nonARC
+ cocoa/WebPrivacySoftLink.mm @nonARC
+ cocoa/WritingToolsUISoftLink.mm @nonARC
+ 
+-crypto/CryptoAlgorithmAESGCMCocoa.cpp
+-crypto/CryptoAlgorithmAESKWCocoaBridging.cpp
+-crypto/CryptoAlgorithmEd25519CocoaBridging.cpp
+-crypto/CryptoAlgorithmHKDFCocoaBridging.cpp
+-crypto/CryptoAlgorithmHMACCocoaBridging.cpp
+-crypto/CryptoAlgorithmX25519CocoaBridging.cpp
+-crypto/CryptoEDKeyBridging.cpp
+-crypto/PlatformECKey.cpp
++// ios6: crypto/CryptoAlgorithmAESGCMCocoa.cpp
++// ios6: crypto/CryptoAlgorithmAESKWCocoaBridging.cpp
++// ios6: crypto/CryptoAlgorithmEd25519CocoaBridging.cpp
++// ios6: crypto/CryptoAlgorithmHKDFCocoaBridging.cpp
++// ios6: crypto/CryptoAlgorithmHMACCocoaBridging.cpp
++// ios6: crypto/CryptoAlgorithmX25519CocoaBridging.cpp
++// ios6: crypto/CryptoEDKeyBridging.cpp
++// ios6: crypto/PlatformECKey.cpp
+ 
+-crypto/commoncrypto/CryptoDigestCommonCrypto.cpp
++// ios6: crypto/commoncrypto/CryptoDigestCommonCrypto.cpp
+ 
+ mac/DataDetectorsSoftLink.mm @nonARC
+ mac/LookupSoftLink.mm @nonARC
+diff --git a/Source/WebCore/PAL/pal/spi/cocoa/NetworkSPI.h b/Source/WebCore/PAL/pal/spi/cocoa/NetworkSPI.h
+index 1142c1fe8..335a2b927 100644
+--- a/Source/WebCore/PAL/pal/spi/cocoa/NetworkSPI.h
++++ b/Source/WebCore/PAL/pal/spi/cocoa/NetworkSPI.h
+@@ -163,6 +163,8 @@ typedef enum {
+     nw_resolver_class_designated_direct = 2,
+ } nw_resolver_class_t;
+ 
++NW_OBJECT_DECL(nw_resolver_config);
++
+ OS_OBJECT_RETURNS_RETAINED nw_resolver_config_t nw_resolver_config_create(void);
+ void nw_resolver_config_set_protocol(nw_resolver_config_t, nw_resolver_protocol_t);
+ void nw_resolver_config_set_class(nw_resolver_config_t, nw_resolver_class_t);
+diff --git a/Source/WebCore/PlatformCocoa.cmake b/Source/WebCore/PlatformCocoa.cmake
+index c2866e3a3..a836692c2 100644
+--- a/Source/WebCore/PlatformCocoa.cmake
++++ b/Source/WebCore/PlatformCocoa.cmake
+@@ -18,52 +18,177 @@ target_compile_options(WebCore PRIVATE
+ 
+ target_compile_options(WebCore PRIVATE ${WEBKIT_PRIVATE_FRAMEWORKS_COMPILE_FLAG})
+ 
+-target_link_options(WebCore PRIVATE -weak_framework BrowserEngineKit)
++find_library(BROWSERENGINEKIT_LIBRARY BrowserEngineKit)
++if (BROWSERENGINEKIT_LIBRARY)
++    target_link_options(WebCore PRIVATE -weak_framework BrowserEngineKit)
++endif ()
+ 
+ target_link_options(WebCore PRIVATE
+     -Wl,-unexported_symbols_list,${WEBCORE_DIR}/Configurations/WebCore.unexp
+ )
+ 
+ find_library(ACCELERATE_LIBRARY Accelerate)
++
++if (NOT ACCELERATE_LIBRARY)  # ios6: allow missing frameworks
++
++    set(ACCELERATE_LIBRARY "")
++
++endif ()
+ find_library(AUDIOTOOLBOX_LIBRARY AudioToolbox)
++if (NOT AUDIOTOOLBOX_LIBRARY)  # ios6: allow missing frameworks
++    set(AUDIOTOOLBOX_LIBRARY "")
++endif ()
+ find_library(AVFOUNDATION_LIBRARY AVFoundation)
++if (NOT AVFOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++    set(AVFOUNDATION_LIBRARY "")
++endif ()
+ find_library(CFNETWORK_LIBRARY CFNetwork)
++if (NOT CFNETWORK_LIBRARY)  # ios6: allow missing frameworks
++    set(CFNETWORK_LIBRARY "")
++endif ()
+ find_library(COMPRESSION_LIBRARY Compression)
++if (NOT COMPRESSION_LIBRARY)  # ios6: allow missing frameworks
++    set(COMPRESSION_LIBRARY "")
++endif ()
+ find_library(COREAUDIO_LIBRARY CoreAudio)
++if (NOT COREAUDIO_LIBRARY)  # ios6: allow missing frameworks
++    set(COREAUDIO_LIBRARY "")
++endif ()
+ find_library(COREMEDIA_LIBRARY CoreMedia)
++if (NOT COREMEDIA_LIBRARY)  # ios6: allow missing frameworks
++    set(COREMEDIA_LIBRARY "")
++endif ()
+ find_library(FONTPARSER_LIBRARY FontParser HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks/FontServices.framework)
++if (NOT FONTPARSER_LIBRARY)  # ios6: allow missing frameworks
++    set(FONTPARSER_LIBRARY "")
++endif ()
+ find_library(IOKIT_LIBRARY IOKit)
++if (NOT IOKIT_LIBRARY)  # ios6: allow missing frameworks
++    set(IOKIT_LIBRARY "")
++endif ()
+ find_library(IOSURFACE_LIBRARY IOSurface)
++if (NOT IOSURFACE_LIBRARY)  # ios6: allow missing frameworks
++    set(IOSURFACE_LIBRARY "")
++endif ()
++if (NOT IOSURFACE_LIBRARY)
++    set(IOSURFACE_LIBRARY "")
++endif ()
+ find_library(LIBACCESSIBILITY_LIBRARY Accessibility PATHS ${CMAKE_OSX_SYSROOT}/usr/lib NO_CMAKE_FIND_ROOT_PATH NO_DEFAULT_PATH)
++if (NOT LIBACCESSIBILITY_LIBRARY)  # ios6: allow missing frameworks
++    set(LIBACCESSIBILITY_LIBRARY "")
++endif ()
+ find_library(ACCESSIBILITYSUPPORT_LIBRARY AccessibilitySupport HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT ACCESSIBILITYSUPPORT_LIBRARY)  # ios6: allow missing frameworks
++    set(ACCESSIBILITYSUPPORT_LIBRARY "")
++endif ()
+ find_library(METAL_LIBRARY Metal)
++if (NOT METAL_LIBRARY)  # ios6: allow missing frameworks
++    set(METAL_LIBRARY "")
++endif ()
+ find_library(NETWORKEXTENSION_LIBRARY NetworkExtension)
++if (NOT NETWORKEXTENSION_LIBRARY)  # ios6: allow missing frameworks
++    set(NETWORKEXTENSION_LIBRARY "")
++endif ()
+ find_library(QUARTZCORE_LIBRARY QuartzCore)
++if (NOT QUARTZCORE_LIBRARY)  # ios6: allow missing frameworks
++    set(QUARTZCORE_LIBRARY "")
++endif ()
+ find_library(SECURITY_LIBRARY Security)
++if (NOT SECURITY_LIBRARY)  # ios6: allow missing frameworks
++    set(SECURITY_LIBRARY "")
++endif ()
+ find_library(SYSTEMCONFIGURATION_LIBRARY SystemConfiguration)
++if (NOT SYSTEMCONFIGURATION_LIBRARY)  # ios6: allow missing frameworks
++    set(SYSTEMCONFIGURATION_LIBRARY "")
++endif ()
+ find_library(UNIFORMTYPEIDENTIFIERS_LIBRARY UniformTypeIdentifiers)
++if (NOT UNIFORMTYPEIDENTIFIERS_LIBRARY)  # ios6: allow missing frameworks
++    set(UNIFORMTYPEIDENTIFIERS_LIBRARY "")
++endif ()
+ find_library(VIDEOTOOLBOX_LIBRARY VideoToolbox)
++if (NOT VIDEOTOOLBOX_LIBRARY)  # ios6: allow missing frameworks
++    set(VIDEOTOOLBOX_LIBRARY "")
++endif ()
+ find_library(XML2_LIBRARY XML2)
++if (NOT XML2_LIBRARY)  # ios6: allow missing frameworks
++    set(XML2_LIBRARY "")
++endif ()
+ find_library(APPLICATIONSERVICES_LIBRARY ApplicationServices)
++if (NOT APPLICATIONSERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(APPLICATIONSERVICES_LIBRARY "")
++endif ()
+ find_library(AUDIOUNIT_LIBRARY AudioUnit)
++if (NOT AUDIOUNIT_LIBRARY)  # ios6: allow missing frameworks
++    set(AUDIOUNIT_LIBRARY "")
++endif ()
+ find_library(CARBON_LIBRARY Carbon)
++if (NOT CARBON_LIBRARY)  # ios6: allow missing frameworks
++    set(CARBON_LIBRARY "")
++endif ()
+ find_library(COCOA_LIBRARY Cocoa)
++if (NOT COCOA_LIBRARY)  # ios6: allow missing frameworks
++    set(COCOA_LIBRARY "")
++endif ()
+ find_library(CORESERVICES_LIBRARY CoreServices)
++if (NOT CORESERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(CORESERVICES_LIBRARY "")
++endif ()
+ find_library(DISKARBITRATION_LIBRARY DiskArbitration)
++if (NOT DISKARBITRATION_LIBRARY)  # ios6: allow missing frameworks
++    set(DISKARBITRATION_LIBRARY "")
++endif ()
+ find_library(OPENGL_LIBRARY OpenGL)
++if (NOT OPENGL_LIBRARY)  # ios6: allow missing frameworks
++    set(OPENGL_LIBRARY "")
++endif ()
+ find_library(QUARTZ_LIBRARY Quartz)
++if (NOT QUARTZ_LIBRARY)  # ios6: allow missing frameworks
++    set(QUARTZ_LIBRARY "")
++endif ()
+ find_library(LOOKUP_FRAMEWORK Lookup HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT LOOKUP_FRAMEWORK)  # ios6: allow missing frameworks
++    set(LOOKUP_FRAMEWORK "")
++endif ()
+ find_library(APPSUPPORT_LIBRARY AppSupport HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT APPSUPPORT_LIBRARY)  # ios6: allow missing frameworks
++    set(APPSUPPORT_LIBRARY "")
++endif ()
+ find_library(IOSURFACEACCELERATOR_LIBRARY IOSurfaceAccelerator HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT IOSURFACEACCELERATOR_LIBRARY)  # ios6: allow missing frameworks
++    set(IOSURFACEACCELERATOR_LIBRARY "")
++endif ()
+ find_library(IMAGEIO_LIBRARY ImageIO)
++if (NOT IMAGEIO_LIBRARY)  # ios6: allow missing frameworks
++    set(IMAGEIO_LIBRARY "")
++endif ()
+ find_library(CORETEXT_LIBRARY CoreText)
++if (NOT CORETEXT_LIBRARY)  # ios6: allow missing frameworks
++    set(CORETEXT_LIBRARY "")
++endif ()
+ find_library(COREIMAGE_LIBRARY CoreImage)
++if (NOT COREIMAGE_LIBRARY)  # ios6: allow missing frameworks
++    set(COREIMAGE_LIBRARY "")
++endif ()
+ find_library(COREVIDEO_LIBRARY CoreVideo)
++if (NOT COREVIDEO_LIBRARY)  # ios6: allow missing frameworks
++    set(COREVIDEO_LIBRARY "")
++endif ()
+ find_library(GRAPHICSSERVICES_LIBRARY GraphicsServices HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT GRAPHICSSERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(GRAPHICSSERVICES_LIBRARY "")
++endif ()
+ find_library(MOBILEGESTALT_LIBRARY MobileGestalt HINTS ${CMAKE_OSX_SYSROOT}/usr/lib)
++if (NOT MOBILEGESTALT_LIBRARY)  # ios6: allow missing frameworks
++    set(MOBILEGESTALT_LIBRARY "")
++endif ()
+ find_library(MOBILECORESERVICES_LIBRARY MobileCoreServices)
++if (NOT MOBILECORESERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(MOBILECORESERVICES_LIBRARY "")
++endif ()
+ find_library(UIKIT_LIBRARY UIKit)
+-
++if (NOT UIKIT_LIBRARY)  # ios6: allow missing frameworks
++    set(UIKIT_LIBRARY "")
++endif ()
+ # SQLite3::SQLite3 and ZLIB::ZLIB are declared in OptionsCocoa.cmake; only search
+ # if missing (e.g. ANGLE/WebCore configured standalone).
+ if (NOT TARGET SQLite3::SQLite3)
+@@ -184,11 +309,23 @@ endif ()
+ set(WebCore_EXTRA_LINK_OPTIONS "SHELL:-Wl,-force_load $<TARGET_FILE:PAL>")
+ 
+ find_library(COREUI_FRAMEWORK CoreUI HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++
++if (NOT COREUI_FRAMEWORK)  # ios6: allow missing frameworks
++
++    set(COREUI_FRAMEWORK "")
++
++endif ()
+ if (COREUI_FRAMEWORK)
+     list(APPEND WebCore_LIBRARIES ${COREUI_FRAMEWORK})
+ endif ()
+ 
+ find_library(DATADETECTORSCORE_FRAMEWORK DataDetectorsCore HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++
++if (NOT DATADETECTORSCORE_FRAMEWORK)  # ios6: allow missing frameworks
++
++    set(DATADETECTORSCORE_FRAMEWORK "")
++
++endif ()
+ if (DATADETECTORSCORE_FRAMEWORK)
+     list(APPEND WebCore_LIBRARIES ${DATADETECTORSCORE_FRAMEWORK})
+ endif ()
+@@ -413,23 +550,23 @@ list(APPEND WebCore_SOURCES
+     platform/graphics/avfoundation/MediaSelectionGroupAVFObjC.mm
+     platform/graphics/avfoundation/WebAVSampleBufferListener.mm
+ 
+-    platform/graphics/avfoundation/objc/AVAssetTrackUtilities.mm
+-    platform/graphics/avfoundation/objc/AudioTrackPrivateAVFObjC.mm
+-    platform/graphics/avfoundation/objc/AudioTrackPrivateMediaSourceAVFObjC.cpp
+-    platform/graphics/avfoundation/objc/CDMInstanceFairPlayStreamingAVFObjC.mm
+-    platform/graphics/avfoundation/objc/CDMSessionAVContentKeySession.mm
+-    platform/graphics/avfoundation/objc/CDMSessionAVFoundationObjC.mm
+-    platform/graphics/avfoundation/objc/ImageDecoderAVFObjC.mm
+-    platform/graphics/avfoundation/objc/InbandTextTrackPrivateAVFObjC.mm
+-    platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.mm
+-    platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaSourceAVFObjC.mm
+-    platform/graphics/avfoundation/objc/MediaSampleAVFObjC.mm
+-    platform/graphics/avfoundation/objc/MediaSourcePrivateAVFObjC.mm
+-    platform/graphics/avfoundation/objc/QueuedVideoOutput.mm
+-    platform/graphics/avfoundation/objc/SourceBufferPrivateAVFObjC.mm
+-    platform/graphics/avfoundation/objc/VideoTrackPrivateAVFObjC.cpp
+-    platform/graphics/avfoundation/objc/VideoTrackPrivateMediaSourceAVFObjC.mm
+-    platform/graphics/avfoundation/objc/WebCoreAVFResourceLoader.mm
++    # ios6: platform/graphics/avfoundation/objc/AVAssetTrackUtilities.mm
++    # ios6: platform/graphics/avfoundation/objc/AudioTrackPrivateAVFObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/AudioTrackPrivateMediaSourceAVFObjC.cpp
++    # ios6: platform/graphics/avfoundation/objc/CDMInstanceFairPlayStreamingAVFObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/CDMSessionAVContentKeySession.mm
++    # ios6: platform/graphics/avfoundation/objc/CDMSessionAVFoundationObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/ImageDecoderAVFObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/InbandTextTrackPrivateAVFObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaSourceAVFObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/MediaSampleAVFObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/MediaSourcePrivateAVFObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/QueuedVideoOutput.mm
++    # ios6: platform/graphics/avfoundation/objc/SourceBufferPrivateAVFObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/VideoTrackPrivateAVFObjC.cpp
++    # ios6: platform/graphics/avfoundation/objc/VideoTrackPrivateMediaSourceAVFObjC.mm
++    # ios6: platform/graphics/avfoundation/objc/WebCoreAVFResourceLoader.mm
+ 
+     platform/graphics/ca/FrameProcessIndicators.cpp
+     platform/graphics/ca/GraphicsLayerCA.cpp
+@@ -488,15 +625,15 @@ list(APPEND WebCore_SOURCES
+     platform/graphics/cocoa/FontPlatformDataCocoa.mm
+     platform/graphics/cocoa/GraphicsContextCocoa.mm
+     platform/graphics/cocoa/GraphicsContextGLCocoa.mm
+-    platform/graphics/cocoa/IOSurface.mm
+-    platform/graphics/cocoa/IOSurfacePoolCocoa.mm
++    # ios6: IOSurface has no binary on this device
++    # ios6: no IOSurface on this device
+     platform/graphics/cocoa/IntRectCocoa.mm
+     platform/graphics/cocoa/MediaPlayerEnumsCocoa.mm
+     platform/graphics/cocoa/TextTransformCocoa.cpp
+     platform/graphics/cocoa/UnrealizedCoreTextFont.cpp
+     platform/graphics/cocoa/WebActionDisablingCALayerDelegate.mm
+     platform/graphics/cocoa/WebCoreCALayerExtras.mm
+-    platform/graphics/cocoa/WebCoreDecompressionSession.mm
++    # ios6: platform/graphics/cocoa/WebCoreDecompressionSession.mm
+     platform/graphics/cocoa/WebLayer.mm
+     platform/graphics/cocoa/WebMAudioUtilitiesCocoa.mm
+     platform/graphics/cocoa/WebProcessGraphicsContextGLCocoa.mm
+@@ -1323,13 +1460,13 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+     platform/graphics/avfoundation/WebAVSampleBufferListener.h
+     platform/graphics/avfoundation/WebMediaSessionManagerMac.h
+ 
+-    platform/graphics/avfoundation/objc/AVAssetMIMETypeCache.h
+-    platform/graphics/avfoundation/objc/ImageDecoderAVFObjC.h
+-    platform/graphics/avfoundation/objc/LocalSampleBufferDisplayLayer.h
+-    platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.h
+-    platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaStreamAVFObjC.h
+-    platform/graphics/avfoundation/objc/MediaSampleAVFObjC.h
+-    platform/graphics/avfoundation/objc/VideoLayerManagerObjC.h
++    # ios6: platform/graphics/avfoundation/objc/AVAssetMIMETypeCache.h
++    # ios6: platform/graphics/avfoundation/objc/ImageDecoderAVFObjC.h
++    # ios6: platform/graphics/avfoundation/objc/LocalSampleBufferDisplayLayer.h
++    # ios6: platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.h
++    # ios6: platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaStreamAVFObjC.h
++    # ios6: platform/graphics/avfoundation/objc/MediaSampleAVFObjC.h
++    # ios6: platform/graphics/avfoundation/objc/VideoLayerManagerObjC.h
+ 
+     platform/graphics/ca/FrameProcessIndicators.h
+     platform/graphics/ca/GraphicsLayerCA.h
+@@ -1378,7 +1515,7 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+     platform/graphics/cocoa/HEVCUtilitiesCocoa.h
+     platform/graphics/cocoa/IOSurface.h
+     platform/graphics/cocoa/IOSurfaceDrawingBuffer.h
+-    platform/graphics/cocoa/ISOBMFFPreParser.h
++    # ios6: platform/graphics/cocoa/ISOBMFFPreParser.h
+     platform/graphics/cocoa/ISOBMFFTrackInfoParser.h
+     platform/graphics/cocoa/MediaPlayerEnumsCocoa.h
+     platform/graphics/cocoa/NullPlaybackSessionInterface.h
+@@ -1394,7 +1531,7 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+     platform/graphics/cocoa/VideoTargetFactory.h
+     platform/graphics/cocoa/WebActionDisablingCALayerDelegate.h
+     platform/graphics/cocoa/WebCoreCALayerExtras.h
+-    platform/graphics/cocoa/WebCoreDecompressionSession.h
++    # ios6: platform/graphics/cocoa/WebCoreDecompressionSession.h
+     platform/graphics/cocoa/WebLayer.h
+     platform/graphics/cocoa/WebMAudioUtilitiesCocoa.h
+ 
+@@ -1510,6 +1647,7 @@ list(APPEND WebCore_PRIVATE_FRAMEWORK_HEADERS
+     accessibility/cocoa/CocoaAccessibilityConstants.h
+ )
+ 
++if (NOT WEBKIT_IOS6_COMPAT_LIB)
+ list(APPEND WebCore_IDL_FILES
+     Modules/applepay/ApplePayAutomaticReloadPaymentRequest.idl
+     Modules/applepay/ApplePayCancelEvent.idl
+@@ -1570,6 +1708,7 @@ list(APPEND WebCore_IDL_FILES
+     Modules/applepay/paymentrequest/ApplePayPaymentCompleteDetails.idl
+     Modules/applepay/paymentrequest/ApplePayRequest.idl
+ )
++endif ()
+ 
+ set(FEATURE_DEFINES_OBJECTIVE_C "LANGUAGE_OBJECTIVE_C=1 ${FEATURE_DEFINES_WITH_SPACE_SEPARATOR}")
+ set(ADDITIONAL_BINDINGS_DEPENDENCIES
+diff --git a/Source/WebCore/Sources.txt b/Source/WebCore/Sources.txt
+index 54c86a129..9f7c02767 100644
+--- a/Source/WebCore/Sources.txt
++++ b/Source/WebCore/Sources.txt
+@@ -107,37 +107,37 @@ Modules/WebGPU/GPUValidationError.cpp
+ Modules/WebGPU/GPUVertexAttribute.cpp
+ Modules/WebGPU/GPUVertexBufferLayout.cpp
+ Modules/WebGPU/GPUVertexState.cpp
+-Modules/WebGPU/Implementation/WebGPUAdapterImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUBindGroupImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUBindGroupLayoutImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUBufferImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUCommandBufferImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUCommandEncoderImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUCompositorIntegrationImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUComputePassEncoderImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUComputePipelineImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUConvertToBackingContext.cpp
+-Modules/WebGPU/Implementation/WebGPUCreateImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUDeviceImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUDowncastConvertToBackingContext.cpp
+-Modules/WebGPU/Implementation/WebGPUExternalTextureImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUPipelineLayoutImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUPresentationContextImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUQuerySetImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUQueueImpl.cpp
+-Modules/WebGPU/Implementation/WebGPURenderBundleEncoderImpl.cpp
+-Modules/WebGPU/Implementation/WebGPURenderBundleImpl.cpp
+-Modules/WebGPU/Implementation/WebGPURenderPassEncoderImpl.cpp
+-Modules/WebGPU/Implementation/WebGPURenderPipelineImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUSamplerImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUShaderModuleImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUTextureImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUTextureViewImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUXRBindingImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUXRProjectionLayerImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUXRSubImageImpl.cpp
+-Modules/WebGPU/Implementation/WebGPUXRViewImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUAdapterImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUBindGroupImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUBindGroupLayoutImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUBufferImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUCommandBufferImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUCommandEncoderImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUCompositorIntegrationImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUComputePassEncoderImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUComputePipelineImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUConvertToBackingContext.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUCreateImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUDeviceImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUDowncastConvertToBackingContext.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUExternalTextureImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUPipelineLayoutImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUPresentationContextImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUQuerySetImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUQueueImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPURenderBundleEncoderImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPURenderBundleImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPURenderPassEncoderImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPURenderPipelineImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUSamplerImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUShaderModuleImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUTextureImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUTextureViewImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUXRBindingImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUXRProjectionLayerImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUXRSubImageImpl.cpp
++// ios6: Modules/WebGPU/Implementation/WebGPUXRViewImpl.cpp
+ Modules/WebGPU/WGSLLanguageFeatures.cpp
+ Modules/airplay/WebKitPlaybackTargetAvailabilityEvent.cpp
+ Modules/applicationmanifest/ApplicationManifestParser.cpp
+diff --git a/Source/WebCore/SourcesCMakeCocoa.txt b/Source/WebCore/SourcesCMakeCocoa.txt
+index 66b6ac2bb..d96232229 100644
+--- a/Source/WebCore/SourcesCMakeCocoa.txt
++++ b/Source/WebCore/SourcesCMakeCocoa.txt
+@@ -99,8 +99,8 @@ platform/graphics/angle/ANGLEUtilities.cpp
+ 
+ platform/graphics/avfoundation/CDMFairPlayStreaming.cpp
+ 
+-platform/graphics/avfoundation/objc/CDMInstanceFairPlayStreamingAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/objc/QueuedVideoOutput.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/CDMInstanceFairPlayStreamingAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/QueuedVideoOutput.mm @nonARC
+ 
+ platform/graphics/cocoa/ANGLEUtilitiesCocoa.mm @nonARC
+ platform/graphics/cocoa/MediaPlayerEnumsCocoa.mm @nonARC
+diff --git a/Source/WebCore/SourcesCocoa.txt b/Source/WebCore/SourcesCocoa.txt
+index 75234a3b6..4602763e0 100644
+--- a/Source/WebCore/SourcesCocoa.txt
++++ b/Source/WebCore/SourcesCocoa.txt
+@@ -21,62 +21,62 @@
+ // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ // THE POSSIBILITY OF SUCH DAMAGE.
+ 
+-JSApplePayAMSUIRequest.cpp
+-JSApplePayAutomaticReloadPaymentRequest.cpp
+-JSApplePayCancelEvent.cpp
+-JSApplePayContactField.cpp
+-JSApplePayCouponCodeChangedEvent.cpp
+-JSApplePayCouponCodeDetails.cpp
+-JSApplePayCouponCodeUpdate.cpp
+-JSApplePayDateComponents.cpp
+-JSApplePayDateComponentsRange.cpp
+-JSApplePayDeferredPaymentRequest.cpp
+-JSApplePayDisbursementRequest.cpp
+-JSApplePayDetailsUpdateBase.cpp
+-JSApplePayError.cpp
+-JSApplePayErrorCode.cpp
+-JSApplePayErrorContactField.cpp
+-JSApplePayFeature.cpp
+-JSApplePayInstallmentConfiguration.cpp
+-JSApplePayInstallmentItem.cpp
+-JSApplePayInstallmentItemType.cpp
+-JSApplePayInstallmentRetailChannel.cpp
+-JSApplePayLaterAvailability.cpp
+-JSApplePayLineItem.cpp
+-JSApplePayMerchantCapability.cpp
+-JSApplePayModifier.cpp
+-JSApplePayPayment.cpp
+-JSApplePayPaymentAuthorizationResult.cpp
+-JSApplePayPaymentAuthorizedEvent.cpp
+-JSApplePayPaymentCompleteDetails.cpp
+-JSApplePayPaymentContact.cpp
+-JSApplePayPaymentMethod.cpp
+-JSApplePayPaymentMethodSelectedEvent.cpp
+-JSApplePayPaymentMethodType.cpp
+-JSApplePayPaymentMethodUpdate.cpp
+-JSApplePayPaymentOrderDetails.cpp
+-JSApplePayPaymentPass.cpp
+-JSApplePayPaymentRequest.cpp
+-JSApplePayPaymentTiming.cpp
+-JSApplePayPaymentTokenContext.cpp
+-JSApplePayRecurringPaymentDateUnit.cpp
+-JSApplePayRecurringPaymentRequest.cpp
+-JSApplePayRequest.cpp
+-JSApplePayRequestBase.cpp
+-JSApplePaySession.cpp
+-JSApplePaySessionError.cpp
+-JSApplePaySetup.cpp
+-JSApplePaySetupConfiguration.cpp
+-JSApplePaySetupFeature.cpp
+-JSApplePaySetupFeatureState.cpp
+-JSApplePaySetupFeatureType.cpp
+-JSApplePayShippingContactEditingMode.cpp
+-JSApplePayShippingContactSelectedEvent.cpp
+-JSApplePayShippingContactUpdate.cpp
+-JSApplePayShippingMethod.cpp
+-JSApplePayShippingMethodSelectedEvent.cpp
+-JSApplePayShippingMethodUpdate.cpp
+-JSApplePayValidateMerchantEvent.cpp
++// ios6: JSApplePayAMSUIRequest.cpp
++// ios6: JSApplePayAutomaticReloadPaymentRequest.cpp
++// ios6: JSApplePayCancelEvent.cpp
++// ios6: JSApplePayContactField.cpp
++// ios6: JSApplePayCouponCodeChangedEvent.cpp
++// ios6: JSApplePayCouponCodeDetails.cpp
++// ios6: JSApplePayCouponCodeUpdate.cpp
++// ios6: JSApplePayDateComponents.cpp
++// ios6: JSApplePayDateComponentsRange.cpp
++// ios6: JSApplePayDeferredPaymentRequest.cpp
++// ios6: JSApplePayDisbursementRequest.cpp
++// ios6: JSApplePayDetailsUpdateBase.cpp
++// ios6: JSApplePayError.cpp
++// ios6: JSApplePayErrorCode.cpp
++// ios6: JSApplePayErrorContactField.cpp
++// ios6: JSApplePayFeature.cpp
++// ios6: JSApplePayInstallmentConfiguration.cpp
++// ios6: JSApplePayInstallmentItem.cpp
++// ios6: JSApplePayInstallmentItemType.cpp
++// ios6: JSApplePayInstallmentRetailChannel.cpp
++// ios6: JSApplePayLaterAvailability.cpp
++// ios6: JSApplePayLineItem.cpp
++// ios6: JSApplePayMerchantCapability.cpp
++// ios6: JSApplePayModifier.cpp
++// ios6: JSApplePayPayment.cpp
++// ios6: JSApplePayPaymentAuthorizationResult.cpp
++// ios6: JSApplePayPaymentAuthorizedEvent.cpp
++// ios6: JSApplePayPaymentCompleteDetails.cpp
++// ios6: JSApplePayPaymentContact.cpp
++// ios6: JSApplePayPaymentMethod.cpp
++// ios6: JSApplePayPaymentMethodSelectedEvent.cpp
++// ios6: JSApplePayPaymentMethodType.cpp
++// ios6: JSApplePayPaymentMethodUpdate.cpp
++// ios6: JSApplePayPaymentOrderDetails.cpp
++// ios6: JSApplePayPaymentPass.cpp
++// ios6: JSApplePayPaymentRequest.cpp
++// ios6: JSApplePayPaymentTiming.cpp
++// ios6: JSApplePayPaymentTokenContext.cpp
++// ios6: JSApplePayRecurringPaymentDateUnit.cpp
++// ios6: JSApplePayRecurringPaymentRequest.cpp
++// ios6: JSApplePayRequest.cpp
++// ios6: JSApplePayRequestBase.cpp
++// ios6: JSApplePaySession.cpp
++// ios6: JSApplePaySessionError.cpp
++// ios6: JSApplePaySetup.cpp
++// ios6: JSApplePaySetupConfiguration.cpp
++// ios6: JSApplePaySetupFeature.cpp
++// ios6: JSApplePaySetupFeatureState.cpp
++// ios6: JSApplePaySetupFeatureType.cpp
++// ios6: JSApplePayShippingContactEditingMode.cpp
++// ios6: JSApplePayShippingContactSelectedEvent.cpp
++// ios6: JSApplePayShippingContactUpdate.cpp
++// ios6: JSApplePayShippingMethod.cpp
++// ios6: JSApplePayShippingMethodSelectedEvent.cpp
++// ios6: JSApplePayShippingMethodUpdate.cpp
++// ios6: JSApplePayValidateMerchantEvent.cpp
+ JSSpeechSynthesisErrorCode.cpp
+ JSSpeechSynthesisErrorEvent.cpp
+ JSSpeechSynthesisErrorEventInit.cpp
+@@ -86,37 +86,37 @@ Modules/ShapeDetection/Implementation/Cocoa/FaceDetectorImplementation.mm @nonAR
+ Modules/ShapeDetection/Implementation/Cocoa/TextDetectorImplementation.mm @nonARC
+ Modules/ShapeDetection/Implementation/Cocoa/VisionUtilities.mm @nonARC
+ Modules/airplay/WebMediaSessionManager.mm @nonARC
+-Modules/applepay/ApplePayCouponCodeChangedEvent.cpp
+-Modules/applepay/ApplePayCancelEvent.cpp
+-Modules/applepay/ApplePayContactField.cpp
+-Modules/applepay/ApplePayInstallmentConfigurationWebCore.cpp
+-Modules/applepay/ApplePayLogoSystemImage.mm @nonARC
+-Modules/applepay/ApplePayMerchantCapability.cpp
+-Modules/applepay/ApplePayPaymentAuthorizationResult.cpp
+-Modules/applepay/ApplePayPaymentAuthorizedEvent.cpp
+-Modules/applepay/ApplePayPaymentMethodSelectedEvent.cpp
+-Modules/applepay/ApplePayRequestBase.cpp
+-Modules/applepay/ApplePaySession.cpp
+-Modules/applepay/ApplePaySessionPaymentRequest.cpp
+-Modules/applepay/ApplePaySetup.cpp
+-Modules/applepay/ApplePaySetupFeature.mm @nonARC
+-Modules/applepay/ApplePayShippingContactSelectedEvent.cpp
+-Modules/applepay/ApplePayShippingMethodSelectedEvent.cpp
+-Modules/applepay/ApplePayValidateMerchantEvent.cpp
+-Modules/applepay/PaymentCoordinator.cpp
+-Modules/applepay/PaymentCoordinatorClient.cpp
+-Modules/applepay/PaymentInstallmentConfiguration.mm @nonARC
+-Modules/applepay/PaymentRequestValidator.mm @nonARC
+-Modules/applepay/PaymentSession.cpp
+-Modules/applepay/cocoa/PaymentAPIVersionCocoa.mm @nonARC
+-Modules/applepay/cocoa/PaymentCocoa.mm @nonARC
+-Modules/applepay/cocoa/PaymentContactCocoa.mm @nonARC
+-Modules/applepay/cocoa/PaymentMerchantSessionCocoa.mm @nonARC
+-Modules/applepay/cocoa/PaymentMethodCocoa.mm @nonARC
+-Modules/applepay/cocoa/PaymentSessionErrorCocoa.mm @nonARC
+-Modules/applepay/cocoa/PaymentSummaryItemsCocoa.mm @nonARC
+-Modules/applepay/paymentrequest/ApplePayPaymentHandler.cpp
+-Modules/applepay-ams-ui/ApplePayAMSUIPaymentHandler.cpp
++// ios6: Modules/applepay/ApplePayCouponCodeChangedEvent.cpp
++// ios6: Modules/applepay/ApplePayCancelEvent.cpp
++// ios6: Modules/applepay/ApplePayContactField.cpp
++// ios6: Modules/applepay/ApplePayInstallmentConfigurationWebCore.cpp
++// ios6: Modules/applepay/ApplePayLogoSystemImage.mm @nonARC
++// ios6: Modules/applepay/ApplePayMerchantCapability.cpp
++// ios6: Modules/applepay/ApplePayPaymentAuthorizationResult.cpp
++// ios6: Modules/applepay/ApplePayPaymentAuthorizedEvent.cpp
++// ios6: Modules/applepay/ApplePayPaymentMethodSelectedEvent.cpp
++// ios6: Modules/applepay/ApplePayRequestBase.cpp
++// ios6: Modules/applepay/ApplePaySession.cpp
++// ios6: Modules/applepay/ApplePaySessionPaymentRequest.cpp
++// ios6: Modules/applepay/ApplePaySetup.cpp
++// ios6: Modules/applepay/ApplePaySetupFeature.mm @nonARC
++// ios6: Modules/applepay/ApplePayShippingContactSelectedEvent.cpp
++// ios6: Modules/applepay/ApplePayShippingMethodSelectedEvent.cpp
++// ios6: Modules/applepay/ApplePayValidateMerchantEvent.cpp
++// ios6: Modules/applepay/PaymentCoordinator.cpp
++// ios6: Modules/applepay/PaymentCoordinatorClient.cpp
++// ios6: Modules/applepay/PaymentInstallmentConfiguration.mm @nonARC
++// ios6: Modules/applepay/PaymentRequestValidator.mm @nonARC
++// ios6: Modules/applepay/PaymentSession.cpp
++// ios6: Modules/applepay/cocoa/PaymentAPIVersionCocoa.mm @nonARC
++// ios6: Modules/applepay/cocoa/PaymentCocoa.mm @nonARC
++// ios6: Modules/applepay/cocoa/PaymentContactCocoa.mm @nonARC
++// ios6: Modules/applepay/cocoa/PaymentMerchantSessionCocoa.mm @nonARC
++// ios6: Modules/applepay/cocoa/PaymentMethodCocoa.mm @nonARC
++// ios6: Modules/applepay/cocoa/PaymentSessionErrorCocoa.mm @nonARC
++// ios6: Modules/applepay/cocoa/PaymentSummaryItemsCocoa.mm @nonARC
++// ios6: Modules/applepay/paymentrequest/ApplePayPaymentHandler.cpp
++// ios6: Modules/applepay-ams-ui/ApplePayAMSUIPaymentHandler.cpp
+ Modules/async-clipboard/ios/ClipboardImageReaderIOS.mm @nonARC
+ Modules/async-clipboard/mac/ClipboardImageReaderMac.mm @nonARC
+ Modules/compression/cocoa/CompressionStreamEncoderCocoa.mm @nonARC
+@@ -126,10 +126,10 @@ Modules/notifications/NotificationOptionsPayloadCocoa.mm @nonARC
+ Modules/notifications/NotificationPayloadCocoa.mm @nonARC
+ Modules/push-api/cocoa/PushCryptoCocoa.cpp
+ Modules/plugins/YouTubePluginReplacement.cpp
+-Modules/speech/cocoa/SpeechRecognizerCocoa.mm @nonARC
+-Modules/speech/cocoa/WebSpeechRecognizerTask.mm @nonARC
+-Modules/speech/cocoa/WebSpeechRecognizerTaskMock.mm @nonARC
+-Modules/system-preview/ARKitBadgeSystemImage.mm @nonARC
++// ios6: Modules/speech/cocoa/SpeechRecognizerCocoa.mm @nonARC
++// ios6: Modules/speech/cocoa/WebSpeechRecognizerTask.mm @nonARC
++// ios6: Modules/speech/cocoa/WebSpeechRecognizerTaskMock.mm @nonARC
++// ios6: Modules/system-preview/ARKitBadgeSystemImage.mm @nonARC
+ Modules/webdatabase/cocoa/DatabaseManagerCocoa.mm @nonARC
+ accessibility/cocoa/AXCoreObjectCocoa.mm @nonARC
+ accessibility/cocoa/AXObjectCacheCocoa.mm @nonARC
+@@ -287,12 +287,12 @@ platform/audio/ios/MediaDeviceRoute.mm @nonARC @no-unify
+ platform/audio/ios/MediaDeviceRouteController.mm @nonARC
+ platform/audio/ios/MediaSessionHelperIOS.mm @nonARC @no-unify
+ platform/audio/ios/MediaSessionManagerIOS.mm @nonARC @no-unify
+-platform/audio/ios/SpatialAudioPlaybackHelperIOS.mm @nonARC @no-unify
++// ios6: platform/audio/ios/SpatialAudioPlaybackHelperIOS.mm @nonARC @no-unify
+ platform/audio/mac/AudioOutputUnitAdaptorMac.cpp
+ platform/audio/mac/AudioHardwareListenerMac.cpp
+ platform/audio/mac/AudioSessionMac.mm @nonARC
+ platform/audio/mac/SharedRoutingArbitrator.mm @nonARC
+-platform/audio/mac/SpatialAudioPlaybackHelperMac.cpp
++// ios6: platform/audio/mac/SpatialAudioPlaybackHelperMac.cpp
+ platform/cf/KeyedDecoderCF.cpp
+ platform/cf/KeyedEncoderCF.cpp
+ platform/cf/MainThreadSharedTimerCF.cpp
+@@ -357,49 +357,49 @@ platform/gamepad/mac/LogitechGamepad.cpp
+ platform/gamepad/mac/MultiGamepadProvider.mm @nonARC
+ platform/gamepad/mac/StadiaHIDGamepad.cpp
+ platform/graphics/MediaPlaybackTargetPicker.cpp
+-platform/graphics/avfoundation/AVTrackPrivateAVFObjCImpl.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/AudioSourceProviderAVFObjC.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/AudioVideoRendererAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/FormatDescriptionUtilities.cpp
+-platform/graphics/avfoundation/ISOFairPlayStreamingPsshBox.cpp
+-platform/graphics/avfoundation/InbandMetadataTextTrackPrivateAVF.cpp
+-platform/graphics/avfoundation/InbandTextTrackPrivateAVF.cpp
+-platform/graphics/avfoundation/LegacyCDMPrivateAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/MediaPlaybackTargetCocoa.mm @nonARC
+-platform/graphics/avfoundation/MediaPlayerPrivateAVFoundation.cpp
+-platform/graphics/avfoundation/MediaSelectionGroupAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/SampleBufferDisplayLayer.cpp
+-platform/graphics/avfoundation/WebAVSampleBufferListener.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/WebMediaSessionManagerMac.cpp
+-platform/graphics/avfoundation/objc/AVAssetMIMETypeCache.mm @nonARC
+-platform/graphics/avfoundation/objc/AVAssetTrackUtilities.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/objc/AVOutputDeviceMenuControllerTargetPicker.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/objc/AVRoutePickerViewTargetPicker.mm @nonARC
+-platform/graphics/avfoundation/objc/AVStreamDataParserMIMETypeCache.mm @nonARC
+-platform/graphics/avfoundation/objc/AudioTrackPrivateAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/objc/AudioTrackPrivateMediaSourceAVFObjC.cpp
+-platform/graphics/avfoundation/objc/CDMFairPlayStreamingAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/objc/CDMSessionAVContentKeySession.mm @nonARC
+-platform/graphics/avfoundation/objc/CDMSessionAVFoundationObjC.mm @nonARC
+-platform/graphics/avfoundation/objc/ContentKeyGroupFactoryAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/objc/ImageDecoderAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/objc/InbandTextTrackPrivateAVFObjC.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/objc/InbandChapterTrackPrivateAVFObjC.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/objc/LocalSampleBufferDisplayLayer.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/objc/MediaPlaybackTargetPickerMac.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.mm @nonARC @no-unify-when(bundle<=8) @cost:9
+-platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaSourceAVFObjC.mm @nonARC @no-unify-when(bundle<=8) @cost:8
+-platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaStreamAVFObjC.mm @nonARC @no-unify-when(bundle<=8) @cost:6
+-platform/graphics/avfoundation/objc/MediaSampleAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/objc/MediaSourcePrivateAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/objc/SourceBufferPrivateAVFObjC.mm @nonARC @no-unify-when(bundle<=8) @cost:7
+-platform/graphics/avfoundation/objc/SourceBufferParserAVFObjC.mm @nonARC @no-unify-when(bundle<=8) @cost:5
+-platform/graphics/avfoundation/objc/TextTrackPrivateMediaSourceAVFObjC.cpp
+-platform/graphics/avfoundation/objc/VideoLayerManagerObjC.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/objc/VideoTrackPrivateAVFObjC.cpp
+-platform/graphics/avfoundation/objc/VideoTrackPrivateMediaSourceAVFObjC.mm @nonARC
+-platform/graphics/avfoundation/objc/WebAVContentKeyGroup.mm @nonARC @no-unify-when(bundle<=8)
+-platform/graphics/avfoundation/objc/WebCoreAVFResourceLoader.mm @nonARC
++// ios6: platform/graphics/avfoundation/AVTrackPrivateAVFObjCImpl.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/AudioSourceProviderAVFObjC.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/AudioVideoRendererAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/FormatDescriptionUtilities.cpp
++// ios6: platform/graphics/avfoundation/ISOFairPlayStreamingPsshBox.cpp
++// ios6: platform/graphics/avfoundation/InbandMetadataTextTrackPrivateAVF.cpp
++// ios6: platform/graphics/avfoundation/InbandTextTrackPrivateAVF.cpp
++// ios6: platform/graphics/avfoundation/LegacyCDMPrivateAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/MediaPlaybackTargetCocoa.mm @nonARC
++// ios6: platform/graphics/avfoundation/MediaPlayerPrivateAVFoundation.cpp
++// ios6: platform/graphics/avfoundation/MediaSelectionGroupAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/SampleBufferDisplayLayer.cpp
++// ios6: platform/graphics/avfoundation/WebAVSampleBufferListener.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/WebMediaSessionManagerMac.cpp
++// ios6: platform/graphics/avfoundation/objc/AVAssetMIMETypeCache.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/AVAssetTrackUtilities.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/objc/AVOutputDeviceMenuControllerTargetPicker.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/objc/AVRoutePickerViewTargetPicker.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/AVStreamDataParserMIMETypeCache.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/AudioTrackPrivateAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/AudioTrackPrivateMediaSourceAVFObjC.cpp
++// ios6: platform/graphics/avfoundation/objc/CDMFairPlayStreamingAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/CDMSessionAVContentKeySession.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/CDMSessionAVFoundationObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/ContentKeyGroupFactoryAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/ImageDecoderAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/InbandTextTrackPrivateAVFObjC.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/objc/InbandChapterTrackPrivateAVFObjC.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/objc/LocalSampleBufferDisplayLayer.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/objc/MediaPlaybackTargetPickerMac.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.mm @nonARC @no-unify-when(bundle<=8) @cost:9
++// ios6: platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaSourceAVFObjC.mm @nonARC @no-unify-when(bundle<=8) @cost:8
++// ios6: platform/graphics/avfoundation/objc/MediaPlayerPrivateMediaStreamAVFObjC.mm @nonARC @no-unify-when(bundle<=8) @cost:6
++// ios6: platform/graphics/avfoundation/objc/MediaSampleAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/MediaSourcePrivateAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/SourceBufferPrivateAVFObjC.mm @nonARC @no-unify-when(bundle<=8) @cost:7
++// ios6: platform/graphics/avfoundation/objc/SourceBufferParserAVFObjC.mm @nonARC @no-unify-when(bundle<=8) @cost:5
++// ios6: platform/graphics/avfoundation/objc/TextTrackPrivateMediaSourceAVFObjC.cpp
++// ios6: platform/graphics/avfoundation/objc/VideoLayerManagerObjC.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/objc/VideoTrackPrivateAVFObjC.cpp
++// ios6: platform/graphics/avfoundation/objc/VideoTrackPrivateMediaSourceAVFObjC.mm @nonARC
++// ios6: platform/graphics/avfoundation/objc/WebAVContentKeyGroup.mm @nonARC @no-unify-when(bundle<=8)
++// ios6: platform/graphics/avfoundation/objc/WebCoreAVFResourceLoader.mm @nonARC
+ platform/graphics/ca/FrameProcessIndicators.cpp
+ platform/graphics/ca/GraphicsLayerCA.cpp
+ platform/graphics/ca/LayerPool.cpp
+@@ -429,7 +429,7 @@ platform/graphics/cg/GradientCG.cpp
+ platform/graphics/cg/GradientRendererCG.cpp
+ platform/graphics/cg/GraphicsContextCG.cpp
+ platform/graphics/cg/GraphicsContextGLCG.cpp
+-platform/graphics/cg/IOSurfacePool.cpp
++// ios6: platform/graphics/cg/IOSurfacePool.cpp
+ platform/graphics/cg/ImageBackingStoreCG.cpp
+ platform/graphics/cg/ImageBufferCGBackend.cpp
+ platform/graphics/cg/ImageBufferCGBitmapBackend.cpp
+@@ -465,9 +465,9 @@ platform/graphics/cocoa/FontPlatformDataCocoa.mm @nonARC
+ platform/graphics/cocoa/GraphicsContextCocoa.mm @nonARC
+ platform/graphics/cocoa/H264UtilitiesCocoa.mm @nonARC
+ platform/graphics/cocoa/HEVCUtilitiesCocoa.mm @nonARC
+-platform/graphics/cocoa/IOSurface.mm @nonARC
+-platform/graphics/cocoa/IOSurfacePoolCocoa.mm @nonARC
+-platform/graphics/cocoa/ISOBMFFPreParser.cpp
++// ios6: platform/graphics/cocoa/IOSurface.mm @nonARC
++// ios6: platform/graphics/cocoa/IOSurfacePoolCocoa.mm @nonARC
++// ios6: platform/graphics/cocoa/ISOBMFFPreParser.cpp
+ platform/graphics/cocoa/ISOBMFFTrackInfoParser.cpp
+ platform/graphics/cocoa/IconCocoa.mm @nonARC
+ platform/graphics/cocoa/IntRectCocoa.mm @nonARC
+@@ -480,8 +480,8 @@ platform/graphics/cocoa/PlatformTimeRangesCocoa.mm @nonARC @no-unify-when(bundle
+ platform/graphics/cocoa/ShareableCVPixelBuffer.cpp
+ platform/graphics/cocoa/ShareableCVPixelFormat.cpp
+ platform/graphics/cocoa/ShareableGainMap.cpp
+-platform/graphics/cocoa/SourceBufferParser.cpp
+-platform/graphics/cocoa/SourceBufferParserWebM.cpp
++// ios6: platform/graphics/cocoa/SourceBufferParser.cpp
++// ios6: platform/graphics/cocoa/SourceBufferParserWebM.cpp
+ platform/graphics/cocoa/SystemFontDatabaseCocoa.mm @nonARC
+ platform/graphics/cocoa/SystemFontDatabaseCoreText.cpp
+ platform/graphics/cocoa/TextTrackRepresentationCocoa.mm @nonARC
+@@ -491,12 +491,12 @@ platform/graphics/cocoa/VP9UtilitiesCocoa.mm @nonARC @no-unify // Includes libwe
+ platform/graphics/cocoa/VideoTargetFactory.mm @nonARC @no-unify-when(bundle<=8)
+ platform/graphics/cocoa/WebActionDisablingCALayerDelegate.mm @nonARC
+ platform/graphics/cocoa/WebCoreCALayerExtras.mm @nonARC
+-platform/graphics/cocoa/WebCoreDecompressionSession.mm @nonARC
++// ios6: platform/graphics/cocoa/WebCoreDecompressionSession.mm @nonARC
+ platform/graphics/cocoa/WebProcessGraphicsContextGLCocoa.mm @nonARC
+-platform/graphics/cocoa/VideoMediaSampleRenderer.mm @nonARC
++// ios6: platform/graphics/cocoa/VideoMediaSampleRenderer.mm @nonARC
+ platform/graphics/cocoa/VideoTrackPrivateWebM.cpp
+ platform/graphics/cocoa/WebLayer.mm @nonARC
+-platform/graphics/cocoa/controls/ApplePayButtonCocoa.mm @nonARC
++// ios6: platform/graphics/cocoa/controls/ApplePayButtonCocoa.mm @nonARC
+ platform/graphics/cocoa/controls/ControlFactoryCocoa.mm @nonARC
+ platform/graphics/coretext/ComplexTextControllerCoreText.mm @nonARC
+ platform/graphics/coretext/DrawGlyphsRecorder.cpp
+@@ -510,25 +510,25 @@ platform/graphics/cv/CVUtilities.mm @nonARC
+ platform/graphics/cv/ImageTransferSessionVT.mm @nonARC
+ platform/graphics/cv/PixelBufferConformerCV.cpp
+ platform/graphics/cv/VideoFrameCV.mm @nonARC
+-platform/graphics/coreimage/FEBlendCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEColorMatrixCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEComponentTransferCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FECompositeCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEConvolveMatrixCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEDisplacementMapCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEDropShadowCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEFloodCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEGaussianBlurCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEImageCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FELightingCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEMergeCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEMorphologyCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FEOffsetCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FETileCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FETurbulenceCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/FilterImageCoreImage.mm @nonARC
+-platform/graphics/coreimage/SourceAlphaCoreImageApplier.mm @nonARC
+-platform/graphics/coreimage/SourceGraphicCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEBlendCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEColorMatrixCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEComponentTransferCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FECompositeCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEConvolveMatrixCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEDisplacementMapCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEDropShadowCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEFloodCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEGaussianBlurCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEImageCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FELightingCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEMergeCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEMorphologyCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FEOffsetCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FETileCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FETurbulenceCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/FilterImageCoreImage.mm @nonARC
++// ios6: platform/graphics/coreimage/SourceAlphaCoreImageApplier.mm @nonARC
++// ios6: platform/graphics/coreimage/SourceGraphicCoreImageApplier.mm @nonARC
+ platform/graphics/ios/DisplayRefreshMonitorIOS.mm @nonARC
+ platform/graphics/ios/IconIOS.mm @nonARC
+ platform/graphics/ios/controls/ControlFactoryIOS.mm @nonARC
+@@ -644,7 +644,7 @@ platform/mac/ScrollViewMac.mm @nonARC
+ platform/mac/ScrollbarMac.mm @nonARC @no-unify-when(bundle<=8)
+ platform/mac/ScrollbarsControllerMac.mm @nonARC @no-unify-when(bundle<=8) @cost:3
+ platform/mac/ScrollbarThemeMac.mm @nonARC @no-unify-when(bundle<=8) @cost:3
+-platform/mac/ScrollingEffectsController.mm @nonARC
++// ios6: platform/mac/ScrollingEffectsController.mm @nonARC
+ platform/mac/ScrollingMomentumCalculatorMac.mm @nonARC
+ platform/mac/SerializedPlatformDataCueMac.mm @nonARC
+ platform/mac/SuddenTermination.mm @nonARC
+@@ -749,3 +749,4 @@ testing/cocoa/WebViewVisualIdentificationOverlay.mm @nonARC
+ platform/graphics/angle/GraphicsContextGLANGLE.cpp @no-unify // ANGLE headers redefine GL types/macros that collide with system OpenGL.
+ platform/graphics/cocoa/GraphicsContextGLCocoa.mm @nonARC @no-unify // ANGLE headers redefine GL types/macros that collide with system OpenGL.
+ platform/graphics/cv/GraphicsContextGLCVCocoa.mm @nonARC @no-unify // ANGLE headers redefine GL types/macros that collide with system OpenGL.
++
+diff --git a/Source/WebCore/bindings/js/DOMWrapperWorld.cpp b/Source/WebCore/bindings/js/DOMWrapperWorld.cpp
+index 4e9544f48..ae7d4175c 100644
+--- a/Source/WebCore/bindings/js/DOMWrapperWorld.cpp
++++ b/Source/WebCore/bindings/js/DOMWrapperWorld.cpp
+@@ -60,7 +60,11 @@ static void initializeWrapperMapGuardingOnce()
+     });
+ }
+ 
++#if defined(WEBKIT_IOS6)
++IOS6ThreadLocal<WrapperMutationScope*> WrapperMutationScope::s_active;
++#else
+ thread_local WrapperMutationScope* WrapperMutationScope::s_active { nullptr };
++#endif
+ 
+ // Registry of live page-aligned m_wrappers backings, so free() knows the mmap length to unmap.
+ static Lock backingRegistryLock;
+diff --git a/Source/WebCore/bindings/js/DOMWrapperWorld.h b/Source/WebCore/bindings/js/DOMWrapperWorld.h
+index 6aa0271ad..b736d2e5e 100644
+--- a/Source/WebCore/bindings/js/DOMWrapperWorld.h
++++ b/Source/WebCore/bindings/js/DOMWrapperWorld.h
+@@ -190,7 +190,11 @@ public:
+ private:
+     WEBCORE_EXPORT void enter();
+     WEBCORE_EXPORT void leave();
++#if defined(WEBKIT_IOS6)
++    static IOS6ThreadLocal<WrapperMutationScope*> s_active;
++#else
+     static thread_local WrapperMutationScope* s_active;
++#endif
+     SingleThreadWeakRef<DOMWrapperWorld> m_world;
+     WrapperMutationScope* m_previous { nullptr };
+ #endif
+diff --git a/Source/WebCore/editing/cocoa/AttributedString.mm b/Source/WebCore/editing/cocoa/AttributedString.mm
+index 9a7ef1e23..5cfb1e0c5 100644
+--- a/Source/WebCore/editing/cocoa/AttributedString.mm
++++ b/Source/WebCore/editing/cocoa/AttributedString.mm
+@@ -640,7 +640,13 @@ inline static ParagraphStyle extractParagraphStyle(NSParagraphStyle *style, Tabl
+     Vector<ParagraphStyleTextList> newTextLists;
+     Vector<TextTab> newTextTabs;
+ 
+-    for (NSTextList *list in style.textLists) {
++#if defined(WEBKIT_IOS6)
++    NSArray *paragraphTextLists = [style respondsToSelector:@selector(textLists)]
++        ? [style valueForKey:@"textLists"] : nil;
++#else
++    NSArray *paragraphTextLists = style.textLists;
++#endif
++    for (NSTextList *list in paragraphTextLists) {
+         if (![list isKindOfClass:PlatformNSTextList])
+             return { };
+ 
+diff --git a/Source/WebCore/fileapi/FileCocoa.mm b/Source/WebCore/fileapi/FileCocoa.mm
+index 7686653d9..4113fe0d8 100644
+--- a/Source/WebCore/fileapi/FileCocoa.mm
++++ b/Source/WebCore/fileapi/FileCocoa.mm
+@@ -24,6 +24,11 @@
+  */
+ 
+ #import "config.h"
++#if defined(WEBKIT_IOS6)
++#define WEBKIT_IOS6_CONTENT_TYPE_KEY NSURLTypeIdentifierKey
++#else
++#define WEBKIT_IOS6_CONTENT_TYPE_KEY NSURLContentTypeKey
++#endif
+ #import "File.h"
+ 
+ #if ENABLE(FILE_REPLACEMENT)
+@@ -51,7 +56,7 @@ bool File::shouldReplaceFile(const String& path)
+     }
+ 
+     UTType *uti;
+-    if (![pathURL getResourceValue:&uti forKey:NSURLContentTypeKey error:&error]) {
++    if (![pathURL getResourceValue:&uti forKey:WEBKIT_IOS6_CONTENT_TYPE_KEY error:&error]) {
+         LOG_ERROR("Failed to get type identifier of resource at URL %@ with error %@.\n", pathURL.get(), error);
+         return false;
+     }
+diff --git a/Source/WebCore/page/InteractionRegion.cpp b/Source/WebCore/page/InteractionRegion.cpp
+index 70bd1e3c0..7e3206a07 100644
+--- a/Source/WebCore/page/InteractionRegion.cpp
++++ b/Source/WebCore/page/InteractionRegion.cpp
+@@ -677,8 +677,12 @@ std::optional<InteractionRegion> interactionRegionForRenderedRegion(const Render
+                 if (!clipOffset.isZero())
+                     adjustedPath.translate(clipOffset);
+ 
++#if defined(WEBKIT_IOS6)
++                UNUSED_VARIABLE(adjustedPath);
++#else
+                 RetainPtr intersectingPath = adoptCF(CGPathCreateCopyByIntersectingPath(adjustedPath.platformPath(), clipPath->platformPath(), false));
+                 clipPath = { PathCG::create(adoptCF(CGPathCreateMutableCopy(intersectingPath.get()))) };
++#endif
+ 
+                 // No need for continuous corners if we're already going to clip.
+                 useContinuousCorners = false;
+diff --git a/Source/WebCore/page/cocoa/MemoryReleaseCocoa.mm b/Source/WebCore/page/cocoa/MemoryReleaseCocoa.mm
+index 17ed58b5f..afe308377 100644
+--- a/Source/WebCore/page/cocoa/MemoryReleaseCocoa.mm
++++ b/Source/WebCore/page/cocoa/MemoryReleaseCocoa.mm
+@@ -63,7 +63,9 @@ void platformReleaseMemory(Critical)
+     tileControllerMemoryHandler().trimUnparentedTilesToTarget(0);
+ #endif
+ 
++#if HAVE(IOSURFACE)
+     IOSurfacePool::sharedPoolSingleton().discardAllSurfaces();
++#endif
+ 
+ #if CACHE_SUBIMAGES
+     CGSubimageCacheWithTimer::clear();
+@@ -72,7 +74,9 @@ void platformReleaseMemory(Critical)
+ 
+ void platformReleaseGraphicsMemory(Critical)
+ {
++#if HAVE(IOSURFACE)
+     IOSurfacePool::sharedPoolSingleton().discardAllSurfaces();
++#endif
+ 
+ #if CACHE_SUBIMAGES
+     CGSubimageCacheWithTimer::clear();
+diff --git a/Source/WebCore/page/cocoa/WebTextIndicatorLayer.mm b/Source/WebCore/page/cocoa/WebTextIndicatorLayer.mm
+index 54155b2e9..b76013dfc 100644
+--- a/Source/WebCore/page/cocoa/WebTextIndicatorLayer.mm
++++ b/Source/WebCore/page/cocoa/WebTextIndicatorLayer.mm
+@@ -115,8 +115,16 @@ static bool NODELETE indicatorWantsFadeIn(const WebCore::TextIndicator& indicato
+     auto bounceLayers = adoptNS([[NSMutableArray alloc] init]);
+ 
+     RetainPtr<CGColorRef> highlightColor;
++#if defined(WEBKIT_IOS6)
++    auto grayColorSpace = adoptCF(CGColorSpaceCreateDeviceGray());
++    CGFloat rimComponents[2] = { 0, 0.35 };
++    CGFloat dropComponents[2] = { 0, 0.2 };
++    auto rimShadowColor = adoptCF(CGColorCreate(grayColorSpace.get(), rimComponents));
++    auto dropShadowColor = adoptCF(CGColorCreate(grayColorSpace.get(), dropComponents));
++#else
+     auto rimShadowColor = adoptCF(CGColorCreateGenericGray(0, 0.35));
+     auto dropShadowColor = adoptCF(CGColorCreateGenericGray(0, 0.2));
++#endif
+     auto borderColor = adoptCF(CGColorCreateSRGB(0.96, 0.9, 0, 1));
+ #if PLATFORM(MAC)
+     highlightColor = [NSColor findHighlightColor].CGColor;
+diff --git a/Source/WebCore/platform/cocoa/CoreLocationGeolocationProvider.mm b/Source/WebCore/platform/cocoa/CoreLocationGeolocationProvider.mm
+index 7ab89191f..fc8fef418 100644
+--- a/Source/WebCore/platform/cocoa/CoreLocationGeolocationProvider.mm
++++ b/Source/WebCore/platform/cocoa/CoreLocationGeolocationProvider.mm
+@@ -102,7 +102,11 @@ SOFT_LINK_CONSTANT(CoreLocation, kCLLocationAccuracyHundredMeters, double)
+ 
+ - (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager
+ {
++#if defined(WEBKIT_IOS6)
++    auto status = [getCLLocationManagerClassSingleton() authorizationStatus];
++#else
+     auto status = [_locationManager authorizationStatus];
++#endif
+     if (_isWaitingForAuthorization) {
+         switch (status) {
+         case kCLAuthorizationStatusNotDetermined:
+diff --git a/Source/WebCore/platform/cocoa/VideoToolboxSoftLink.cpp b/Source/WebCore/platform/cocoa/VideoToolboxSoftLink.cpp
+index d769a689b..0de197982 100644
+--- a/Source/WebCore/platform/cocoa/VideoToolboxSoftLink.cpp
++++ b/Source/WebCore/platform/cocoa/VideoToolboxSoftLink.cpp
+@@ -42,6 +42,9 @@ SOFT_LINK_FUNCTION_FOR_SOURCE(WebCore, VideoToolbox, VTDecompressionSessionInval
+ SOFT_LINK_FUNCTION_FOR_SOURCE(WebCore, VideoToolbox, VTDecompressionSessionCanAcceptFormatDescription, Boolean, (VTDecompressionSessionRef session, CMFormatDescriptionRef newFormatDesc), (session, newFormatDesc))
+ SOFT_LINK_FUNCTION_FOR_SOURCE(WebCore, VideoToolbox, VTDecompressionSessionWaitForAsynchronousFrames, OSStatus, (VTDecompressionSessionRef session), (session))
+ SOFT_LINK_FUNCTION_FOR_SOURCE(WebCore, VideoToolbox, VTDecompressionSessionDecodeFrameWithOutputHandler, OSStatus, (VTDecompressionSessionRef session, CMSampleBufferRef sampleBuffer, VTDecodeFrameFlags decodeFlags, VTDecodeInfoFlags *infoFlagsOut, VTDecompressionOutputHandler outputHandler), (session, sampleBuffer, decodeFlags, infoFlagsOut, outputHandler))
++#if defined(WEBKIT_IOS6)
++typedef void (^VTDecompressionMultiImageCapableOutputHandler)(OSStatus, VTDecodeInfoFlags, CVImageBufferRef, CMTaggedBufferGroupRef, CMTime, CMTime);
++#endif
+ SOFT_LINK_FUNCTION_FOR_SOURCE(WebCore, VideoToolbox, VTDecompressionSessionDecodeFrameWithMultiImageCapableOutputHandler, OSStatus, (VTDecompressionSessionRef session, CMSampleBufferRef sampleBuffer, VTDecodeFrameFlags decodeFlags, VTDecodeInfoFlags *infoFlagsOut, VTDecompressionMultiImageCapableOutputHandler multiImageCapableOutputHandler), (session, sampleBuffer, decodeFlags, infoFlagsOut, multiImageCapableOutputHandler))
+ SOFT_LINK_FUNCTION_FOR_SOURCE(WebCore, VideoToolbox, VTDecompressionSessionDecodeFrame, OSStatus, (VTDecompressionSessionRef session, CMSampleBufferRef sampleBuffer, VTDecodeFrameFlags decodeFlags, void* sourceFrameRefCon, VTDecodeInfoFlags* infoFlagsOut), (session, sampleBuffer, decodeFlags, sourceFrameRefCon, infoFlagsOut))
+ SOFT_LINK_FUNCTION_FOR_SOURCE(WebCore, VideoToolbox, VTImageRotationSessionCreate, OSStatus, (CFAllocatorRef allocator, uint32_t rotationDegrees, VTImageRotationSessionRef* imageRotationSessionOut), (allocator, rotationDegrees, imageRotationSessionOut))
+diff --git a/Source/WebCore/platform/cocoa/VideoToolboxSoftLink.h b/Source/WebCore/platform/cocoa/VideoToolboxSoftLink.h
+index 8412aba02..74226a9e7 100644
+--- a/Source/WebCore/platform/cocoa/VideoToolboxSoftLink.h
++++ b/Source/WebCore/platform/cocoa/VideoToolboxSoftLink.h
+@@ -50,6 +50,9 @@ SOFT_LINK_FUNCTION_FOR_HEADER(WebCore, VideoToolbox, VTDecompressionSessionWaitF
+ #define VTDecompressionSessionWaitForAsynchronousFrames softLink_VideoToolbox_VTDecompressionSessionWaitForAsynchronousFrames
+ SOFT_LINK_FUNCTION_FOR_HEADER(WebCore, VideoToolbox, VTDecompressionSessionDecodeFrameWithOutputHandler, OSStatus, (VTDecompressionSessionRef session, CMSampleBufferRef sampleBuffer, VTDecodeFrameFlags decodeFlags, VTDecodeInfoFlags *infoFlagsOut, VTDecompressionOutputHandler outputHandler), (session, sampleBuffer, decodeFlags, infoFlagsOut, outputHandler))
+ #define VTDecompressionSessionDecodeFrameWithOutputHandler softLink_VideoToolbox_VTDecompressionSessionDecodeFrameWithOutputHandler
++#if defined(WEBKIT_IOS6)
++typedef void (^VTDecompressionMultiImageCapableOutputHandler)(OSStatus, VTDecodeInfoFlags, CVImageBufferRef, CMTaggedBufferGroupRef, CMTime, CMTime);
++#endif
+ SOFT_LINK_FUNCTION_FOR_HEADER(WebCore, VideoToolbox, VTDecompressionSessionDecodeFrameWithMultiImageCapableOutputHandler, OSStatus, (VTDecompressionSessionRef session, CMSampleBufferRef sampleBuffer, VTDecodeFrameFlags decodeFlags, VTDecodeInfoFlags *infoFlagsOut, VTDecompressionMultiImageCapableOutputHandler multiImageCapableOutputHandler), (session, sampleBuffer, decodeFlags, infoFlagsOut, multiImageCapableOutputHandler))
+ #define VTDecompressionSessionDecodeFrameWithMultiImageCapableOutputHandler softLink_VideoToolbox_VTDecompressionSessionDecodeFrameWithMultiImageCapableOutputHandler
+ SOFT_LINK_FUNCTION_FOR_HEADER(WebCore, VideoToolbox, VTDecompressionSessionDecodeFrame, OSStatus, (VTDecompressionSessionRef session, CMSampleBufferRef sampleBuffer, VTDecodeFrameFlags decodeFlags, void* sourceFrameRefCon, VTDecodeInfoFlags* infoFlagsOut), (session, sampleBuffer, decodeFlags, sourceFrameRefCon, infoFlagsOut))
+diff --git a/Source/WebCore/platform/graphics/DestinationColorSpace.cpp b/Source/WebCore/platform/graphics/DestinationColorSpace.cpp
+index f99b66ec4..ece67eb41 100644
+--- a/Source/WebCore/platform/graphics/DestinationColorSpace.cpp
++++ b/Source/WebCore/platform/graphics/DestinationColorSpace.cpp
+@@ -189,7 +189,7 @@ std::optional<DestinationColorSpace> DestinationColorSpace::asExtended() const
+ {
+     if (usesExtendedRange())
+         return *this;
+-#if USE(CG)
++#if USE(CG) && !defined(WEBKIT_IOS6)
+     // Avoid refing color space here as this is performance-sensitive.
+     SUPPRESS_UNRETAINED_ARG if (RetainPtr colorSpace = adoptCF(CGColorSpaceCreateExtended(platformColorSpace())))
+         return DestinationColorSpace(WTF::move(colorSpace));
+@@ -231,7 +231,7 @@ bool DestinationColorSpace::usesExtendedRange() const
+ 
+ bool DestinationColorSpace::usesITUR_2100TF() const
+ {
+-#if USE(CG)
++#if USE(CG) && !defined(WEBKIT_IOS6)
+     // Avoid refing color space here as this is performance-sensitive.
+     SUPPRESS_UNRETAINED_ARG return CGColorSpaceUsesITUR_2100TF(platformColorSpace());
+ #else
+diff --git a/Source/WebCore/platform/graphics/GraphicsLayer.cpp b/Source/WebCore/platform/graphics/GraphicsLayer.cpp
+index e5adac30d..1bfcf080f 100644
+--- a/Source/WebCore/platform/graphics/GraphicsLayer.cpp
++++ b/Source/WebCore/platform/graphics/GraphicsLayer.cpp
+@@ -50,7 +50,7 @@
+ #include "AcceleratedEffectStack.h"
+ #endif
+ 
+-#if PLATFORM(COCOA)
++#if PLATFORM(COCOA) && !defined(WEBKIT_IOS6)
+ #include <QuartzCore/CALayer.h>
+ #endif
+ 
+diff --git a/Source/WebCore/platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.mm b/Source/WebCore/platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.mm
+index cac62c6b5..17eb0c02c 100644
+--- a/Source/WebCore/platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.mm
++++ b/Source/WebCore/platform/graphics/avfoundation/objc/MediaPlayerPrivateAVFoundationObjC.mm
+@@ -2799,8 +2799,10 @@ bool MediaPlayerPrivateAVFoundationObjC::updateLastPixelBuffer()
+         m_lastPixelBuffer = m_imageRotationSession->rotate(m_lastPixelBuffer.get());
+ 
+     if (m_resourceOwner && m_lastPixelBuffer) {
++#if HAVE(IOSURFACE)
+         if (RetainPtr surface = CVPixelBufferGetIOSurface(m_lastPixelBuffer.get()))
+             IOSurface::setOwnershipIdentity(surface.get(), m_resourceOwner);
++#endif
+     }
+ 
+     m_lastImage = nullptr;
+diff --git a/Source/WebCore/platform/graphics/ca/PlatformCALayer.mm b/Source/WebCore/platform/graphics/ca/PlatformCALayer.mm
+index 283ba11d0..0bc5c6b13 100644
+--- a/Source/WebCore/platform/graphics/ca/PlatformCALayer.mm
++++ b/Source/WebCore/platform/graphics/ca/PlatformCALayer.mm
+@@ -233,17 +233,26 @@ PlatformCALayer* PlatformCALayer::maskLayer() const
+ 
+ void PlatformCALayer::setDelegatedContents(const PlatformCALayerDelegatedContents& contents)
+ {
++#if HAVE(IOSURFACE)
+     auto surface = WebCore::IOSurface::createFromSendRight(MachSendRight { contents.surface });
+     if (!surface) {
+         clearContents();
+         return;
+     }
+     setDelegatedContents({ *surface, contents.finishedFence });
++#else
++    UNUSED_PARAM(contents);
++    clearContents();
++#endif
+ }
+ 
+ void PlatformCALayer::setDelegatedContents(const PlatformCALayerInProcessDelegatedContents& contents)
+ {
++#if HAVE(IOSURFACE)
+     setDelegatedContents({ contents.surface.createSendRight(), contents.finishedFence, std::nullopt });
++#else
++    UNUSED_PARAM(contents);
++#endif
+ }
+ 
+ bool PlatformCALayer::needsPlatformContext() const
+diff --git a/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm b/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm
+index 530798105..c482ea4a4 100644
+--- a/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm
++++ b/Source/WebCore/platform/graphics/ca/cocoa/PlatformCALayerCocoa.mm
+@@ -845,8 +845,12 @@ void PlatformCALayerCocoa::setContents(CFTypeRef value)
+ 
+ void PlatformCALayerCocoa::setDelegatedContents(const PlatformCALayerInProcessDelegatedContents& contents)
+ {
++#if HAVE(IOSURFACE)
+     if (!contents.finishedFence || protect(contents.finishedFence)->waitFor(delegatedContentsFinishedTimeout))
+         setContents(contents.surface.asLayerContents());
++#else
++    UNUSED_PARAM(contents);
++#endif
+ }
+ 
+ void PlatformCALayerCocoa::setContentsRect(const FloatRect& value)
+@@ -1201,7 +1205,9 @@ void PlatformCALayerCocoa::updateContentsFormat()
+             ALLOW_DEPRECATED_DECLARATIONS_BEGIN
+             [m_layer setWantsExtendedDynamicRangeContent:true];
+             ALLOW_DEPRECATED_DECLARATIONS_END
++#if !defined(WEBKIT_IOS6)
+             [m_layer setToneMapMode:CAToneMapModeIfSupported];
++#endif
+         }
+ #endif
+         END_BLOCK_OBJC_EXCEPTIONS
+diff --git a/Source/WebCore/platform/graphics/cg/ColorSpaceCG.cpp b/Source/WebCore/platform/graphics/cg/ColorSpaceCG.cpp
+index 00910344f..aa7723c7d 100644
+--- a/Source/WebCore/platform/graphics/cg/ColorSpaceCG.cpp
++++ b/Source/WebCore/platform/graphics/cg/ColorSpaceCG.cpp
+@@ -51,7 +51,11 @@ template<const CFStringRef& colorSpaceNameGlobalConstant> static CGColorSpaceRef
+     static LazyNeverDestroyed<RetainPtr<CGColorSpaceRef>> colorSpace;
+     static std::once_flag onceFlag;
+     std::call_once(onceFlag, [] {
++#if defined(WEBKIT_IOS6)
++        colorSpace.construct(RetainPtr { namedColorSpace<colorSpaceNameGlobalConstant>() });
++#else
+         colorSpace.construct(adoptCF(CGColorSpaceCreateExtended(RetainPtr { namedColorSpace<colorSpaceNameGlobalConstant>() }.get())));
++#endif
+         ASSERT(colorSpace.get());
+     });
+     return colorSpace.get().get();
+diff --git a/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp b/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp
+index e4166804e..04083861e 100644
+--- a/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp
++++ b/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp
+@@ -252,9 +252,12 @@ const DestinationColorSpace& GraphicsContextCG::colorSpace() const
+ 
+     // FIXME: Need to handle kCGContextTypePDF.
+     auto contextType = CGContextGetType(context);
++#if HAVE(IOSURFACE)
+     if (contextType == kCGContextTypeIOSurface)
+         colorSpace = CGIOSurfaceContextGetColorSpace(context);
+-    else if (contextType == kCGContextTypeBitmap)
++    else
++#endif
++    if (contextType == kCGContextTypeBitmap)
+         colorSpace = CGBitmapContextGetColorSpace(context);
+     else
+         colorSpace = CGContextGetColorSpace(context);
+@@ -1508,8 +1511,10 @@ bool GraphicsContextCG::knownToHaveFloatBasedBacking() const
+ {
+     auto context = platformContext();
+ 
++#if HAVE(IOSURFACE)
+     if (CGContextGetType(context) == kCGContextTypeIOSurface)
+         return CGIOSurfaceContextGetBitmapInfo(context) & kCGBitmapFloatComponents;
++#endif
+     if (CGContextGetType(context) == kCGContextTypeBitmap)
+         return CGBitmapContextGetBitmapInfo(context) & kCGBitmapFloatComponents;
+     return false;
+diff --git a/Source/WebCore/platform/graphics/cg/NativeImageCG.cpp b/Source/WebCore/platform/graphics/cg/NativeImageCG.cpp
+index 84e52e053..85dfda10a 100644
+--- a/Source/WebCore/platform/graphics/cg/NativeImageCG.cpp
++++ b/Source/WebCore/platform/graphics/cg/NativeImageCG.cpp
+@@ -39,6 +39,13 @@
+ 
+ #include "CoreVideoSoftLink.h"
+ 
++#if defined(WEBKIT_IOS6)
++/* Content headroom is an HDR concept from iOS 18. */
++#define WEBKIT_IOS6_HEADROOM(image) ((float)1.0)
++#else
++#define WEBKIT_IOS6_HEADROOM CGImageGetContentHeadroom
++#endif
++
+ namespace WebCore {
+ 
+ RefPtr<NativeImage> NativeImage::create(PlatformImagePtr&& image, std::optional<GainMap>&& gainMap)
+@@ -70,6 +77,7 @@ RefPtr<NativeImage> NativeImage::createTransient(PlatformImagePtr&& image)
+     return create(WTF::move(transientImage));
+ }
+ 
++#if !defined(WEBKIT_IOS6)
+ static void releaseImageBlock(void* info, CGImageBlockRef)
+ {
+     SUPPRESS_RETAINPTR_CTOR_ADOPT RetainPtr pixelBuffer = adoptCF(static_cast<CVPixelBufferRef>(info));
+@@ -179,6 +187,14 @@ RefPtr<NativeImage> NativeImage::create(RetainPtr<CVPixelBufferRef> pixelBuffer,
+     CGImageSetProperty(image.get(), CFSTR("CA_IOSURFACE_IMAGE"), kCFBooleanTrue);
+     return NativeImage::create(WTF::move(image));
+ }
++#else
++
++RefPtr<NativeImage> NativeImage::create(RetainPtr<CVPixelBufferRef>, CGImageAlphaInfo, RetainPtr<CGColorSpaceRef>)
++{
++    return nullptr;
++}
++
++#endif
+ 
+ IntSize NativeImage::size() const
+ {
+@@ -216,7 +232,7 @@ void NativeImage::computeHeadroom() const
+     constexpr auto gainMapImageHeadroom = Headroom(peakLevel / whiteLevel);
+ 
+ #if HAVE(SUPPORT_HDR_DISPLAY)
+-    float headroom = CGImageGetContentHeadroom(m_platformImage.get());
++    float headroom = WEBKIT_IOS6_HEADROOM(m_platformImage.get());
+     m_baseImageHeadroom = Headroom(std::max<float>(headroom, Headroom::None));
+ #else
+     m_baseImageHeadroom = Headroom::None;
+diff --git a/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm b/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm
+index 0b412f591..6e82650ad 100644
+--- a/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm
++++ b/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm
+@@ -36,7 +36,9 @@
+ #import <numeric>
+ #import <pal/spi/cg/CoreGraphicsSPI.h>
+ #import <pal/spi/cocoa/FeatureFlagsSPI.h>
++#if PLATFORM(MAC)
+ #import <pal/spi/mac/NSGraphicsSPI.h>
++#endif
+ #import <wtf/SoftLinking.h>
+ #import <wtf/StdLibExtras.h>
+ 
+diff --git a/Source/WebCore/platform/graphics/cv/CVUtilities.mm b/Source/WebCore/platform/graphics/cv/CVUtilities.mm
+index 4fb93f5ce..29f3530de 100644
+--- a/Source/WebCore/platform/graphics/cv/CVUtilities.mm
++++ b/Source/WebCore/platform/graphics/cv/CVUtilities.mm
+@@ -171,9 +171,14 @@ RetainPtr<CGColorSpaceRef> createCGColorSpaceForCVPixelBuffer(CVPixelBufferRef b
+ 
+ void setOwnershipIdentityForCVPixelBuffer(CVPixelBufferRef pixelBuffer, const ProcessIdentity& owner)
+ {
++#if HAVE(IOSURFACE)
+     RetainPtr surface = CVPixelBufferGetIOSurface(pixelBuffer);
+     ASSERT(surface);
+     IOSurface::setOwnershipIdentity(surface.get(), owner);
++#else
++    UNUSED_PARAM(pixelBuffer);
++    UNUSED_PARAM(owner);
++#endif
+ }
+ 
+ RetainPtr<CVPixelBufferRef> createBlackPixelBuffer(size_t width, size_t height, bool shouldUseIOSurface)
+diff --git a/Source/WebCore/platform/ios/LocalCurrentTraitCollection.mm b/Source/WebCore/platform/ios/LocalCurrentTraitCollection.mm
+index 2c852eea4..23a72ec43 100644
+--- a/Source/WebCore/platform/ios/LocalCurrentTraitCollection.mm
++++ b/Source/WebCore/platform/ios/LocalCurrentTraitCollection.mm
+@@ -53,10 +53,16 @@ LocalCurrentTraitCollection::LocalCurrentTraitCollection(bool useDarkAppearance,
+     // to return a useful set of traits in cases where it has not been explicitly set. Ideally, this
+     // method should also take in a base, full-specified trait collection from the view hierarchy, to be
+     // used when building the new trait collection.
++#if defined(WEBKIT_IOS6)
++    RetainPtr combinedTraits = m_savedTraitCollection;
++    UNUSED_PARAM(useDarkAppearance);
++    UNUSED_PARAM(useElevatedUserInterfaceLevel);
++#else
+     RetainPtr combinedTraits = [m_savedTraitCollection traitCollectionByModifyingTraits:^(id<UIMutableTraits> traits) {
+         traits.userInterfaceStyle = useDarkAppearance ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight;
+         traits.userInterfaceLevel = useElevatedUserInterfaceLevel ? UIUserInterfaceLevelElevated : UIUserInterfaceLevelBase;
+     }];
++#endif
+ 
+     [PAL::getUITraitCollectionClassSingleton() setCurrentTraitCollection:traitCollectionWithAdjustedIdiomForSystemColors(combinedTraits.get())];
+ }
+diff --git a/Source/WebCore/platform/ios/wak/WebCoreThread.mm b/Source/WebCore/platform/ios/wak/WebCoreThread.mm
+index 942406fd9..e02d6437b 100644
+--- a/Source/WebCore/platform/ios/wak/WebCoreThread.mm
++++ b/Source/WebCore/platform/ios/wak/WebCoreThread.mm
+@@ -80,6 +80,7 @@ void ReleaseWebThreadGlobalState()
+     // In single-threaded environments we do not need to unset the context, as there should not be access from
+     // multiple threads.
+     ASSERT(WebThreadIsEnabled());
++#if ENABLE(WEBGL)
+     using ReleaseThreadResourceBehavior = WebCore::GraphicsContextGLANGLE::ReleaseThreadResourceBehavior;
+     // For web thread, just release the context as we know we will see calls to it again.
+     // For non-web threads, e.g. third-party client threads, we don't know if we ever see another call from the
+@@ -87,6 +88,7 @@ void ReleaseWebThreadGlobalState()
+     ReleaseThreadResourceBehavior releaseBehavior =
+         WebThreadIsCurrent() ? ReleaseThreadResourceBehavior::ReleaseCurrentContext : ReleaseThreadResourceBehavior::ReleaseThreadResources;
+     WebCore::GraphicsContextGLANGLE::releaseThreadResources(releaseBehavior);
++#endif
+ }
+ 
+ }
+diff --git a/Source/WebKit/PlatformCocoa.cmake b/Source/WebKit/PlatformCocoa.cmake
+index 417305ff7..2da4b1788 100644
+--- a/Source/WebKit/PlatformCocoa.cmake
++++ b/Source/WebKit/PlatformCocoa.cmake
+@@ -5,46 +5,159 @@ list(APPEND WebKit_COMPILE_OPTIONS
+ )
+ 
+ find_library(NETWORK_LIBRARY Network)
++
++if (NOT NETWORK_LIBRARY)  # ios6: allow missing frameworks
++
++    set(NETWORK_LIBRARY "")
++
++endif ()
+ find_library(SECURITY_LIBRARY Security)
++if (NOT SECURITY_LIBRARY)  # ios6: allow missing frameworks
++    set(SECURITY_LIBRARY "")
++endif ()
+ find_library(UNIFORMTYPEIDENTIFIERS_LIBRARY UniformTypeIdentifiers)
++if (NOT UNIFORMTYPEIDENTIFIERS_LIBRARY)  # ios6: allow missing frameworks
++    set(UNIFORMTYPEIDENTIFIERS_LIBRARY "")
++endif ()
+ find_library(AVFOUNDATION_LIBRARY AVFoundation)
++if (NOT AVFOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++    set(AVFOUNDATION_LIBRARY "")
++endif ()
+ find_library(CORESERVICES_LIBRARY CoreServices)
++if (NOT CORESERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(CORESERVICES_LIBRARY "")
++endif ()
+ find_library(DEVICEIDENTITY_LIBRARY DeviceIdentity HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT DEVICEIDENTITY_LIBRARY)  # ios6: allow missing frameworks
++    set(DEVICEIDENTITY_LIBRARY "")
++endif ()
+ if (NOT DEVICEIDENTITY_LIBRARY)
+     set(DEVICEIDENTITY_LIBRARY "" CACHE FILEPATH "" FORCE)
+ endif ()
+ 
+ find_library(CFNETWORK_LIBRARY CFNetwork)
++
++if (NOT CFNETWORK_LIBRARY)  # ios6: allow missing frameworks
++
++    set(CFNETWORK_LIBRARY "")
++
++endif ()
+ find_library(COREAUDIO_LIBRARY CoreAudio)
++if (NOT COREAUDIO_LIBRARY)  # ios6: allow missing frameworks
++    set(COREAUDIO_LIBRARY "")
++endif ()
+ find_library(COREFOUNDATION_LIBRARY CoreFoundation)
++if (NOT COREFOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++    set(COREFOUNDATION_LIBRARY "")
++endif ()
+ find_library(COREGRAPHICS_LIBRARY CoreGraphics)
++if (NOT COREGRAPHICS_LIBRARY)  # ios6: allow missing frameworks
++    set(COREGRAPHICS_LIBRARY "")
++endif ()
+ find_library(CORETEXT_LIBRARY CoreText)
++if (NOT CORETEXT_LIBRARY)  # ios6: allow missing frameworks
++    set(CORETEXT_LIBRARY "")
++endif ()
+ find_library(FOUNDATION_LIBRARY Foundation)
++if (NOT FOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++    set(FOUNDATION_LIBRARY "")
++endif ()
+ find_library(GRAPHICSSERVICES_LIBRARY GraphicsServices HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT GRAPHICSSERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(GRAPHICSSERVICES_LIBRARY "")
++endif ()
+ find_library(IMAGEIO_LIBRARY ImageIO)
++if (NOT IMAGEIO_LIBRARY)  # ios6: allow missing frameworks
++    set(IMAGEIO_LIBRARY "")
++endif ()
+ find_library(IOKIT_LIBRARY IOKit)
++if (NOT IOKIT_LIBRARY)  # ios6: allow missing frameworks
++    set(IOKIT_LIBRARY "")
++endif ()
+ find_library(IOSURFACE_LIBRARY IOSurface)
++if (NOT IOSURFACE_LIBRARY)  # ios6: allow missing frameworks
++    set(IOSURFACE_LIBRARY "")
++endif ()
+ find_library(METAL_LIBRARY Metal)
++if (NOT METAL_LIBRARY)  # ios6: allow missing frameworks
++    set(METAL_LIBRARY "")
++endif ()
+ find_library(MOBILECORESERVICES_LIBRARY MobileCoreServices)
++if (NOT MOBILECORESERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(MOBILECORESERVICES_LIBRARY "")
++endif ()
+ find_library(SPRINGBOARDSERVICES_LIBRARY SpringBoardServices HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT SPRINGBOARDSERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(SPRINGBOARDSERVICES_LIBRARY "")
++endif ()
+ find_library(UIKITSERVICES_LIBRARY UIKitServices HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT UIKITSERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(UIKITSERVICES_LIBRARY "")
++endif ()
+ find_library(UIKIT_LIBRARY UIKit)
++if (NOT UIKIT_LIBRARY)  # ios6: allow missing frameworks
++    set(UIKIT_LIBRARY "")
++endif ()
+ find_library(APPSTOREDAEMON_LIBRARY AppStoreDaemon HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT APPSTOREDAEMON_LIBRARY)  # ios6: allow missing frameworks
++    set(APPSTOREDAEMON_LIBRARY "")
++endif ()
+ find_library(BACKBOARDSERVICES_LIBRARY BackBoardServices HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT BACKBOARDSERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(BACKBOARDSERVICES_LIBRARY "")
++endif ()
+ find_library(CONTACTS_LIBRARY Contacts)
++if (NOT CONTACTS_LIBRARY)  # ios6: allow missing frameworks
++    set(CONTACTS_LIBRARY "")
++endif ()
+ find_library(CORETELEPHONY_LIBRARY CoreTelephony)
++if (NOT CORETELEPHONY_LIBRARY)  # ios6: allow missing frameworks
++    set(CORETELEPHONY_LIBRARY "")
++endif ()
+ find_library(FRONTBOARDSERVICES_LIBRARY FrontBoardServices HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT FRONTBOARDSERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(FRONTBOARDSERVICES_LIBRARY "")
++endif ()
+ find_library(GAMECONTROLLERUI_LIBRARY GameControllerUI HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT GAMECONTROLLERUI_LIBRARY)  # ios6: allow missing frameworks
++    set(GAMECONTROLLERUI_LIBRARY "")
++endif ()
+ find_library(INSTALLCOORDINATION_LIBRARY InstallCoordination HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT INSTALLCOORDINATION_LIBRARY)  # ios6: allow missing frameworks
++    set(INSTALLCOORDINATION_LIBRARY "")
++endif ()
+ find_library(MOBILEKEYBAG_LIBRARY MobileKeyBag HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT MOBILEKEYBAG_LIBRARY)  # ios6: allow missing frameworks
++    set(MOBILEKEYBAG_LIBRARY "")
++endif ()
+ find_library(NETWORKEXTENSION_LIBRARY NetworkExtension)
++if (NOT NETWORKEXTENSION_LIBRARY)  # ios6: allow missing frameworks
++    set(NETWORKEXTENSION_LIBRARY "")
++endif ()
+ find_library(PDFKIT_LIBRARY PDFKit)
++if (NOT PDFKIT_LIBRARY)  # ios6: allow missing frameworks
++    set(PDFKIT_LIBRARY "")
++endif ()
+ find_library(APPLICATIONSERVICES_LIBRARY ApplicationServices)
++if (NOT APPLICATIONSERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(APPLICATIONSERVICES_LIBRARY "")
++endif ()
+ find_library(CARBON_LIBRARY Carbon)
++if (NOT CARBON_LIBRARY)  # ios6: allow missing frameworks
++    set(CARBON_LIBRARY "")
++endif ()
+ find_library(SECURITYINTERFACE_LIBRARY SecurityInterface)
++if (NOT SECURITYINTERFACE_LIBRARY)  # ios6: allow missing frameworks
++    set(SECURITYINTERFACE_LIBRARY "")
++endif ()
+ find_library(QUARTZ_LIBRARY Quartz)
++if (NOT QUARTZ_LIBRARY)  # ios6: allow missing frameworks
++    set(QUARTZ_LIBRARY "")
++endif ()
+ find_library(AVFAUDIO_LIBRARY AVFAudio HINTS ${AVFOUNDATION_LIBRARY}/Versions/*/Frameworks)
+-
++if (NOT AVFAUDIO_LIBRARY)  # ios6: allow missing frameworks
++    set(AVFAUDIO_LIBRARY "")
++endif ()
+ add_compile_options(
+     "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-DWK_XPC_SERVICE_SUFFIX=\".Development\">"
+     "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-DWEBKIT_BUNDLE_VERSION=\"${WEBKIT_MAC_VERSION}\">"
+@@ -535,9 +648,24 @@ list(APPEND WebKit_SOURCES
+ endif ()
+ 
+ find_library(CRYPTOTOKENKIT_LIBRARY CryptoTokenKit)
++
++if (NOT CRYPTOTOKENKIT_LIBRARY)  # ios6: allow missing frameworks
++
++    set(CRYPTOTOKENKIT_LIBRARY "")
++
++endif ()
+ find_library(USERNOTIFICATIONS_LIBRARY UserNotifications)
++if (NOT USERNOTIFICATIONS_LIBRARY)  # ios6: allow missing frameworks
++    set(USERNOTIFICATIONS_LIBRARY "")
++endif ()
+ find_library(WRITINGTOOLS_LIBRARY WritingTools HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT WRITINGTOOLS_LIBRARY)  # ios6: allow missing frameworks
++    set(WRITINGTOOLS_LIBRARY "")
++endif ()
+ find_library(APPLEPUSHSERVICE_LIBRARY ApplePushService HINTS ${CMAKE_OSX_SYSROOT}/System/Library/PrivateFrameworks)
++if (NOT APPLEPUSHSERVICE_LIBRARY)  # ios6: allow missing frameworks
++    set(APPLEPUSHSERVICE_LIBRARY "")
++endif ()
+ list(APPEND WebKit_PRIVATE_LIBRARIES
+     Accessibility
+     ${CORESERVICES_LIBRARY}
+diff --git a/Source/WebKitLegacy/PlatformCocoa.cmake b/Source/WebKitLegacy/PlatformCocoa.cmake
+index 7b1cebde0..21b87537a 100644
+--- a/Source/WebKitLegacy/PlatformCocoa.cmake
++++ b/Source/WebKitLegacy/PlatformCocoa.cmake
+@@ -4,10 +4,24 @@ WEBKIT_ADD_TARGET_CXX_FLAGS(WebKitLegacy -Wno-unused-parameter)
+ WEBKIT_ADD_PREFIX_HEADER(WebKitLegacy WebKitLegacyPrefix.h PREFIX_LANGUAGES CXX OBJC OBJCXX)
+ 
+ find_library(UIKIT_LIBRARY UIKit)
++
++if (NOT UIKIT_LIBRARY)  # ios6: allow missing frameworks
++
++    set(UIKIT_LIBRARY "")
++
++endif ()
+ find_library(APPLICATIONSERVICES_LIBRARY ApplicationServices)
++if (NOT APPLICATIONSERVICES_LIBRARY)  # ios6: allow missing frameworks
++    set(APPLICATIONSERVICES_LIBRARY "")
++endif ()
+ find_library(QUARTZ_LIBRARY Quartz)
++if (NOT QUARTZ_LIBRARY)  # ios6: allow missing frameworks
++    set(QUARTZ_LIBRARY "")
++endif ()
+ find_library(SECURITYINTERFACE_LIBRARY SecurityInterface)
+-
++if (NOT SECURITYINTERFACE_LIBRARY)  # ios6: allow missing frameworks
++    set(SECURITYINTERFACE_LIBRARY "")
++endif ()
+ list(APPEND WebKitLegacy_PRIVATE_LIBRARIES
+     PAL
+ )
+diff --git a/Source/WebKitLegacy/SourcesCMakeCocoa.txt b/Source/WebKitLegacy/SourcesCMakeCocoa.txt
+index f90bc17ce..4e8201c6e 100644
+--- a/Source/WebKitLegacy/SourcesCMakeCocoa.txt
++++ b/Source/WebKitLegacy/SourcesCMakeCocoa.txt
+@@ -69,7 +69,7 @@ mac/Misc/WebCache.mm @nonARC
+ mac/Misc/WebCoreStatistics.mm @nonARC
+ mac/Misc/WebDownload.mm @nonARC
+ mac/Misc/WebElementDictionary.mm @nonARC
+-mac/Misc/WebIconDatabase.mm @nonARC
++// ios6: mac/Misc/WebIconDatabase.mm @nonARC
+ mac/Misc/WebKitLogInitialization.mm @nonARC
+ mac/Misc/WebKitNSStringExtras.mm @nonARC
+ mac/Misc/WebKitVersionChecks.mm @nonARC
+@@ -78,10 +78,10 @@ mac/Misc/WebLocalizableStringsInternal.mm @nonARC
+ mac/Misc/WebNSDataExtras.mm @nonARC
+ mac/Misc/WebNSFileManagerExtras.mm @nonARC
+ mac/Misc/WebNSObjectExtras.mm @nonARC
+-mac/Misc/WebNSPasteboardExtras.mm @nonARC
++// ios6: mac/Misc/WebNSPasteboardExtras.mm @nonARC
+ mac/Misc/WebNSURLExtras.mm @nonARC
+ mac/Misc/WebNSUserDefaultsExtras.mm @nonARC
+-mac/Misc/WebStringTruncator.mm @nonARC
++// ios6: mac/Misc/WebStringTruncator.mm @nonARC
+ mac/Misc/WebUserContentURLPattern.mm @nonARC
+ 
+ mac/Plugins/WebPluginPackage.mm @nonARC
+@@ -93,10 +93,10 @@ mac/Storage/WebDatabaseQuotaManager.mm @nonARC
+ mac/Storage/WebStorageManager.mm @nonARC
+ mac/Storage/WebStorageTrackerClient.mm @nonARC
+ 
+-mac/WebCoreSupport/CorrectionPanel.mm @nonARC
++// ios6: mac/WebCoreSupport/CorrectionPanel.mm @nonARC
+ mac/WebCoreSupport/LegacyHistoryItemClient.mm @nonARC
+-mac/WebCoreSupport/PopupMenuMac.mm @nonARC
+-mac/WebCoreSupport/SearchPopupMenuMac.mm @nonARC
++// ios6: mac/WebCoreSupport/PopupMenuMac.mm @nonARC
++// ios6: mac/WebCoreSupport/SearchPopupMenuMac.mm @nonARC
+ mac/WebCoreSupport/WebAlternativeTextClient.mm @nonARC
+ mac/WebCoreSupport/WebChromeClient.mm @nonARC
+ mac/WebCoreSupport/WebContextMenuClient.mm @nonARC
+@@ -104,7 +104,7 @@ mac/WebCoreSupport/WebDragClient.mm @nonARC
+ mac/WebCoreSupport/WebEditorClient.mm @nonARC
+ mac/WebCoreSupport/WebFrameNetworkingContext.mm @nonARC
+ mac/WebCoreSupport/WebGeolocationClient.mm @nonARC
+-mac/WebCoreSupport/WebInspectorClient.mm @nonARC
++// ios6: mac/WebCoreSupport/WebInspectorClient.mm @nonARC
+ mac/WebCoreSupport/WebKitFullScreenListener.mm @nonARC
+ mac/WebCoreSupport/WebMediaKeySystemClient.mm @nonARC
+ mac/WebCoreSupport/WebNotificationClient.mm @nonARC
+@@ -128,7 +128,7 @@ mac/WebView/WebDelegateImplementationCaching.mm @nonARC
+ mac/WebView/WebDeviceOrientation.mm @nonARC
+ mac/WebView/WebDeviceOrientationProviderMock.mm @nonARC
+ mac/WebView/WebDocumentLoaderMac.mm @nonARC
+-mac/WebView/WebDynamicScrollBarsView.mm @nonARC
++// ios6: mac/WebView/WebDynamicScrollBarsView.mm @nonARC
+ mac/WebView/WebGeolocationPosition.mm @nonARC
+ mac/WebView/WebHTMLRepresentation.mm @nonARC
+ mac/WebView/WebIndicateLayer.mm @nonARC
+@@ -140,11 +140,11 @@ mac/WebView/WebPolicyDelegate.mm @nonARC
+ mac/WebView/WebPreferences.mm @nonARC
+ mac/WebView/WebPreferencesDefaultValues.mm @nonARC
+ mac/WebView/WebResource.mm @nonARC
+-mac/WebView/WebTextCompletionController.mm @nonARC
++// ios6: mac/WebView/WebTextCompletionController.mm @nonARC
+ mac/WebView/WebTextIterator.mm @nonARC
+-mac/WebView/WebVideoFullscreenController.mm @nonARC
++// ios6: mac/WebView/WebVideoFullscreenController.mm @nonARC
+ mac/WebView/WebViewData.mm @nonARC
+-mac/WebView/WebWindowAnimation.mm @nonARC
++// ios6: mac/WebView/WebWindowAnimation.mm @nonARC
+ 
+ // DerivedSources
+ WebViewPreferencesChangedGenerated.mm @nonARC
+diff --git a/Source/WebKitLegacy/mac/Plugins/WebPluginController.mm b/Source/WebKitLegacy/mac/Plugins/WebPluginController.mm
+index 526f893ee..1f33c0510 100644
+--- a/Source/WebKitLegacy/mac/Plugins/WebPluginController.mm
++++ b/Source/WebKitLegacy/mac/Plugins/WebPluginController.mm
+@@ -56,6 +56,7 @@
+ #import <WebCore/HTMLNames.h>
+ #import <WebCore/LocalFrame.h>
+ #import <WebCore/LocalFrameInlines.h>
++#import <WebCore/DocumentView.h>
+ #import <WebCore/ResourceRequest.h>
+ #import <WebCore/ScriptController.h>
+ #import <WebCore/UserGestureIndicator.h>
+diff --git a/Source/WebKitLegacy/mac/WebCoreSupport/PopupMenuMac.mm b/Source/WebKitLegacy/mac/WebCoreSupport/PopupMenuMac.mm
+index b1ebad54a..5e3c2d4ba 100644
+--- a/Source/WebKitLegacy/mac/WebCoreSupport/PopupMenuMac.mm
++++ b/Source/WebKitLegacy/mac/WebCoreSupport/PopupMenuMac.mm
+@@ -35,7 +35,9 @@
+ #import <WebCore/LocalFrame.h>
+ #import <WebCore/LocalFrameView.h>
+ #import <WebCore/PopupMenuClient.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSCellSPI.h>
++#endif
+ #import <pal/system/mac/PopupMenu.h>
+ #import <wtf/BlockObjCExceptions.h>
+ 
+diff --git a/Source/WebKitLegacy/mac/WebCoreSupport/TextIndicatorWindow.mm b/Source/WebKitLegacy/mac/WebCoreSupport/TextIndicatorWindow.mm
+index 29de8c0eb..8f71da761 100644
+--- a/Source/WebKitLegacy/mac/WebCoreSupport/TextIndicatorWindow.mm
++++ b/Source/WebKitLegacy/mac/WebCoreSupport/TextIndicatorWindow.mm
+@@ -35,7 +35,9 @@
+ #import <WebCore/WebTextIndicatorLayer.h>
+ #import <pal/spi/cg/CoreGraphicsSPI.h>
+ #import <pal/spi/cocoa/QuartzCoreSPI.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSColorSPI.h>
++#endif
+ #import <wtf/TZoneMallocInlines.h>
+ 
+ @interface WebTextIndicatorView : NSView
+diff --git a/Source/WebKitLegacy/mac/WebCoreSupport/WebChromeClient.mm b/Source/WebKitLegacy/mac/WebCoreSupport/WebChromeClient.mm
+index b31609341..fe7a04c90 100644
+--- a/Source/WebKitLegacy/mac/WebCoreSupport/WebChromeClient.mm
++++ b/Source/WebKitLegacy/mac/WebCoreSupport/WebChromeClient.mm
+@@ -102,7 +102,9 @@
+ #import <WebCore/WKContentObservation.h>
+ #import <WebCore/Widget.h>
+ #import <WebCore/WindowFeatures.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSViewSPI.h>
++#endif
+ #import <wtf/BlockObjCExceptions.h>
+ #import <wtf/RefPtr.h>
+ #import <wtf/TZoneMallocInlines.h>
+diff --git a/Source/WebKitLegacy/mac/WebCoreSupport/WebContextMenuClient.mm b/Source/WebKitLegacy/mac/WebCoreSupport/WebContextMenuClient.mm
+index c2bd67e93..b29a1a424 100644
+--- a/Source/WebKitLegacy/mac/WebCoreSupport/WebContextMenuClient.mm
++++ b/Source/WebKitLegacy/mac/WebCoreSupport/WebContextMenuClient.mm
+@@ -57,7 +57,9 @@
+ #import <WebCore/SharedBuffer.h>
+ #import <WebCore/SimpleRange.h>
+ #import <WebKitLegacy/DOMPrivate.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSSharingServicePickerSPI.h>
++#endif
+ #import <wtf/RuntimeApplicationChecks.h>
+ #import <wtf/TZoneMallocInlines.h>
+ #import <wtf/URL.h>
+diff --git a/Source/WebKitLegacy/mac/WebCoreSupport/WebEditorClient.mm b/Source/WebKitLegacy/mac/WebCoreSupport/WebEditorClient.mm
+index d60245092..0fe2ced25 100644
+--- a/Source/WebKitLegacy/mac/WebCoreSupport/WebEditorClient.mm
++++ b/Source/WebKitLegacy/mac/WebCoreSupport/WebEditorClient.mm
+@@ -86,7 +86,9 @@
+ #import <WebCore/WebCoreMainThread.h>
+ #import <WebCore/WebCoreObjCExtras.h>
+ #import <pal/spi/cocoa/NSAttributedStringSPI.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSSpellCheckerSPI.h>
++#endif
+ #import <wtf/MainThread.h>
+ #import <wtf/Markable.h>
+ #import <wtf/RefPtr.h>
+diff --git a/Source/WebKitLegacy/mac/WebCoreSupport/WebSelectionServiceController.mm b/Source/WebKitLegacy/mac/WebCoreSupport/WebSelectionServiceController.mm
+index ca1d56070..872d8956e 100644
+--- a/Source/WebKitLegacy/mac/WebCoreSupport/WebSelectionServiceController.mm
++++ b/Source/WebKitLegacy/mac/WebCoreSupport/WebSelectionServiceController.mm
+@@ -33,7 +33,9 @@
+ #import <WebCore/Page.h>
+ #import <WebCore/Range.h>
+ #import <WebCore/markup.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSSharingServiceSPI.h>
++#endif
+ #import <wtf/TZoneMallocInlines.h>
+ 
+ 
+diff --git a/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm b/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
+index 497c5b01f..2f17998d5 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebHTMLView.mm
+@@ -147,11 +147,21 @@
+ #import <pal/spi/cf/CFUtilitiesSPI.h>
+ #import <pal/spi/cocoa/NSAttributedStringSPI.h>
+ #import <pal/spi/cocoa/NSURLFileTypeMappingsSPI.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSMenuSPI.h>
++#endif
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSScrollerImpSPI.h>
++#endif
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSSpellCheckerSPI.h>
++#endif
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSViewSPI.h>
++#endif
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSWindowSPI.h>
++#endif
+ #import <wtf/BlockObjCExceptions.h>
+ #import <wtf/MainThread.h>
+ #import <wtf/MathExtras.h>
+@@ -170,9 +180,13 @@
+ #import "WebNSPasteboardExtras.h"
+ #import <AppKit/NSAccessibility.h>
+ #import <WebCore/PlatformEventFactoryMac.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSMenuSPI.h>
++#endif
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSTextInputContextSPI.h>
+ #endif
++#endif
+ 
+ #if PLATFORM(IOS_FAMILY)
+ #import "WebUIKitDelegate.h"
+diff --git a/Source/WebKitLegacy/mac/WebView/WebImmediateActionController.mm b/Source/WebKitLegacy/mac/WebView/WebImmediateActionController.mm
+index 2d4aaab87..5953f3bd2 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebImmediateActionController.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebImmediateActionController.mm
+@@ -61,8 +61,12 @@
+ #import <WebCore/TextIterator.h>
+ #import <objc/objc-class.h>
+ #import <objc/objc.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/LookupSPI.h>
++#endif
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSMenuSPI.h>
++#endif
+ #import <wtf/RuntimeApplicationChecks.h>
+ 
+ #import <pal/mac/DataDetectorsSoftLink.h>
+diff --git a/Source/WebKitLegacy/mac/WebView/WebVideoFullscreenController.mm b/Source/WebKitLegacy/mac/WebView/WebVideoFullscreenController.mm
+index 8ee6eb1a6..655ab1e73 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebVideoFullscreenController.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebVideoFullscreenController.mm
+@@ -36,7 +36,9 @@
+ #import <objc/message.h>
+ #import <objc/runtime.h>
+ #import <pal/spi/cocoa/AVKitSPI.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSWindowSPI.h>
++#endif
+ #import <wtf/RetainPtr.h>
+ 
+ #import <pal/cf/CoreMediaSoftLink.h>
+diff --git a/Source/WebKitLegacy/mac/WebView/WebView.mm b/Source/WebKitLegacy/mac/WebView/WebView.mm
+index 035570341..c4ecc32f6 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebView.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebView.mm
+@@ -269,10 +269,18 @@
+ #import <pal/spi/cocoa/NSURLFileTypeMappingsSPI.h>
+ #import <pal/spi/cocoa/QuartzCoreSPI.h>
+ #import <pal/spi/ios/BrowserEngineKitSPI.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSResponderSPI.h>
++#endif
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSSpellCheckerSPI.h>
++#endif
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSViewSPI.h>
++#endif
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSWindowSPI.h>
++#endif
+ #import <wtf/Assertions.h>
+ #import <wtf/Atomics.h>
+ #import <wtf/BlockPtr.h>
+@@ -310,8 +318,12 @@
+ #import "WebVideoFullscreenController.h"
+ #import <WebCore/TextIndicator.h>
+ #import <pal/spi/cocoa/AVKitSPI.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/LookupSPI.h>
++#endif
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSImmediateActionGestureRecognizerSPI.h>
++#endif
+ #else
+ #import "WebCaretChangeListener.h"
+ #import "WebChromeClientIOS.h"
+diff --git a/Source/WebKitLegacy/mac/WebView/WebViewData.mm b/Source/WebKitLegacy/mac/WebView/WebViewData.mm
+index 9afb89549..4f7292449 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebViewData.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebViewData.mm
+@@ -43,7 +43,9 @@
+ #import <WebCore/ValidationBubble.h>
+ #import <WebCore/WebCoreJITOperations.h>
+ #import <WebCore/WebCoreMainThread.h>
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSWindowSPI.h>
++#endif
+ #import <wtf/MainThread.h>
+ #import <wtf/RunLoop.h>
+ #import <wtf/SetForScope.h>
+diff --git a/Source/WebKitLegacy/mac/WebView/WebViewRenderingUpdateScheduler.mm b/Source/WebKitLegacy/mac/WebView/WebViewRenderingUpdateScheduler.mm
+index 11819b373..e9e11d717 100644
+--- a/Source/WebKitLegacy/mac/WebView/WebViewRenderingUpdateScheduler.mm
++++ b/Source/WebKitLegacy/mac/WebView/WebViewRenderingUpdateScheduler.mm
+@@ -39,8 +39,10 @@
+ #import <wtf/SetForScope.h>
+ 
+ #if PLATFORM(MAC)
++#if PLATFORM(MAC)  // ios6: mac SPI
+ #import <pal/spi/mac/NSWindowSPI.h>
+ #endif
++#endif
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(WebViewRenderingUpdateScheduler);
+ 
+diff --git a/Source/bmalloc/PlatformCocoa.cmake b/Source/bmalloc/PlatformCocoa.cmake
+index 6b5d04308..5e09be739 100644
+--- a/Source/bmalloc/PlatformCocoa.cmake
++++ b/Source/bmalloc/PlatformCocoa.cmake
+@@ -9,6 +9,12 @@ list(APPEND bmalloc_SOURCES
+ )
+ 
+ find_library(FOUNDATION_LIBRARY Foundation)
++
++if (NOT FOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++
++    set(FOUNDATION_LIBRARY "")
++
++endif ()
+ list(APPEND bmalloc_LIBRARIES ${FOUNDATION_LIBRARY})
+ 
+ target_compile_options(bmalloc PRIVATE -fno-threadsafe-statics)
+diff --git a/Source/bmalloc/bmalloc/bmalloc.h b/Source/bmalloc/bmalloc/bmalloc.h
+index b125f5dbe..543ab79f2 100644
+--- a/Source/bmalloc/bmalloc/bmalloc.h
++++ b/Source/bmalloc/bmalloc/bmalloc.h
+@@ -46,6 +46,20 @@ BALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ #include "mimalloc.h"
+ #endif
+ 
++#include <stdlib.h>
++
++// iOS 6 predates C11 aligned_alloc; posix_memalign has the same contract here
++// because every caller already passes a power-of-two alignment.
++static inline void* bmalloc_aligned_alloc_compat(size_t alignment, size_t size)
++{
++    void* memory = nullptr;
++    if (alignment < sizeof(void*))
++        alignment = sizeof(void*);
++    if (posix_memalign(&memory, alignment, size))
++        return nullptr;
++    return memory;
++}
++
+ namespace bmalloc {
+ namespace api {
+ 
+@@ -155,7 +169,7 @@ BINLINE void* tryMemalign(size_t alignment, size_t size, CompactAllocationMode m
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    return ::aligned_alloc(alignment, size);
++    return bmalloc_aligned_alloc_compat(alignment, size);
+ #endif
+ }
+ 
+@@ -176,7 +190,7 @@ BINLINE void* memalign(size_t alignment, size_t size, CompactAllocationMode mode
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    void* memory = ::aligned_alloc(alignment, size);
++    void* memory = bmalloc_aligned_alloc_compat(alignment, size);
+     RELEASE_BASSERT(memory);
+     return memory;
+ #endif
+@@ -197,7 +211,7 @@ BINLINE void* tryZeroedMemalign(size_t alignment, size_t size, CompactAllocation
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    void* memory = ::aligned_alloc(alignment, size);
++    void* memory = bmalloc_aligned_alloc_compat(alignment, size);
+     if (memory) [[likely]]
+         memset(memory, 0, size);
+     return memory;
+@@ -221,7 +235,7 @@ BINLINE void* zeroedMemalign(size_t alignment, size_t size, CompactAllocationMod
+ #else
+     BUNUSED(mode);
+     BUNUSED(kind);
+-    void* memory = ::aligned_alloc(alignment, size);
++    void* memory = bmalloc_aligned_alloc_compat(alignment, size);
+     RELEASE_BASSERT(memory);
+     memset(memory, 0, size);
+     return memory;
+diff --git a/Source/cmake/OptionsCocoa.cmake b/Source/cmake/OptionsCocoa.cmake
+index bbf8fd813..dcb89aee8 100644
+--- a/Source/cmake/OptionsCocoa.cmake
++++ b/Source/cmake/OptionsCocoa.cmake
+@@ -158,7 +158,11 @@ WEBKIT_OPTION_END()
+ # ---------------------------------------------------------------------------
+ # Shared Cocoa configuration.
+ # ---------------------------------------------------------------------------
+-set(SWIFT_REQUIRED ON)
++# swiftc has no armv7 target, so this port builds the Swift sources' C++
++# counterparts instead.
++if (NOT DEFINED SWIFT_REQUIRED)
++    set(SWIFT_REQUIRED ON)
++endif ()
+ 
+ # Configure module building
+ add_compile_options(
+@@ -198,7 +202,11 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+ set(WebKitTestRunner_DERIVED_SOURCES_DIR "${CMAKE_BINARY_DIR}/DerivedSources/WebKitTestRunner")
+ set(TestRunnerShared_DERIVED_SOURCES_DIR "${CMAKE_BINARY_DIR}/DerivedSources/TestRunnerShared")
+ 
+-SET_AND_EXPOSE_TO_BUILD(USE_LIBWEBRTC TRUE)
++if (WTF_CPU_ARM)
++    SET_AND_EXPOSE_TO_BUILD(USE_LIBWEBRTC FALSE)
++else ()
++    SET_AND_EXPOSE_TO_BUILD(USE_LIBWEBRTC TRUE)
++endif ()
+ 
+ if (NOT ENABLE_WEBGPU)
+     set(_webgpu_fwd "${CMAKE_BINARY_DIR}/WebGPU-stub/WebGPU")
+@@ -216,14 +224,18 @@ else ()
+ endif ()
+ 
+ set(ENABLE_WEBKIT_LEGACY ON)
+-set(ENABLE_WEBKIT ON)
++if (NOT DEFINED CACHE{ENABLE_WEBKIT})
++    set(ENABLE_WEBKIT ON)
++endif ()
+ 
+ # OBJECT libraries don't produce .swiftmodule files.
+ set(PAL_LIBRARY_TYPE STATIC)
+ 
+ set(CMAKE_LINK_DEPENDS_NO_SHARED ON)
+ 
+-set(USE_ANGLE_EGL ON)
++if (NOT DEFINED CACHE{USE_ANGLE_EGL})
++    set(USE_ANGLE_EGL ON)
++endif ()
+ 
+ # FIXME: CMake is not used for Production at this moment. https://bugs.webkit.org/show_bug.cgi?id=322112
+ SET_AND_EXPOSE_TO_BUILD(ENGINEERING_BUILD ON)
+@@ -251,7 +263,10 @@ find_package(Threads REQUIRED)
+ 
+ # Replace the SDK's availability headers with stubs that defuse availability
+ # checks.
+-if (NOT USE_APPLE_INTERNAL_SDK)
++# The overlay exists to defuse availability checks when building against a
++# newer SDK than the deployment target. Here the SDK is older than anything
++# WebKit's overlay headers expect, so the SDK's own macros are the right ones.
++if (NOT USE_APPLE_INTERNAL_SDK AND NOT WEBKIT_NO_AVAILABILITY_OVERLAY)
+     set(_availability_overlay_dir "${CMAKE_SOURCE_DIR}/WebKitLibraries/AvailabilityOverlay")
+     set(_availability_overlay_yaml "${CMAKE_BINARY_DIR}/availability-overlay.yaml")
+     file(WRITE "${_availability_overlay_yaml}.tmp"
+@@ -359,11 +374,32 @@ add_link_options(-Wl,-dead_strip_dylibs)
+ 
+ # Linked globally because PAL has Swift sources that get force-loaded into WebCore,
+ # and WebCore does not link JavaScriptCore directly on all platforms.
+-find_library(SWIFTCORE_LIBRARY swiftCore HINTS ${CMAKE_OSX_SYSROOT}/usr/lib/swift REQUIRED)
+-link_libraries(${SWIFTCORE_LIBRARY})
++# No Swift runtime exists for armv7, and the CMake build compiles no Swift
++# sources, so this is optional here.
++find_library(SWIFTCORE_LIBRARY swiftCore HINTS ${CMAKE_OSX_SYSROOT}/usr/lib/swift)
++if (NOT SWIFTCORE_LIBRARY)  # ios6: allow missing frameworks
++    set(SWIFTCORE_LIBRARY "")
++endif ()
++if (SWIFTCORE_LIBRARY)
++    link_libraries(${SWIFTCORE_LIBRARY})
++endif ()
++
++# iOS 6 compatibility: symbols that only appeared in later releases, the 32-bit
++# compiler-rt builtins that live in libgcc_s here, and objc_msgSend_stret, which
++# exists on armv7 devices but is absent from this SDK's stub library.
++if (WEBKIT_IOS6_COMPAT_LIB)
++    link_libraries(${WEBKIT_IOS6_COMPAT_LIB})
++    add_link_options("/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.ios.a" "SHELL:-Wl,-U,_objc_msgSend_stret")
++endif ()
++
++# iOS 6 ships a 2012 libc++ with no std::filesystem and no C++17 runtime,
++# so every binary links the one built alongside this port.
++if (WEBKIT_IOS6_LIBCXX_DIR)
++    add_link_options(-nostdlib++ -L${WEBKIT_IOS6_LIBCXX_DIR}/lib -lc++ -lc++abi)
++endif ()
+ 
+ WEBKIT_XCRUN(_libtool -f libtool)
+-if (CMAKE_GENERATOR STREQUAL "Ninja")
++if (TRUE)
+     set(CMAKE_CXX_ARCHIVE_CREATE "${_libtool} -static -no_warning_for_no_symbols -o <TARGET> <OBJECTS>")
+     set(CMAKE_C_ARCHIVE_CREATE "${_libtool} -static -no_warning_for_no_symbols -o <TARGET> <OBJECTS>")
+     set(CMAKE_CXX_ARCHIVE_APPEND "${_libtool} -static -no_warning_for_no_symbols -o <TARGET> <TARGET> <OBJECTS>")
+diff --git a/Source/cmake/WebKitMacros.cmake b/Source/cmake/WebKitMacros.cmake
+index 1a6b8f30e..2728ad630 100644
+--- a/Source/cmake/WebKitMacros.cmake
++++ b/Source/cmake/WebKitMacros.cmake
+@@ -792,6 +792,7 @@ function(WEBKIT_COPY_FILES target_name)
+     cmake_parse_arguments(opt "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+     set(files ${opt_FILES})
+     set(dst_files)
++    file(MAKE_DIRECTORY ${opt_DESTINATION})
+ 
+     foreach (file IN LISTS files)
+         if (IS_ABSOLUTE ${file})

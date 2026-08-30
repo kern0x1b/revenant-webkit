@@ -1,0 +1,1055 @@
+diff --git a/Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml b/Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml
+index d67ec7016c..53ef3a7782 100644
+--- a/Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml
++++ b/Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml
+@@ -6645,6 +6645,20 @@ PeerConnectionVideoScalingAdaptationDisabled:
+     WebCore:
+       default: false
+ 
++PendingStylesheetRenderingTimeout:
++  type: double
++  status: embedder
++  webKitLegacyPreferenceKey: WebKitPendingStylesheetRenderingTimeoutPreferenceKey
++  humanReadableName: "Pending Stylesheet Rendering Timeout"
++  humanReadableDescription: "Seconds a stylesheet pending in <head> may block building the render tree before the document is rendered unstyled anyway. Negative means block indefinitely."
++  defaultValue:
++    WebKitLegacy:
++      default: 1
++    WebKit:
++      default: 1
++    WebCore:
++      default: 1
++
+ # FIXME: Is this implemented for WebKitLegacy? If not, this should be excluded from WebKitLegacy entirely.
+ PerElementSpeakerSelectionEnabled:
+   type: bool
+@@ -7141,11 +7155,11 @@ RequestIdleCallbackEnabled:
+   humanReadableDescription: "Enable requestIdleCallback support"
+   defaultValue:
+     WebKitLegacy:
+-      default: false
++      default: true
+     WebKit:
+       default: false
+     WebCore:
+-      default: false
++      default: true
+ 
+ RequestStorageAccessThrowsExceptionUntilReload:
+   type: bool
+diff --git a/Source/WTF/wtf/Assertions.cpp b/Source/WTF/wtf/Assertions.cpp
+index 688bafa332..715219d345 100644
+--- a/Source/WTF/wtf/Assertions.cpp
++++ b/Source/WTF/wtf/Assertions.cpp
+@@ -778,4 +778,11 @@ String getAndResetAccumulatedLogs()
+ 
+ } // namespace WTF
+ 
++#if defined(WEBKIT_IOS6)
++extern "C" WTF_EXPORT_PRIVATE void WTFInvokeCrashHook(void);
++extern "C" void WTFInvokeCrashHook(void)
++{
++}
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+diff --git a/Source/WTF/wtf/AvailableMemory.cpp b/Source/WTF/wtf/AvailableMemory.cpp
+index dda9eac9d4..d335da710b 100644
+--- a/Source/WTF/wtf/AvailableMemory.cpp
++++ b/Source/WTF/wtf/AvailableMemory.cpp
+@@ -185,7 +185,16 @@ size_t availableMemory()
+ #if PLATFORM(IOS_FAMILY) || OS(LINUX) || OS(FREEBSD)
+ MemoryStatus memoryStatus()
+ {
+-#if PLATFORM(IOS_FAMILY)
++#if defined(WEBKIT_IOS6)
++    // This kernel answers TASK_VM_INFO at revision 0, which stops short of
++    // phys_footprint and leaves those bytes holding whatever was on the stack.
++    mach_task_basic_info_data_t taskInfo;
++    mach_msg_type_number_t taskInfoCount = MACH_TASK_BASIC_INFO_COUNT;
++
++    size_t memoryFootprint = 0;
++    if (KERN_SUCCESS == task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)(&taskInfo), &taskInfoCount))
++        memoryFootprint = static_cast<size_t>(taskInfo.resident_size);
++#elif PLATFORM(IOS_FAMILY)
+     task_vm_info_data_t vmInfo;
+     mach_msg_type_number_t vmSize = TASK_VM_INFO_COUNT;
+ 
+diff --git a/Source/WTF/wtf/MallocCommon.cpp b/Source/WTF/wtf/MallocCommon.cpp
+index d211ae00be..ded2995225 100644
+--- a/Source/WTF/wtf/MallocCommon.cpp
++++ b/Source/WTF/wtf/MallocCommon.cpp
+@@ -29,8 +29,13 @@
+ namespace WTF {
+ 
+ #if ASSERT_ENABLED
++#if defined(WEBKIT_IOS6)
++static IOS6ThreadLocal<unsigned> forbidMallocUseScopeCount;
++static IOS6ThreadLocal<unsigned> disableMallocRestrictionScopeCount;
++#else
+ thread_local static unsigned forbidMallocUseScopeCount;
+ thread_local static unsigned disableMallocRestrictionScopeCount;
++#endif
+ 
+ ForbidMallocUseForCurrentThreadScope::ForbidMallocUseForCurrentThreadScope()
+ {
+diff --git a/Source/WTF/wtf/MemoryPressureHandler.cpp b/Source/WTF/wtf/MemoryPressureHandler.cpp
+index 71256410f9..bedd550b7f 100644
+--- a/Source/WTF/wtf/MemoryPressureHandler.cpp
++++ b/Source/WTF/wtf/MemoryPressureHandler.cpp
+@@ -248,7 +248,11 @@ void MemoryPressureHandler::measurementTimerFired()
+         releaseMemory(Critical::No, Synchronous::No);
+         break;
+     case MemoryUsagePolicy::Strict:
++#if defined(WEBKIT_IOS6)
++        releaseMemory(footprint >= m_configuration.baseThreshold ? Critical::Yes : Critical::No, Synchronous::No);
++#else
+         releaseMemory(Critical::Yes, Synchronous::No);
++#endif
+         break;
+     }
+ }
+diff --git a/Source/WTF/wtf/MemoryPressureHandler.h b/Source/WTF/wtf/MemoryPressureHandler.h
+index 2faf07ca6a..c1e590f0ed 100644
+--- a/Source/WTF/wtf/MemoryPressureHandler.h
++++ b/Source/WTF/wtf/MemoryPressureHandler.h
+@@ -111,10 +111,17 @@ public:
+         m_lowMemoryHandler = WTF::move(handler);
+     }
+ 
++    // The footprint policy is folded in on Mac because there the process, not
++    // the system, is what runs out of memory first. That is also true of this
++    // port: the process ceiling is 122MB while the device has 512MB, so
++    // kern.memorystatus_level - which is what m_memoryPressureStatus is driven
++    // from here - still reads healthy when this process alone is about to be
++    // jetsammed. Without this the periodic footprint monitor computes a policy
++    // that nothing ever reads.
+     bool isUnderMemoryWarning() const
+     {
+         return m_memoryPressureStatus == SystemMemoryPressureStatus::Warning
+-#if PLATFORM(MAC)
++#if PLATFORM(MAC) || defined(WEBKIT_IOS6)
+             || m_memoryUsagePolicy == MemoryUsagePolicy::Conservative
+ #endif
+             || m_isSimulatingMemoryWarning;
+@@ -123,7 +130,7 @@ public:
+     bool isUnderMemoryPressure() const
+     {
+         return m_memoryPressureStatus == SystemMemoryPressureStatus::Critical
+-#if PLATFORM(MAC)
++#if PLATFORM(MAC) || defined(WEBKIT_IOS6)
+             || m_memoryUsagePolicy >= MemoryUsagePolicy::Strict
+ #endif
+             || m_isSimulatingMemoryPressure;
+diff --git a/Source/WTF/wtf/PlatformCocoa.cmake b/Source/WTF/wtf/PlatformCocoa.cmake
+index d8adcfe9d8..f11a4b0f34 100644
+--- a/Source/WTF/wtf/PlatformCocoa.cmake
++++ b/Source/WTF/wtf/PlatformCocoa.cmake
+@@ -1,6 +1,15 @@
+ find_library(COREFOUNDATION_LIBRARY CoreFoundation)
++if (NOT COREFOUNDATION_LIBRARY)  # ios6: allow missing frameworks
++    set(COREFOUNDATION_LIBRARY "")
++endif ()
+ find_library(READLINE_LIBRARY Readline)
++if (NOT READLINE_LIBRARY)  # ios6: allow missing frameworks
++    set(READLINE_LIBRARY "")
++endif ()
+ find_library(SECURITY_LIBRARY Security)
++if (NOT SECURITY_LIBRARY)  # ios6: allow missing frameworks
++    set(SECURITY_LIBRARY "")
++endif ()
+ list(APPEND WTF_LIBRARIES
+     ${COREFOUNDATION_LIBRARY}
+     ${READLINE_LIBRARY}
+@@ -137,7 +146,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR USE_APPLE_INTERNAL_SDK)
+         WORKING_DIRECTORY ${WTF_DERIVED_SOURCES_DIR}
+         COMMAND ${Mig_EXECUTABLE} -header mach_exc.h -user mach_excUser.c
+             -sheader MachExceptionsServer.h -server mach_excServer.c
+-            -DMACH_EXC_SERVER_TASKIDTOKEN_STATE -isysroot ${CMAKE_OSX_SYSROOT}
++            -DMACH_EXC_SERVER_TASKIDTOKEN_STATE -isysroot ${MIG_SYSROOT}
+             MachExceptions.defs
+         VERBATIM)
+     list(APPEND WTF_SOURCES
+diff --git a/Source/WTF/wtf/PlatformEnable.h b/Source/WTF/wtf/PlatformEnable.h
+index 08d8ea5a09..f22d706332 100644
+--- a/Source/WTF/wtf/PlatformEnable.h
++++ b/Source/WTF/wtf/PlatformEnable.h
+@@ -726,9 +726,25 @@
+ #endif
+ 
+ #if USE(JSVALUE32_64)
++/* iOS 6 port: 2.54 removed the ARMv7 escape hatch that 2.52 still had, so every
++   32-bit build is forced onto CLoop here. The 2.52 predicate was
++   CPU(ARM_THUMB2) && CPU(ARM_HARDFP) && OS(LINUX); we widen it to Darwin and
++   drop the hardfp term deliberately. Rationale for dropping it: clang does not
++   define __ARM_PCS_VFP for armv7-apple-ios6.0 (Apple uses the softfp calling
++   convention), so CPU(ARM_HARDFP) is 0 for us -- and grepping Source/JavaScriptCore
++   and Source/WTF shows ARM_HARDFP has no references outside PlatformCPU.h, so no
++   assembler or calling-convention code actually branches on it. The term is
++   vestigial, and gating on it would exclude us for no functional reason. */
++#if CPU(ARM_THUMB2) && (OS(LINUX) || OS(DARWIN))
++#if !defined(ENABLE_JIT)
++#define ENABLE_JIT 1
++#endif
++#else
++/* Disable JIT on all other 32bit architectures. */
+ #undef ENABLE_JIT
+ #define ENABLE_JIT 0
+ #endif
++#endif
+ 
+ #if CPU(RISCV64)
+ #undef ENABLE_WEBASSEMBLY
+@@ -758,8 +774,14 @@
+ #if USE(JSVALUE32_64)
+ #undef ENABLE_FTL_JIT
+ #define ENABLE_FTL_JIT 0
+-#undef ENABLE_DFG_JIT
+-#define ENABLE_DFG_JIT 0
++/* iOS 6 port: 2.54 widened this block to take the DFG down with the FTL, though the
++   comment above only justifies the FTL. webkitglib/2.52 (wpewebkit-2.52.6) kills only
++   ENABLE_FTL_JIT here and still ships a working 32-bit DFG, and 2.54 still carries every
++   32-bit DFG source (dfg/DFGSpeculativeJIT32_64.cpp, jit/CallFrameShuffler32_64.cpp,
++   jit/JITOpcodes32_64.cpp). Only the predicate changed, so we restore 2.52's behaviour.
++   This is not optional polish: JITInlineCacheGenerator.h puts DFG::UnlinkedPropertyInlineCache
++   in CompileTimePropertyInlineCache unconditionally and dereferences it, so ENABLE_JIT
++   without ENABLE_DFG_JIT does not compile on any architecture. */
+ #endif
+ 
+ /* If possible, try to enable a disassembler. This is optional. We proceed in two
+@@ -777,7 +799,11 @@
+ #define ENABLE_RISCV64_DISASSEMBLER 1
+ #endif
+ 
+-#if !defined(ENABLE_DISASSEMBLER) && (ENABLE(ZYDIS) || ENABLE(ARM64_DISASSEMBLER) || ENABLE(RISCV64_DISASSEMBLER) || (ENABLE(JIT) && USE(CAPSTONE)))
++#if !defined(ENABLE_ARMV7_DISASSEMBLER) && ENABLE(JIT) && CPU(ARM_THUMB2) && !USE(CAPSTONE)
++#define ENABLE_ARMV7_DISASSEMBLER 1
++#endif
++
++#if !defined(ENABLE_DISASSEMBLER) && (ENABLE(ZYDIS) || ENABLE(ARM64_DISASSEMBLER) || ENABLE(ARMV7_DISASSEMBLER) || ENABLE(RISCV64_DISASSEMBLER) || (ENABLE(JIT) && USE(CAPSTONE)))
+ #define ENABLE_DISASSEMBLER 1
+ #endif
+ 
+@@ -792,6 +818,13 @@
+ #define ENABLE_DFG_JIT 1
+ #endif
+ 
++/* iOS 6 port: restored verbatim from wpewebkit-2.52.6, which reads
++   "Enable the DFG JIT on ARMv7. Only tested on iOS, Linux, and FreeBSD." -- iOS is
++   named explicitly. 2.54 deleted the ARMv7 arm of this clause. */
++#if CPU(ARM_THUMB2) && (OS(DARWIN) || OS(LINUX) || OS(FREEBSD))
++#define ENABLE_DFG_JIT 1
++#endif
++
+ #endif /* !defined(ENABLE_DFG_JIT) && ENABLE(JIT) */
+ 
+ #if ENABLE(DFG_JIT) && ASSERT_ENABLED
+diff --git a/Source/WTF/wtf/PlatformEnableCocoa.h b/Source/WTF/wtf/PlatformEnableCocoa.h
+index a0fcba3553..5e4ebe0f75 100644
+--- a/Source/WTF/wtf/PlatformEnableCocoa.h
++++ b/Source/WTF/wtf/PlatformEnableCocoa.h
+@@ -76,7 +76,7 @@
+ #define ENABLE_AIRPLAY_PICKER 1
+ #endif
+ 
+-#if !defined(ENABLE_COCOA_WEBM_PLAYER) && !PLATFORM(MACCATALYST) && !PLATFORM(WATCHOS) && !PLATFORM(APPLETV)
++#if !defined(ENABLE_COCOA_WEBM_PLAYER) && !defined(WEBKIT_IOS6) && !PLATFORM(MACCATALYST) && !PLATFORM(WATCHOS) && !PLATFORM(APPLETV)
+ #define ENABLE_COCOA_WEBM_PLAYER 1
+ #endif
+ 
+@@ -84,9 +84,20 @@
+ #define ENABLE_APP_BOUND_DOMAINS 1
+ #endif
+ 
+-#if !defined(ENABLE_WEB_THREAD_DISABLEMENT) && PLATFORM(IOS_FAMILY)
++// Modern WebKit runs WebKitLegacy's iOS port without a web thread, because the
++// clients it still has do not need one. This embedder does: with the web thread
++// disabled, parsing, style, layout, JavaScript and painting all happen on the
++// main thread, so the interface is dead for as long as a page is working - which
++// on a feed is several seconds at a time, and is the difference between this
++// feeling like an application and feeling like a browser that has stopped
++// responding. Captured directly: the main thread was found standing inside
++// JSEventListener::handleEvent, eight seconds into a load.
++#if !defined(ENABLE_WEB_THREAD_DISABLEMENT) && PLATFORM(IOS_FAMILY) && !defined(WEBKIT_IOS6)
+ #define ENABLE_WEB_THREAD_DISABLEMENT 1
+ #endif
++#if defined(WEBKIT_IOS6)
++#define ENABLE_WEB_THREAD_DISABLEMENT 0
++#endif
+ 
+ #if !defined(ENABLE_APP_HIGHLIGHTS) && (PLATFORM(MAC) || PLATFORM(IOS))
+ #define ENABLE_APP_HIGHLIGHTS 1
+@@ -303,13 +314,12 @@
+ #define ENABLE_DATACUE_VALUE 1
+ #endif
+ 
+-#if !defined(ENABLE_DATA_DETECTION) && (PLATFORM(MAC) || PLATFORM(IOS) || PLATFORM(MACCATALYST) || PLATFORM(VISION))
++#if !defined(ENABLE_DATA_DETECTION) && defined(WEBKIT_IOS6)
++#define ENABLE_DATA_DETECTION 0
++#elif !defined(ENABLE_DATA_DETECTION) && (PLATFORM(MAC) || PLATFORM(IOS) || PLATFORM(MACCATALYST) || PLATFORM(VISION))
+ #define ENABLE_DATA_DETECTION 1
+ #endif
+ 
+-#if !defined(ENABLE_DECLARATIVE_WEB_PUSH) && (PLATFORM(MAC) || PLATFORM(IOS))
+-#define ENABLE_DECLARATIVE_WEB_PUSH 1
+-#endif
+ 
+ #if !defined(ENABLE_DESTINATION_COLOR_SPACE_DISPLAY_P3)
+ #define ENABLE_DESTINATION_COLOR_SPACE_DISPLAY_P3 1
+@@ -659,12 +669,16 @@
+ #define ENABLE_NON_VISIBLE_WEBPROCESS_MEMORY_CLEANUP_TIMER 1
+ #endif
+ 
+-#if !defined(ENABLE_NOTIFICATION_EVENT) && (PLATFORM(MAC) || PLATFORM(IOS))
++#if !defined(ENABLE_NOTIFICATIONS)
++#define ENABLE_NOTIFICATIONS 1
++#endif
++
++#if !defined(ENABLE_NOTIFICATION_EVENT) && (PLATFORM(MAC) || PLATFORM(IOS)) && ENABLE(NOTIFICATIONS)
+ #define ENABLE_NOTIFICATION_EVENT 1
+ #endif
+ 
+-#if !defined(ENABLE_NOTIFICATIONS)
+-#define ENABLE_NOTIFICATIONS 1
++#if !defined(ENABLE_DECLARATIVE_WEB_PUSH) && (PLATFORM(MAC) || PLATFORM(IOS)) && ENABLE(NOTIFICATION_EVENT)
++#define ENABLE_DECLARATIVE_WEB_PUSH 1
+ #endif
+ 
+ #if !defined(ENABLE_NOTIFY_FILTERING) && PLATFORM(MAC)
+@@ -917,9 +931,18 @@
+ #define ENABLE_TOUCH_EVENTS 1
+ #endif
+ 
+-#if !defined(ENABLE_TOUCH_EVENT_REGIONS) && PLATFORM(IOS_FAMILY)
++// Touch event regions are how a multi-process WebKit tells the UI process which
++// screen regions a page wants to intercept touches in, so scrolling can start
++// on the UI process's thread before the web process has even seen the touch -
++// a site-isolation/WebKit2 concept. This port is WebKitLegacy only, one
++// process, no UI-process/WebProcess split to report anything across, so there
++// is nothing for this to do here regardless of the internal SDK.
++#if !defined(ENABLE_TOUCH_EVENT_REGIONS) && PLATFORM(IOS_FAMILY) && !defined(WEBKIT_IOS6)
+ #define ENABLE_TOUCH_EVENT_REGIONS 1
+ #endif
++#if defined(WEBKIT_IOS6)
++#define ENABLE_TOUCH_EVENT_REGIONS 0
++#endif
+ 
+ #if !defined(ENABLE_TOUCH_ACTION_REGIONS) && PLATFORM(IOS_FAMILY)
+ #define ENABLE_TOUCH_ACTION_REGIONS 1
+@@ -1228,3 +1251,63 @@
+ #endif
+ 
+ #endif // PLATFORM(COCOA)
++
++/* ---- iOS 6 port: Apple Pay needs PassKit classes this SDK does not have ---- */
++#if defined(WEBKIT_IOS6)
++#undef ENABLE_PIXEL_FORMAT_RGBA16F
++#define ENABLE_PIXEL_FORMAT_RGBA16F 0
++#undef ENABLE_APPLE_PAY
++#define ENABLE_APPLE_PAY 0
++#undef ENABLE_APPLE_PAY_AMS_UI
++#define ENABLE_APPLE_PAY_AMS_UI 0
++#undef ENABLE_APPLE_PAY_AUTOMATIC_RELOAD_LINE_ITEM
++#define ENABLE_APPLE_PAY_AUTOMATIC_RELOAD_LINE_ITEM 0
++#undef ENABLE_APPLE_PAY_AUTOMATIC_RELOAD_PAYMENTS
++#define ENABLE_APPLE_PAY_AUTOMATIC_RELOAD_PAYMENTS 0
++#undef ENABLE_APPLE_PAY_COUPON_CODE
++#define ENABLE_APPLE_PAY_COUPON_CODE 0
++#undef ENABLE_APPLE_PAY_DEFERRED_LINE_ITEM
++#define ENABLE_APPLE_PAY_DEFERRED_LINE_ITEM 0
++#undef ENABLE_APPLE_PAY_DEFERRED_PAYMENTS
++#define ENABLE_APPLE_PAY_DEFERRED_PAYMENTS 0
++#undef ENABLE_APPLE_PAY_DELEGATED_REQUEST
++#define ENABLE_APPLE_PAY_DELEGATED_REQUEST 0
++#undef ENABLE_APPLE_PAY_DISBURSEMENTS
++#define ENABLE_APPLE_PAY_DISBURSEMENTS 0
++#undef ENABLE_APPLE_PAY_FEATURES
++#define ENABLE_APPLE_PAY_FEATURES 0
++#undef ENABLE_APPLE_PAY_INSTALLMENTS
++#define ENABLE_APPLE_PAY_INSTALLMENTS 0
++#undef ENABLE_APPLE_PAY_LATER
++#define ENABLE_APPLE_PAY_LATER 0
++#undef ENABLE_APPLE_PAY_LATER_AVAILABILITY
++#define ENABLE_APPLE_PAY_LATER_AVAILABILITY 0
++#undef ENABLE_APPLE_PAY_MERCHANT_CATEGORY_CODE
++#define ENABLE_APPLE_PAY_MERCHANT_CATEGORY_CODE 0
++#undef ENABLE_APPLE_PAY_MULTI_MERCHANT_PAYMENTS
++#define ENABLE_APPLE_PAY_MULTI_MERCHANT_PAYMENTS 0
++#undef ENABLE_APPLE_PAY_NEW_BUTTON_TYPES
++#define ENABLE_APPLE_PAY_NEW_BUTTON_TYPES 0
++#undef ENABLE_APPLE_PAY_PAYMENT_ORDER_DETAILS
++#define ENABLE_APPLE_PAY_PAYMENT_ORDER_DETAILS 0
++#undef ENABLE_APPLE_PAY_RECURRING_LINE_ITEM
++#define ENABLE_APPLE_PAY_RECURRING_LINE_ITEM 0
++#undef ENABLE_APPLE_PAY_RECURRING_PAYMENTS
++#define ENABLE_APPLE_PAY_RECURRING_PAYMENTS 0
++#undef ENABLE_APPLE_PAY_REMOTE_UI
++#define ENABLE_APPLE_PAY_REMOTE_UI 0
++#undef ENABLE_APPLE_PAY_REMOTE_UI_USES_SCENE
++#define ENABLE_APPLE_PAY_REMOTE_UI_USES_SCENE 0
++#undef ENABLE_APPLE_PAY_SELECTED_SHIPPING_METHOD
++#define ENABLE_APPLE_PAY_SELECTED_SHIPPING_METHOD 0
++#undef ENABLE_APPLE_PAY_SESSION_V11
++#define ENABLE_APPLE_PAY_SESSION_V11 0
++#undef ENABLE_APPLE_PAY_SETUP
++#define ENABLE_APPLE_PAY_SETUP 0
++#undef ENABLE_APPLE_PAY_SHIPPING_CONTACT_EDITING_MODE
++#define ENABLE_APPLE_PAY_SHIPPING_CONTACT_EDITING_MODE 0
++#undef ENABLE_APPLE_PAY_SHIPPING_METHOD_DATE_COMPONENTS_RANGE
++#define ENABLE_APPLE_PAY_SHIPPING_METHOD_DATE_COMPONENTS_RANGE 0
++#undef ENABLE_APPLE_PAY_UPDATE_SHIPPING_METHODS_WHEN_CHANGING_LINE_ITEMS
++#define ENABLE_APPLE_PAY_UPDATE_SHIPPING_METHODS_WHEN_CHANGING_LINE_ITEMS 0
++#endif
+diff --git a/Source/WTF/wtf/PlatformHave.h b/Source/WTF/wtf/PlatformHave.h
+index 2776e4f9bd..d570be56a3 100644
+--- a/Source/WTF/wtf/PlatformHave.h
++++ b/Source/WTF/wtf/PlatformHave.h
+@@ -101,7 +101,7 @@
+ #define HAVE_HISERVICES 1
+ #endif
+ 
+-#if PLATFORM(IOS_FAMILY)
++#if PLATFORM(IOS_FAMILY) && !defined(WEBKIT_IOS6_NO_READLINE)
+ #define HAVE_READLINE 1
+ #endif
+ 
+@@ -221,7 +221,7 @@
+ #define HAVE_PTHREAD_SETNAME_NP 1
+ #endif
+ 
+-#if OS(DARWIN)
++#if OS(DARWIN) && !defined(WEBKIT_IOS6_NO_READLINE)
+ #define HAVE_READLINE 1
+ #endif
+ 
+@@ -380,7 +380,7 @@
+ #define HAVE_AVASSETREADER 1
+ #endif
+ 
+-#if PLATFORM(COCOA)
++#if PLATFORM(COCOA) && !defined(WEBKIT_IOS6)
+ #define HAVE_IOSURFACE 1
+ #endif
+ 
+@@ -584,7 +584,20 @@
+ #define HAVE_APP_SSO 1
+ #endif
+ 
+-#if PLATFORM(COCOA) || PLATFORM(GTK) || PLATFORM(WPE)
++// -_setCookiesChangedHandler:onQueue:, -_setCookiesRemovedHandler:onQueue: and
++// -_setSubscribedDomainsForCookieChanges: are all absent from this Foundation.
++// What this release has in their place is NSHTTPCookieManagerCookiesChangedNotification:
++// one notification for the whole jar, carrying no cookie list, no domain, and no
++// distinction between an addition and a removal. Those three things are the entire
++// contract of the listener API, so there is nothing here to map it onto. The only
++// way to synthesise them would be to keep a shadow copy of the jar and diff it,
++// which would report a cookie CFNetwork merely rewrote as a fresh addition - a
++// fallback layer that lies. So state that the capability is absent and let
++// WebCore's existing "this platform has no cookie change listeners" path run;
++// on this port CookieJar::addChangeListener is already the do-nothing base
++// implementation, so nothing observable changes. The coarse notification is
++// still used, correctly, by CookieStorageObserver for "the jar changed, re-read".
++#if (PLATFORM(COCOA) && !defined(WEBKIT_IOS6)) || PLATFORM(GTK) || PLATFORM(WPE)
+ #define HAVE_COOKIE_CHANGE_LISTENER_API 1
+ #endif
+ 
+@@ -592,7 +605,7 @@
+ #define HAVE_NEAR_FIELD 1
+ #endif
+ 
+-#if PLATFORM(COCOA)
++#if PLATFORM(COCOA) && !defined(WEBKIT_IOS6)
+ #define HAVE_OS_SIGNPOST 1
+ #endif
+ 
+@@ -636,7 +649,18 @@
+ #define HAVE_UISCENE_BASED_VIEW_SERVICE_STATE_NOTIFICATIONS 1
+ #endif
+ 
+-#if PLATFORM(IOS_FAMILY) && !PLATFORM(IOS_FAMILY_SIMULATOR) && !PLATFORM(MACCATALYST)
++// The entitlement gate this turns on - isJITEnabled() requiring
++// "dynamic-codesigning" or "com.apple.developer.cs.allow-jit" - describes an OS
++// that enforces code signing on writable-executable pages. This one does not:
++// mmap of RWX and mprotect RW->RX both succeed and the written code executes,
++// verified directly on the device as root and as mobile. Neither entitlement
++// name existed in 2012 either, so the check can only ever answer false here, and
++// when it does ExecutableAllocator hands back an empty reservation, isValid()
++// goes false, and disableJIT() sets Options::useJIT() = false. The engine then
++// runs the LLInt for the life of the process while still reporting itself as a
++// JIT build - which is exactly what was measured before this was turned off:
++// useJIT=0, execAllocValid=0, and interpreter-shaped benchmark numbers.
++#if PLATFORM(IOS_FAMILY) && !PLATFORM(IOS_FAMILY_SIMULATOR) && !PLATFORM(MACCATALYST) && !defined(WEBKIT_IOS6)
+ #define HAVE_IOS_JIT_RESTRICTIONS 1
+ #endif
+ 
+@@ -882,7 +906,9 @@
+ #define HAVE_ASV_INLINE_PREVIEW 1
+ #endif
+ 
+-#if PLATFORM(IOS) || PLATFORM(MACCATALYST) || PLATFORM(MAC) || PLATFORM(VISION)
++#if (PLATFORM(IOS) || PLATFORM(MACCATALYST) || PLATFORM(MAC) || PLATFORM(VISION)) && !defined(WEBKIT_IOS6)
++// App SSO, and this variant of the lookup, arrived long after iOS 6. The older
++// -_protocolClassForRequest: is still there and does the same job.
+ #define HAVE_NSURLPROTOCOL_WITH_SKIPAPPSSO 1
+ #endif
+ 
+@@ -1114,7 +1140,20 @@
+ #define HAVE_SHARED_REGION_SPI 1
+ #endif
+ 
+-#if PLATFORM(IOS_FAMILY) && !PLATFORM(MACCATALYST)
++// CarPlay, and with it AVAudioSessionPortCarAudio, arrived in iOS 7. Asking this
++// AVFoundation for that constant gets nothing, and PAL's soft-link asserts
++// rather than returning nil, so the question kills the process the first time a
++// page creates a media element. There is no car head unit to be connected to
++// here, which is what the guarded code concludes anyway.
++#if !defined(WEBKIT_IOS6)
++#define HAVE_AVAUDIOSESSION_CARAUDIO_PORT 1
++#endif
++
++// MediaExperience.framework postdates this OS by years, so AVSystemController
++// and its notifications are not there to soft-link against. The two use sites
++// are already guarded by this HAVE; without it the constant accessors assert
++// and the process dies the first time a script touches a media element.
++#if PLATFORM(IOS_FAMILY) && !PLATFORM(MACCATALYST) && !defined(WEBKIT_IOS6)
+ #define HAVE_MEDIAEXPERIENCE_AVSYSTEMCONTROLLER 1
+ #endif
+ 
+@@ -1404,7 +1443,9 @@
+ #define HAVE_IDLE_SLEEP_STATE 1
+ #endif
+ 
+-#if PLATFORM(COCOA)
++#if PLATFORM(COCOA) && !defined(WEBKIT_IOS6)
++// CGStyle is a decade newer than this CoreGraphics. Calling CGContextSetStyle
++// on a context that has never heard of styles aborts the process.
+ #define HAVE_CGSTYLE_COLORMATRIX_BLUR 1
+ #endif
+ 
+@@ -1925,7 +1966,20 @@
+ #define HAVE_UICONTEXTMENUCONFIGURATION_ALLOWTYPESELECT_SUPPORT 0
+ #endif
+ 
++// This CFNetwork has no storage partitions at all - -_storagePartition,
++// -_getCookiesForPartition: and the partition argument of -_getCookiesForURL:...
++// are all absent from it - so partitioned cookies are not a thing that can be
++// turned on here. Today this gate is already off because the deployment target
++// is 6.0 and the version checks below want 26.2, but that is a coincidence of a
++// build flag, not a statement about the OS: build-254 passes
++// -miphoneos-version-min=26.5 and is only saved by clang overriding it with
++// -target armv7-apple-ios6.0. If that flag is ever corrected, this gate would
++// flip on and NetworkStorageSession::setCookiePartition would start sending
++// -_storagePartition to an NSHTTPCookie that has no such method. Say the
++// platform truth instead, so the partition code stays out for the reason it
++// should.
+ #if !defined(HAVE_ALLOW_ONLY_PARTITIONED_COOKIES) \
++    && !defined(WEBKIT_IOS6) \
+     && ((PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 260200) \
+     || ((PLATFORM(IOS) || PLATFORM(MACCATALYST)) && __IPHONE_OS_VERSION_MIN_REQUIRED >= 260200) \
+     || (PLATFORM(VISION) && __VISION_OS_VERSION_MIN_REQUIRED >= 260200) \
+@@ -1990,3 +2044,51 @@
+ #if !defined(HAVE_FULLSCREEN_LIGHTSPILL) && PLATFORM(VISION) && __VISION_OS_VERSION_MIN_REQUIRED >= 270000
+ #define HAVE_FULLSCREEN_LIGHTSPILL 1
+ #endif
++
++/* ---- iOS 6 port: features whose SDK headers do not exist here ---- */
++#if defined(WEBKIT_IOS6)
++#undef HAVE_SUPPORT_HDR_DISPLAY_APIS
++#define HAVE_SUPPORT_HDR_DISPLAY_APIS 0
++#undef HAVE_TASK_IDENTITY_TOKEN
++#define HAVE_TASK_IDENTITY_TOKEN 0
++#undef HAVE_AVSAMPLEBUFFERVIDEORENDERER
++#define HAVE_AVSAMPLEBUFFERVIDEORENDERER 0
++#undef HAVE_VTDECOMPRESSIONSESSION_MULTIIMAGE
++#define HAVE_VTDECOMPRESSIONSESSION_MULTIIMAGE 0
++#undef HAVE_MULTI_IMAGE_DECODE
++#define HAVE_MULTI_IMAGE_DECODE 0
++#undef HAVE_IOSURFACE_SET_OWNERSHIP
++#define HAVE_IOSURFACE_SET_OWNERSHIP 0
++#undef HAVE_PASSKIT_AUTOMATIC_RELOAD_PAYMENTS
++#define HAVE_PASSKIT_AUTOMATIC_RELOAD_PAYMENTS 0
++#undef HAVE_PASSKIT_AUTOMATIC_RELOAD_SUMMARY_ITEM
++#define HAVE_PASSKIT_AUTOMATIC_RELOAD_SUMMARY_ITEM 0
++#undef HAVE_PASSKIT_DEFAULT_SHIPPING_METHOD
++#define HAVE_PASSKIT_DEFAULT_SHIPPING_METHOD 0
++#undef HAVE_PASSKIT_DEFERRED_PAYMENTS
++#define HAVE_PASSKIT_DEFERRED_PAYMENTS 0
++#undef HAVE_PASSKIT_DEFERRED_SUMMARY_ITEM
++#define HAVE_PASSKIT_DEFERRED_SUMMARY_ITEM 0
++#undef HAVE_PASSKIT_DISBURSEMENTS
++#define HAVE_PASSKIT_DISBURSEMENTS 0
++#undef HAVE_PASSKIT_INSTALLMENTS
++#define HAVE_PASSKIT_INSTALLMENTS 0
++#undef HAVE_PASSKIT_MAC_HELPER_TEMP
++#define HAVE_PASSKIT_MAC_HELPER_TEMP 0
++#undef HAVE_PASSKIT_MODULARIZATION
++#define HAVE_PASSKIT_MODULARIZATION 0
++#undef HAVE_PASSKIT_MULTI_MERCHANT_PAYMENTS
++#define HAVE_PASSKIT_MULTI_MERCHANT_PAYMENTS 0
++#undef HAVE_PASSKIT_PAYMENT_ORDER_DETAILS
++#define HAVE_PASSKIT_PAYMENT_ORDER_DETAILS 0
++#undef HAVE_PASSKIT_PAYMENT_SERVICES_MERCHANT_URL_IS_DELEGATED
++#define HAVE_PASSKIT_PAYMENT_SERVICES_MERCHANT_URL_IS_DELEGATED 0
++#undef HAVE_PASSKIT_RECURRING_PAYMENTS
++#define HAVE_PASSKIT_RECURRING_PAYMENTS 0
++#undef HAVE_PASSKIT_RECURRING_SUMMARY_ITEM
++#define HAVE_PASSKIT_RECURRING_SUMMARY_ITEM 0
++#undef HAVE_PASSKIT_SHIPPING_METHOD_DATE_COMPONENTS_RANGE
++#define HAVE_PASSKIT_SHIPPING_METHOD_DATE_COMPONENTS_RANGE 0
++#undef HAVE_AVCONTENTKEYREQUEST_PENDING_PROTECTION_STATUS
++#define HAVE_AVCONTENTKEYREQUEST_PENDING_PROTECTION_STATUS 0
++#endif
+diff --git a/Source/WTF/wtf/PlatformJSCOnly.cmake b/Source/WTF/wtf/PlatformJSCOnly.cmake
+index fe97ed9c9c..16a5a808eb 100644
+--- a/Source/WTF/wtf/PlatformJSCOnly.cmake
++++ b/Source/WTF/wtf/PlatformJSCOnly.cmake
+@@ -88,7 +88,7 @@ elseif (APPLE)
+         WORKING_DIRECTORY ${WTF_DERIVED_SOURCES_DIR}
+         COMMAND ${Mig_EXECUTABLE} -header mach_exc.h -user mach_excUser.c
+             -sheader MachExceptionsServer.h -server mach_excServer.c
+-            -DMACH_EXC_SERVER_TASKIDTOKEN_STATE -isysroot ${CMAKE_OSX_SYSROOT}
++            -DMACH_EXC_SERVER_TASKIDTOKEN_STATE -isysroot ${MIG_SYSROOT}
+             MachExceptions.defs
+         VERBATIM)
+     list(APPEND WTF_SOURCES
+diff --git a/Source/WTF/wtf/PlatformUse.h b/Source/WTF/wtf/PlatformUse.h
+index 0c16afbd6f..5048af7c15 100644
+--- a/Source/WTF/wtf/PlatformUse.h
++++ b/Source/WTF/wtf/PlatformUse.h
+@@ -248,7 +248,7 @@
+ #endif
+ 
+ #if !defined(USE_SYSTEM_MALLOC)
+-#if OS(DARWIN) && !CPU(ADDRESS64)
++#if OS(DARWIN) && !CPU(ADDRESS64) && !defined(WEBKIT_IOS6_BMALLOC)
+ #define USE_SYSTEM_MALLOC 1
+ #else
+ #define USE_SYSTEM_MALLOC 0
+@@ -407,3 +407,11 @@
+ #if PLATFORM(IOS) || PLATFORM(VISION)
+ #define USE_ITP_TCC_CHECK 1
+ #endif
++
++/* ---- iOS 6 port ---- */
++#if defined(WEBKIT_IOS6)
++#undef USE_CORE_IMAGE
++#define USE_CORE_IMAGE 0
++#undef USE_MEDIAPARSERD
++#define USE_MEDIAPARSERD 0
++#endif
+diff --git a/Source/WTF/wtf/cf/RunLoopCF.cpp b/Source/WTF/wtf/cf/RunLoopCF.cpp
+index c4488bac66..68433c05bf 100644
+--- a/Source/WTF/wtf/cf/RunLoopCF.cpp
++++ b/Source/WTF/wtf/cf/RunLoopCF.cpp
+@@ -24,6 +24,7 @@
+  */
+ 
+ #include "config.h"
++#include <mutex>
+ #include <wtf/RunLoop.h>
+ 
+ #include <wtf/AutodrainedPool.h>
+@@ -154,6 +155,27 @@ void RunLoop::TimerBase::stop()
+     // from another thread races with the in-flight callback and can leave it reading freed memory.
+     // (Starting a timer cross-thread is safe and supported -- that is how dispatch()/dispatchAfter()
+     // schedule work onto another run loop.)
++#if defined(WEBKIT_IOS6)
++    // This port does not get to choose which thread owns an object. UIKit
++    // creates the web view - and with it a page and everything hanging off it -
++    // on the interface thread, while the engine then runs and tears those same
++    // objects down on the web thread; a navigation therefore destroys timers
++    // from a thread other than the one they were started on, and the assertion
++    // below ended the session every time. Invalidating is safe to do from any
++    // thread; what the assertion protects against is a callback already
++    // dispatching, which is a narrow race and a far smaller failure than a
++    // guaranteed crash on every page change.
++    if (!m_runLoop->isCurrent()) {
++        static std::once_flag reported;
++        std::call_once(reported, [] {
++            WTFLogAlways("[runloop] a timer was stopped from another thread; invalidating it there");
++        });
++        CFRunLoopTimerInvalidate(m_timer.get());
++        m_timer = nullptr;
++        return;
++    }
++#endif
++
+     releaseAssertIsCurrent(m_runLoop);
+     CFRunLoopTimerInvalidate(m_timer.get());
+     m_timer = nullptr;
+diff --git a/Source/WTF/wtf/cocoa/MemoryFootprintCocoa.cpp b/Source/WTF/wtf/cocoa/MemoryFootprintCocoa.cpp
+index 86e280b542..7ab9944ebb 100644
+--- a/Source/WTF/wtf/cocoa/MemoryFootprintCocoa.cpp
++++ b/Source/WTF/wtf/cocoa/MemoryFootprintCocoa.cpp
+@@ -33,12 +33,25 @@ namespace WTF {
+ 
+ size_t memoryFootprint()
+ {
++#if defined(WEBKIT_IOS6)
++    // This kernel answers TASK_VM_INFO at revision 0, which stops short of
++    // phys_footprint — task_info writes nothing there and leaves whatever the
++    // caller's stack held, so the modern query returns noise. Resident size is
++    // also the number jetsam judges a process by on this release.
++    mach_task_basic_info_data_t taskInfo;
++    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
++    kern_return_t result = task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t) &taskInfo, &count);
++    if (result != KERN_SUCCESS)
++        return 0;
++    return static_cast<size_t>(taskInfo.resident_size);
++#else
+     task_vm_info_data_t vmInfo;
+     mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+     kern_return_t result = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &vmInfo, &count);
+     if (result != KERN_SUCCESS)
+         return 0;
+     return static_cast<size_t>(vmInfo.phys_footprint);
++#endif
+ }
+ 
+ }
+diff --git a/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm b/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm
+index 4832d8c363..702923402d 100644
+--- a/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm
++++ b/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm
+@@ -30,7 +30,9 @@
+ #import <mach/task_info.h>
+ #import <malloc/malloc.h>
+ #import <notify.h>
++#import <sys/sysctl.h>
+ #import <wtf/Logging.h>
++#import <wtf/MemoryFootprint.h>
+ #import <wtf/spi/darwin/DispatchSPI.h>
+ 
+ #define ENABLE_FMW_FOOTPRINT_COMPARISON 0
+@@ -41,11 +43,23 @@ namespace WTF {
+ 
+ void MemoryPressureHandler::platformReleaseMemory(Critical critical)
+ {
++#if defined(WEBKIT_IOS6)
++    // The condition below means "the OS has not told libcache itself, so tell
++    // it". Here the OS never tells it: the dispatch memory-pressure source is
++    // refused on this system (see install()), and what pressure this port has
++    // is derived from polling kern.memorystatus_level and this process's own
++    // footprint. isUnderMemoryPressure() being true is therefore not evidence
++    // that libcache has heard anything, and reading it here would silence the
++    // prod at exactly the Strict threshold where it is wanted.
++    if (critical == Critical::Yes)
++        cache_simulate_memory_warning_event(DISPATCH_MEMORYPRESSURE_CRITICAL);
++#else
+     if (critical == Critical::Yes && (!isUnderMemoryPressure() || m_isSimulatingMemoryPressure)) {
+         // libcache listens to OS memory notifications, but for process suspension
+         // or memory pressure simulation, we need to prod it manually:
+         cache_simulate_memory_warning_event(DISPATCH_MEMORYPRESSURE_CRITICAL);
+     }
++#endif
+ }
+ 
+ static OSObjectPtr<dispatch_source_t>& NODELETE memoryPressureEventSource()
+@@ -76,15 +90,89 @@ static const Seconds s_minimumHoldOffTime { 5_s };
+ static constexpr unsigned s_holdOffMultiplier = 20;
+ #endif
+ 
++#if defined(WEBKIT_IOS6)
++// Percentage of system memory still free, as jetsam itself accounts for it.
++// LegacyTileCache reads the same sysctl to size its tile budget.
++static int systemMemoryFreeLevel()
++{
++    int level = 0;
++    size_t size = sizeof(level);
++    if (sysctlbyname("kern.memorystatus_level", &level, &size, nullptr, 0))
++        return 100;
++    return level;
++}
++
++static size_t processMemoryBudget()
++{
++    static size_t budget = 0;
++    if (!budget) {
++        budget = 200 * MB;
++        if (const char* override = getenv("WEBKIT_IOS6_MEMORY_BUDGET_MB")) {
++            long value = strtol(override, nullptr, 10);
++            if (value > 16 && value < 4096)
++                budget = static_cast<size_t>(value) * MB;
++        }
++    }
++    return budget;
++}
++
++static SystemMemoryPressureStatus gradeMemoryPressure(SystemMemoryPressureStatus previous)
++{
++    size_t footprint = memoryFootprint();
++    size_t budget = processMemoryBudget();
++    int level = systemMemoryFreeLevel();
++
++    if (footprint >= budget * 9 / 10 || level < 8)
++        return SystemMemoryPressureStatus::Critical;
++
++    if (footprint >= budget * 3 / 4 || level < 12)
++        return SystemMemoryPressureStatus::Warning;
++
++    if (previous != SystemMemoryPressureStatus::Normal && footprint >= budget * 5 / 8)
++        return SystemMemoryPressureStatus::Warning;
++
++    return SystemMemoryPressureStatus::Normal;
++}
++#endif
++
+ void MemoryPressureHandler::install()
+ {
+     if (m_installed || timerEventSource())
+         return;
+ 
+     dispatch_async(m_dispatchQueue.get(), ^{
++#if defined(WEBKIT_IOS6)
++        // The graded memory-pressure source is iOS 8, and this system refuses
++        // even the ungraded VM pressure source that preceded it — dispatch says
++        // so by returning nothing rather than by failing, so nothing here ever
++        // fired. kern.memorystatus_level is the pressure signal the kernel does
++        // export, and it is what jetsam decides on, so it is polled instead on
++        // the interval that already bounds how often pressure may be answered.
++        SUPPRESS_RETAINPTR_CTOR_ADOPT memoryPressureEventSource() = adoptOSObject(dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, m_dispatchQueue.get()));
++        if (!memoryPressureEventSource())
++            return;
++
++        dispatch_source_set_timer(memoryPressureEventSource().get(), dispatch_time(DISPATCH_TIME_NOW, 0),
++            s_minimumHoldOffTime.seconds() * NSEC_PER_SEC, NSEC_PER_SEC);
++        dispatch_source_set_event_handler(memoryPressureEventSource().get(), ^{
++            SystemMemoryPressureStatus previous = m_memoryPressureStatus.load();
++            SystemMemoryPressureStatus status = gradeMemoryPressure(previous);
++            setMemoryPressureStatus(status);
++
++            if (status == SystemMemoryPressureStatus::Critical)
++                respondToMemoryPressure(Critical::Yes);
++            else if (status == SystemMemoryPressureStatus::Warning && previous != SystemMemoryPressureStatus::Warning)
++                respondToMemoryPressure(Critical::No);
++
++            if (m_shouldLogMemoryMemoryPressureEvents)
++                RELEASE_LOG(MemoryPressure, "Memory pressure: footprint %zu MB, budget %zu MB, system free %d%%, status %d", memoryFootprint() / MB, processMemoryBudget() / MB, systemMemoryFreeLevel(), static_cast<int>(status));
++        });
++        dispatch_resume(memoryPressureEventSource().get());
++#else
+         auto memoryStatusFlags = DISPATCH_MEMORYPRESSURE_NORMAL | DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL | DISPATCH_MEMORYPRESSURE_PROC_LIMIT_WARN | DISPATCH_MEMORYPRESSURE_PROC_LIMIT_CRITICAL;
++        auto *memoryPressureSourceType = DISPATCH_SOURCE_TYPE_MEMORYPRESSURE;
+         // FIXME: This is a false positive. rdar://160931336
+-        SUPPRESS_RETAINPTR_CTOR_ADOPT memoryPressureEventSource() = adoptOSObject(dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0, memoryStatusFlags, m_dispatchQueue.get()));
++        SUPPRESS_RETAINPTR_CTOR_ADOPT memoryPressureEventSource() = adoptOSObject(dispatch_source_create(memoryPressureSourceType, 0, memoryStatusFlags, m_dispatchQueue.get()));
+ 
+         dispatch_source_set_event_handler(memoryPressureEventSource().get(), ^{
+             auto status = dispatch_source_get_data(memoryPressureEventSource().get());
+@@ -115,6 +203,7 @@ void MemoryPressureHandler::install()
+                 RELEASE_LOG(MemoryPressure, "Received memory pressure event: %lu, system vm pressure critical: %d", status, isUnderMemoryPressure());
+         });
+         dispatch_resume(memoryPressureEventSource().get());
++#endif
+     });
+ 
+     // Allow simulation of memory warning (80% of high watermark) with "notifyutil -p org.WebKit.memoryWarning
+@@ -239,7 +328,13 @@ std::optional<MemoryPressureHandler::ReliefLogger::MemoryUsage> MemoryPressureHa
+     if (err != KERN_SUCCESS)
+         return std::nullopt;
+ 
++    // phys_footprint is past what this kernel fills in, so relief is measured
++    // against the same resident size the rest of the port accounts by.
++#if defined(WEBKIT_IOS6)
++    return MemoryUsage {static_cast<size_t>(vmInfo.internal), memoryFootprint()};
++#else
+     return MemoryUsage {static_cast<size_t>(vmInfo.internal), static_cast<size_t>(vmInfo.phys_footprint)};
++#endif
+ }
+ 
+ } // namespace WTF
+diff --git a/Source/WTF/wtf/cocoa/SoftLinking.h b/Source/WTF/wtf/cocoa/SoftLinking.h
+index 3bf34318d1..092302b037 100644
+--- a/Source/WTF/wtf/cocoa/SoftLinking.h
++++ b/Source/WTF/wtf/cocoa/SoftLinking.h
+@@ -139,6 +139,17 @@ static void* lib##Library(bool = false) \
+         return frameworkLibrary; \
+     }
+ 
++/* On iOS 6 a private framework that 2.54 soft-links is usually absent because the
++ * feature it belongs to was invented later. Asserting turns that ordinary
++ * absence into SIGTRAP the first time any canLoad_ helper asks for it - and
++ * canLoad_ asks in the non-optional mode. Leaving the library null instead lets
++ * every caller's own availability check do its job. */
++#if defined(WEBKIT_IOS6)
++#define SOFT_LINK_FRAMEWORK_MUST_LOAD(library) ((void)(library))
++#else
++#define SOFT_LINK_FRAMEWORK_MUST_LOAD(library) RELEASE_ASSERT_WITH_MESSAGE(library, "%s", dlerror())
++#endif
++
+ #define SOFT_LINK_FRAMEWORK_IN_UMBRELLA_FOR_SOURCE_WITH_EXPORT(functionNamespace, umbrella, framework, export) \
+     namespace functionNamespace { \
+     export void* framework##Library(bool isOptional); \
+@@ -149,7 +160,7 @@ static void* lib##Library(bool = false) \
+         dispatch_once(&once, ^{ \
+             frameworkLibrary = dlopen("/System/Library/Frameworks/" #umbrella ".framework/Frameworks/" #framework ".framework/" #framework, RTLD_NOW); \
+             if (!isOptional) \
+-                RELEASE_ASSERT_WITH_MESSAGE(frameworkLibrary, "%s", dlerror()); \
++                SOFT_LINK_FRAMEWORK_MUST_LOAD(frameworkLibrary); \
+         }); \
+         return frameworkLibrary; \
+     } \
+@@ -348,7 +359,7 @@ static void* lib##Library(bool = false) \
+     { \
+         _STORE_IN_DLSYM_SECTION static char const auditedName[] = #name; \
+         void* constant = dlsym(framework##Library(false), auditedName); \
+-        RELEASE_ASSERT_WITH_MESSAGE(constant, "%s", dlerror()); \
++        RELEASE_ASSERT_WITH_MESSAGE(constant, "soft-linked constant %s is not in %s: %s", auditedName, #framework, dlerror() ? dlerror() : "no error reported"); \
+         constant##name.constant = *static_cast<type const *>(constant); \
+         get##name##Singleton = name##Function; \
+         return constant##name.constant; \
+@@ -432,7 +443,7 @@ static void* lib##Library(bool = false) \
+         dispatch_once(&once, ^{ \
+             frameworkLibrary = dlopen("/System/Library/Frameworks/" #framework ".framework/" #framework, flags); \
+             if (!isOptional) \
+-                RELEASE_ASSERT_WITH_MESSAGE(frameworkLibrary, "%s", dlerror()); \
++                SOFT_LINK_FRAMEWORK_MUST_LOAD(frameworkLibrary); \
+         }); \
+         return frameworkLibrary; \
+     } \
+@@ -457,7 +468,7 @@ static void* lib##Library(bool = false) \
+         dispatch_once(&once, ^{ \
+             frameworkLibrary = dlopen("/System/Library/PrivateFrameworks/" #framework ".framework/" #framework, RTLD_NOW); \
+             if (!isOptional) \
+-                RELEASE_ASSERT_WITH_MESSAGE(frameworkLibrary, "%s", dlerror()); \
++                SOFT_LINK_FRAMEWORK_MUST_LOAD(frameworkLibrary); \
+         }); \
+         return frameworkLibrary; \
+     } \
+@@ -555,7 +566,7 @@ static void* lib##Library(bool = false) \
+         dispatch_once(&once, ^{ \
+             _STORE_IN_DLSYM_SECTION static char const auditedName[] = #variableName; \
+             void* constant = dlsym(framework##Library(false), auditedName); \
+-            RELEASE_ASSERT_WITH_MESSAGE(constant, "%s", dlerror()); \
++            RELEASE_ASSERT_WITH_MESSAGE(constant, "soft-linked constant %s is not in %s: %s", auditedName, #framework, dlerror() ? dlerror() : "no error reported"); \
+             constant##framework##variableName = *static_cast<variableType const *>(constant); \
+         }); \
+         return constant##framework##variableName; \
+@@ -572,7 +583,7 @@ static void* lib##Library(bool = false) \
+         dispatch_once(&once, ^{ \
+             _STORE_IN_DLSYM_SECTION static char const auditedName[] = #variableName; \
+             void* constant = dlsym(framework##Library(false), auditedName); \
+-            RELEASE_ASSERT_WITH_MESSAGE(constant, "%s", dlerror()); \
++            RELEASE_ASSERT_WITH_MESSAGE(constant, "soft-linked constant %s is not in %s: %s", auditedName, #framework, dlerror() ? dlerror() : "no error reported"); \
+             constant##framework##variableName = *static_cast<variableType const *>(constant); \
+         }); \
+         return constant##framework##variableName; \
+diff --git a/Source/WTF/wtf/cocoa/TollFreeBridging.h b/Source/WTF/wtf/cocoa/TollFreeBridging.h
+index ed50593f85..559b5a8053 100644
+--- a/Source/WTF/wtf/cocoa/TollFreeBridging.h
++++ b/Source/WTF/wtf/cocoa/TollFreeBridging.h
+@@ -64,7 +64,9 @@ WTF_DECLARE_TOLL_FREE_BRIDGING_TRAITS(CTFont, NSFont)
+ #else
+ WTF_DECLARE_TOLL_FREE_BRIDGING_TRAITS(CTFont, UIFont)
+ #endif
++#if HAVE(IOSURFACE)
+ WTF_DECLARE_TOLL_FREE_BRIDGING_TRAITS(IOSurface, ::IOSurface)
++#endif
+ 
+ template<> struct CFTollFreeBridgingTraits<CFBooleanRef> { using BridgedType = NSNumber *; };
+ 
+diff --git a/Source/WTF/wtf/darwin/DispatchOSObject.h b/Source/WTF/wtf/darwin/DispatchOSObject.h
+index c41971dafe..7e110fbb18 100644
+--- a/Source/WTF/wtf/darwin/DispatchOSObject.h
++++ b/Source/WTF/wtf/darwin/DispatchOSObject.h
+@@ -29,6 +29,18 @@
+ #include <wtf/OSObjectPtr.h>
+ #include <wtf/darwin/TypeCastsOSObject.h>
+ 
++// On the iOS 6 SDK dispatch_queue_global_t does not exist; the compat header
++// aliases it to dispatch_queue_t, so it must not get its own specializations.
++#if defined(WEBKIT_IOS6)
++#define WTF_OS_OBJECT_DISPATCH_TYPES(M) \
++    M(dispatch_data) \
++    M(dispatch_group) \
++    M(dispatch_io) \
++    M(dispatch_object) \
++    M(dispatch_queue) \
++    M(dispatch_semaphore) \
++    M(dispatch_source)
++#else
+ #define WTF_OS_OBJECT_DISPATCH_TYPES(M) \
+     M(dispatch_data) \
+     M(dispatch_group) \
+@@ -38,6 +50,7 @@
+     M(dispatch_queue_global) \
+     M(dispatch_semaphore) \
+     M(dispatch_source)
++#endif
+ 
+ // Forward declarations for dispatch base struct types.
+ WTF_EXTERN_C_BEGIN
+diff --git a/Source/WTF/wtf/darwin/NetworkOSObject.h b/Source/WTF/wtf/darwin/NetworkOSObject.h
+index 7fce6fa975..478d1d9e75 100644
+--- a/Source/WTF/wtf/darwin/NetworkOSObject.h
++++ b/Source/WTF/wtf/darwin/NetworkOSObject.h
+@@ -29,11 +29,17 @@
+ #include <wtf/OSObjectPtr.h>
+ #include <wtf/darwin/TypeCastsOSObject.h>
+ 
++#if defined(WEBKIT_IOS6)
++#define WTF_OS_OBJECT_NETWORK_TYPES(M) \
++    M(nw_endpoint) \
++    M(nw_path)
++#else
+ #define WTF_OS_OBJECT_NETWORK_TYPES(M) \
+     M(nw_endpoint) \
+     M(nw_path) \
+     M(nw_resolution_report) \
+     M(nw_resolver_config)
++#endif
+ 
+ // Forward declarations for network base struct types.
+ WTF_EXTERN_C_BEGIN
+diff --git a/Source/WTF/wtf/darwin/OSLogPrintStream.mm b/Source/WTF/wtf/darwin/OSLogPrintStream.mm
+index 25e98aff67..9ca042930d 100644
+--- a/Source/WTF/wtf/darwin/OSLogPrintStream.mm
++++ b/Source/WTF/wtf/darwin/OSLogPrintStream.mm
+@@ -46,8 +46,9 @@ OSLogPrintStream::~OSLogPrintStream()
+ 
+ std::unique_ptr<OSLogPrintStream> OSLogPrintStream::open(const char* subsystem, const char* category, os_log_type_t logType)
+ {
+-    os_log_t log = os_log_create(subsystem, category);
+-    return makeUnique<OSLogPrintStream>(log, logType);
++    UNUSED_PARAM(subsystem);
++    UNUSED_PARAM(category);
++    return makeUnique<OSLogPrintStream>(nullptr, logType);
+ }
+ 
+ void OSLogPrintStream::vprintf(const char* format, va_list argList)
+@@ -75,7 +76,7 @@ ALLOW_NONLITERAL_FORMAT_END
+         if (buffer[offset] == '\n') {
+             // Set the new line to a null character so os_log stops copying there.
+             buffer[offset] = '\0';
+-            os_log_with_type(m_log, m_logType, "%{public}s", buffer.data());
++            fprintf(stderr, "%s\n", buffer.data());
+             skip(buffer, offset + 1);
+             newOffset -= offset + 1;
+             offset = 0;
+diff --git a/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp b/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp
+index ca44751e7d..70b4dceddc 100644
+--- a/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp
++++ b/Source/WTF/wtf/posix/OSAllocatorPOSIX.cpp
+@@ -40,9 +40,21 @@
+ #if ENABLE(JIT_CAGE)
+ #include <WebKitAdditions/JITCageAdditions.h>
+ #else // ENABLE(JIT_CAGE)
+-#if OS(DARWIN)
++#if OS(DARWIN) && !defined(WEBKIT_IOS6)
+ #define MAP_EXECUTABLE_FOR_JIT MAP_JIT
+ #define MAP_EXECUTABLE_FOR_JIT_WITH_JIT_CAGE MAP_JIT
++#elif OS(DARWIN)
++// MAP_JIT arrived in iOS 7 / OS X 10.9. This kernel does not know the flag, and
++// mmap rejects the whole call with EINVAL rather than ignoring it - so the JIT
++// pool reservation fails, ExecutableAllocator::isValid() goes false, and the
++// engine silently runs the LLInt for the life of the process.
++//
++// Nothing is lost by dropping it. MAP_JIT exists to obtain writable-executable
++// pages on systems that otherwise forbid them; this one has no such rule, which
++// was verified directly on the device - mmap of RWX and mprotect RW->RX both
++// succeed and the code written through them executes, as root and as mobile.
++#define MAP_EXECUTABLE_FOR_JIT 0
++#define MAP_EXECUTABLE_FOR_JIT_WITH_JIT_CAGE 0
+ #else // OS(DARWIN)
+ #define MAP_EXECUTABLE_FOR_JIT 0
+ #define MAP_EXECUTABLE_FOR_JIT_WITH_JIT_CAGE 0

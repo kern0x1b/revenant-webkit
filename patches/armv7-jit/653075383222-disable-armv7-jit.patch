@@ -1,0 +1,274 @@
+From 653075383222482832cf4509967ea1d9d6f6f2d2 Mon Sep 17 00:00:00 2001
+From: Justin Michaud <jmichaud@igalia.com>
+Date: Fri, 13 Mar 2026 15:39:11 -0700
+Subject: [PATCH] [ARMv7] Disable JIT
+ https://bugs.webkit.org/show_bug.cgi?id=309496
+
+Reviewed by Keith Miller.
+
+This is no longer working after recent breakage, disabling to keep EWS
+green.
+
+* JSTests/stress/baselinejittrue.js:
+* JSTests/stress/get-private-name-cache-failure.js:
+* JSTests/stress/map-forEach.js:
+* Source/JavaScriptCore/bytecode/Repatch.cpp:
+(JSC::linkPolymorphicCall):
+(JSC::tryCacheArrayGetByVal):
+(JSC::tryCacheArrayPutByVal):
+(JSC::tryCacheArrayInByVal):
+* Source/JavaScriptCore/dfg/DFGJITCompiler.cpp:
+(JSC::DFG::JITCompiler::link):
+(JSC::DFG::JITCompiler::addPropertyInlineCache):
+* Source/JavaScriptCore/runtime/Options.h:
+(JSC::Options::jitEnabledByDefault):
+* Source/JavaScriptCore/runtime/OptionsList.h:
+* Source/WTF/wtf/PlatformEnable.h:
+* Tools/Scripts/run-jsc-stress-tests:
+
+Canonical link: https://commits.webkit.org/309239@main
+---
+ JSTests/stress/baselinejittrue.js             |  1 +
+ .../stress/get-private-name-cache-failure.js  |  1 +
+ JSTests/stress/map-forEach.js                 |  1 +
+ Source/JavaScriptCore/bytecode/Repatch.cpp    |  9 ++++++---
+ Source/JavaScriptCore/dfg/DFGJITCompiler.cpp  | 20 -------------------
+ Source/JavaScriptCore/runtime/Options.h       |  2 +-
+ Source/JavaScriptCore/runtime/OptionsList.h   |  4 ++--
+ Source/WTF/wtf/PlatformEnable.h               | 18 +++--------------
+ Tools/Scripts/run-jsc-stress-tests            | 14 ++++---------
+ 9 files changed, 19 insertions(+), 51 deletions(-)
+
+diff --git a/JSTests/stress/baselinejittrue.js b/JSTests/stress/baselinejittrue.js
+index 55bcac9c5ae1e..efb897a0d729c 100644
+--- a/JSTests/stress/baselinejittrue.js
++++ b/JSTests/stress/baselinejittrue.js
+@@ -1,3 +1,4 @@
++//@ skip if !$jitTests
+ //@ runDefault("--useLLInt=0", "--useDFGJIT=0")
+ 
+ function shouldBe(actual, expected) {
+diff --git a/JSTests/stress/get-private-name-cache-failure.js b/JSTests/stress/get-private-name-cache-failure.js
+index 2548dc862c30b..10aa5f33f3d32 100644
+--- a/JSTests/stress/get-private-name-cache-failure.js
++++ b/JSTests/stress/get-private-name-cache-failure.js
+@@ -1,3 +1,4 @@
++//@skip if !$jitTests
+ //@requireOptions("--useLLInt=false", "--forceICFailure=true")
+ // Regression test: Ensure that we don't crash when op_get_private_field caching results in
+ // giving up on caching.`
+diff --git a/JSTests/stress/map-forEach.js b/JSTests/stress/map-forEach.js
+index 9d53e261929f3..e4d36290b1e56 100644
+--- a/JSTests/stress/map-forEach.js
++++ b/JSTests/stress/map-forEach.js
+@@ -1,3 +1,4 @@
++//@skip if $memoryLimited
+ function startScan() {
+     for (let i = 0; i < 5; i++) {
+         new WebAssembly.Memory({
+diff --git a/Source/JavaScriptCore/bytecode/Repatch.cpp b/Source/JavaScriptCore/bytecode/Repatch.cpp
+index 98868f9ead968..2f848ff87a3e9 100644
+--- a/Source/JavaScriptCore/bytecode/Repatch.cpp
++++ b/Source/JavaScriptCore/bytecode/Repatch.cpp
+@@ -128,7 +128,7 @@ void linkPolymorphicCall(VM& vm, JSCell* owner, CallFrame* callFrame, CallLinkIn
+     // GC jettisons CodeBlocks, changes CallLinkInfo etc. and breaks assumption done before and after this call.
+     DeferGCForAWhile deferGCForAWhile(vm);
+ 
+-    if (!newVariant) {
++    if (!newVariant || Options::forceICFailure()) {
+         callLinkInfo.setVirtualCall(vm);
+         return;
+     }
+@@ -735,7 +735,7 @@ void repatchGetBySlowPathCall(CodeBlock* codeBlock, PropertyInlineCache& propert
+ 
+ static InlineCacheAction tryCacheArrayGetByVal(JSGlobalObject* globalObject, CodeBlock* codeBlock, JSValue baseValue, JSValue index, PropertyInlineCache& propertyCache)
+ {
+-    if (!baseValue.isCell())
++    if (!baseValue.isCell() || forceICFailure(globalObject))
+         return GiveUpOnCache;
+ 
+     if (!index.isInt32())
+@@ -1285,7 +1285,7 @@ void repatchPutBy(JSGlobalObject* globalObject, CodeBlock* codeBlock, JSValue ba
+ 
+ static InlineCacheAction tryCacheArrayPutByVal(JSGlobalObject* globalObject, CodeBlock* codeBlock, JSValue baseValue, JSValue index, PropertyInlineCache& propertyCache, PutByKind putByKind)
+ {
+-    if (!baseValue.isCell())
++    if (!baseValue.isCell() || forceICFailure(globalObject))
+         return GiveUpOnCache;
+ 
+     if (!index.isInt32())
+@@ -1890,6 +1890,9 @@ static InlineCacheAction tryCacheArrayInByVal(JSGlobalObject* globalObject, Code
+ {
+     ASSERT(baseValue.isCell());
+ 
++    if (forceICFailure(globalObject))
++        return GiveUpOnCache;
++
+     if (!index.isInt32())
+         return RetryCacheLater;
+ 
+diff --git a/Source/JavaScriptCore/dfg/DFGJITCompiler.cpp b/Source/JavaScriptCore/dfg/DFGJITCompiler.cpp
+index 3087967389da7..bdec5b289b223 100644
+--- a/Source/JavaScriptCore/dfg/DFGJITCompiler.cpp
++++ b/Source/JavaScriptCore/dfg/DFGJITCompiler.cpp
+@@ -269,26 +269,11 @@ void JITCompiler::link(LinkBuffer& linkBuffer)
+     for (unsigned i = 0; i < m_calls.size(); ++i)
+         linkBuffer.link(m_calls[i].m_call, m_calls[i].m_function);
+ 
+-#if USE(JSVALUE32_64)
+-    finalizeInlineCaches(m_getByIds, linkBuffer);
+-    finalizeInlineCaches(m_getByIdsWithThis, linkBuffer);
+-    finalizeInlineCaches(m_getByVals, linkBuffer);
+-    finalizeInlineCaches(m_getByValsWithThis, linkBuffer);
+-    finalizeInlineCaches(m_putByIds, linkBuffer);
+-    finalizeInlineCaches(m_putByVals, linkBuffer);
+-    finalizeInlineCaches(m_delByIds, linkBuffer);
+-    finalizeInlineCaches(m_delByVals, linkBuffer);
+-    finalizeInlineCaches(m_inByIds, linkBuffer);
+-    finalizeInlineCaches(m_inByVals, linkBuffer);
+-    finalizeInlineCaches(m_instanceOfs, linkBuffer);
+-    finalizeInlineCaches(m_privateBrandAccesses, linkBuffer);
+-#else
+     m_jitCode->m_unlinkedPropertyInlineCaches = FixedVector<UnlinkedPropertyInlineCache>(m_unlinkedPropertyInlineCaches.size());
+     if (m_jitCode->m_unlinkedPropertyInlineCaches.size())
+         std::move(m_unlinkedPropertyInlineCaches.begin(), m_unlinkedPropertyInlineCaches.end(), m_jitCode->m_unlinkedPropertyInlineCaches.begin());
+     ASSERT(m_jitCode->common.m_handlerPropertyInlineCaches.isEmpty());
+     ASSERT(m_jitCode->common.m_repatchingPropertyInlineCaches.isEmpty());
+-#endif
+ 
+     for (auto& record : m_jsDirectCalls) {
+         auto& info = *record.info;
+@@ -636,14 +621,9 @@ LinkerIR::Constant JITCompiler::addToConstantPool(LinkerIR::Type type, void* pay
+ 
+ std::tuple<CompileTimePropertyInlineCache, PropertyInlineCacheIndex> JITCompiler::addPropertyInlineCache()
+ {
+-#if USE(JSVALUE64)
+     unsigned index = m_unlinkedPropertyInlineCaches.size();
+     DFG::UnlinkedPropertyInlineCache* propertyCache = &m_unlinkedPropertyInlineCaches.alloc();
+     return std::tuple { propertyCache, PropertyInlineCacheIndex { index } };
+-#else
+-    PropertyInlineCache* propertyCache = jitCode()->common.m_handlerPropertyInlineCaches.add();
+-    return std::tuple { propertyCache, PropertyInlineCacheIndex(0) };
+-#endif
+ }
+ 
+ std::tuple<CompileTimeCallLinkInfo, JITCompiler::LinkableConstant> JITCompiler::addCallLinkInfo(CodeOrigin codeOrigin)
+diff --git a/Source/JavaScriptCore/runtime/Options.h b/Source/JavaScriptCore/runtime/Options.h
+index af8665b0cafe3..c96050e406485 100644
+--- a/Source/JavaScriptCore/runtime/Options.h
++++ b/Source/JavaScriptCore/runtime/Options.h
+@@ -174,7 +174,7 @@ public: \
+     static unsigned computeNumberOfGCMarkers(unsigned maxNumberOfGCMarkers);
+     static unsigned computeNumberOfWorkerThreads(int maxNumberOfWorkerThreads, int minimum = 1);
+     static int32_t computePriorityDeltaOfWorkerThreads(int32_t twoCorePriorityDelta, int32_t multiCorePriorityDelta);
+-    static constexpr bool jitEnabledByDefault() { return is32Bit() || isAddress64Bit(); }
++    static constexpr bool jitEnabledByDefault() { return isAddress64Bit(); }
+     static constexpr bool ipintEnabledByDefault() { return isARM64() || isARM64E() || isX86_64(); }
+     static double defaultQuickDFGTierUpThresholdFactor()
+     {
+diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
+index d2f0ddaea53c5..156cf782866a1 100644
+--- a/Source/JavaScriptCore/runtime/OptionsList.h
++++ b/Source/JavaScriptCore/runtime/OptionsList.h
+@@ -85,7 +85,7 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, useLLInt,  true, Normal, "allows the LLINT to be used if true"_s) \
+     v(Bool, useJIT, jitEnabledByDefault(), Normal, "allows the executable pages to be allocated for JIT and thunks if true"_s) \
+     v(Bool, useBaselineJIT, true, Normal, "allows the baseline JIT to be used if true"_s) \
+-    v(Bool, useDFGJIT, true, Normal, "allows the DFG JIT to be used if true"_s) \
++    v(Bool, useDFGJIT, is64Bit(), Normal, "allows the DFG JIT to be used if true"_s) \
+     v(Bool, useRegExpJIT, jitEnabledByDefault() && is64Bit(), Normal, "allows the RegExp JIT to be used if true"_s) \
+     v(Bool, useDOMJIT, is64Bit(), Normal, "allows the DOMJIT to be used if true"_s) \
+     \
+@@ -102,7 +102,7 @@ bool hasCapacityToUseLargeGigacage();
+     v(Size, jitMemoryReservationAddress, 0, Restricted, "If non-zero, we will attempt to allocate JIT memory at the address provided and crash if we cannot.") \
+     \
+     v(Bool, forceCodeBlockLiveness, false, Normal, nullptr) \
+-    v(Bool, forceICFailure, false, Normal, nullptr) \
++    v(Bool, forceICFailure, is32Bit(), Normal, nullptr) \
+     v(Bool, forceUnlinkedDFG, false, Normal, nullptr) \
+     \
+     v(Unsigned, repatchCountForCoolDown, 8, Normal, nullptr) \
+diff --git a/Source/WTF/wtf/PlatformEnable.h b/Source/WTF/wtf/PlatformEnable.h
+index f6d0a80ade75b..b32683ae4c93a 100644
+--- a/Source/WTF/wtf/PlatformEnable.h
++++ b/Source/WTF/wtf/PlatformEnable.h
+@@ -734,17 +734,9 @@
+ #endif
+ 
+ #if USE(JSVALUE32_64)
+-#if CPU(ARM_THUMB2) && CPU(ARM_HARDFP) && OS(LINUX)
+-/* On ARMv7 Linux the JIT is enabled unless explicitly disabled. */
+-#if !defined(ENABLE_JIT)
+-#define ENABLE_JIT 1
+-#endif
+-#else
+-/* Disable JIT on all other 32bit architectures. */
+ #undef ENABLE_JIT
+ #define ENABLE_JIT 0
+ #endif
+-#endif
+ 
+ #if CPU(RISCV64)
+ #undef ENABLE_WEBASSEMBLY
+@@ -774,6 +766,8 @@
+ #if USE(JSVALUE32_64)
+ #undef ENABLE_FTL_JIT
+ #define ENABLE_FTL_JIT 0
++#undef ENABLE_DFG_JIT
++#define ENABLE_DFG_JIT 0
+ #endif
+ 
+ /* If possible, try to enable a disassembler. This is optional. We proceed in two
+@@ -802,13 +796,7 @@
+ #define ENABLE_DFG_JIT 1
+ #endif
+ 
+-/* Enable the DFG JIT on ARMv7.  Only tested on iOS, Linux, and FreeBSD. */
+-#if (CPU(ARM_THUMB2) || CPU(ARM64)) && (OS(DARWIN) || OS(LINUX) || OS(FREEBSD))
+-#define ENABLE_DFG_JIT 1
+-#endif
+-
+-/* Enable the DFG JIT on MIPS. */
+-#if CPU(MIPS)
++#if CPU(ARM64) && (OS(DARWIN) || OS(LINUX) || OS(FREEBSD))
+ #define ENABLE_DFG_JIT 1
+ #endif
+ 
+diff --git a/Tools/Scripts/run-jsc-stress-tests b/Tools/Scripts/run-jsc-stress-tests
+index aabe9b91ad9c3..b9775dc0f1d87 100755
+--- a/Tools/Scripts/run-jsc-stress-tests
++++ b/Tools/Scripts/run-jsc-stress-tests
+@@ -625,16 +625,16 @@ end
+ 
+ $hostOS = determineOS unless $hostOS
+ $architecture = determineArchitecture unless $architecture
+-$isFTLPlatform = !($architecture == "x86" || $architecture == "mips" || $architecture == "riscv64" || $hostOS == "playstation")
+-# Special case armv7 and windows, we want to run the wasm tests temporarily without B3/Air support
+-$isWasmPlatform = (not $cloop) && $jitTests && ($isFTLPlatform || $architecture == "arm" || ($hostOS == "windows" && $architecture == "x86_64"))
++$isFTLPlatform = !($architecture == "x86" || $architecture == "mips" || $architecture == "riscv64" || $hostOS == "playstation" || $architecture == "arm")
++# Special case windows, we want to run the wasm tests temporarily without B3/Air support
++$isWasmPlatform = (not $cloop) && $jitTests && ($isFTLPlatform || ($hostOS == "windows" && $architecture == "x86_64"))
+ $isOMGPlatform = $isFTLPlatform
+ $isSIMDPlatform = $isWasmPlatform && ($architecture == "arm64" || $architecture == "x86_64")
+ 
+ $skipLockdown = false
+ $skipMiniMode = false
+ 
+-if $platform == "watchos"
++if $platform == "watchos" || $architecture == "arm"
+     $jitTests = false
+     $isFTLPlatform = false
+     $isWasmPlatform = false
+@@ -643,12 +643,6 @@ if $platform == "watchos"
+     $memoryLimited = true
+ end
+ 
+-if $architecture == "arm"
+-    $isFTLPlatform = false
+-    $isWasmPlatform = false
+-    $skipLockdown = true
+-end
+-
+ # This is meant for skipping execution of tests than require a lot of address
+ # space. Cf. $memoryLimited, which is meant for tests that actually make use of
+ # a lot of memory.
