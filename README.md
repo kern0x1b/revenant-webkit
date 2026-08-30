@@ -1,12 +1,16 @@
-# A current web engine for iOS 6
+# Revenant
+
+**A current web engine for hardware the web left for dead.**
 
 WebKit 2.53 built for armv7, running today's websites on an iPhone 4S from 2011:
 a dual-core 800 MHz device with 512 MB of memory, on iOS 6.1.3.
 
 The engine the phone ships with is WebKit 536 from 2012. It cannot render a page
 written this decade — the sign-in form of a modern site comes back with no input
-elements at all, because the script that builds it never runs. This project
-replaces the engine inside one application, without touching the system's.
+elements at all, because the script that builds it never runs. Nor can the phone
+still negotiate TLS with a current server, or perform the cryptography a login
+form needs. Each of those is fixed here, inside one application, without
+touching the system's own engine.
 
 ## What works
 

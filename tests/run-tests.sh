@@ -11,7 +11,7 @@ run_host_tests() {
         echo "skip host tests: build-icu-host not built" >&2
         return 0
     fi
-    local bin="${TMPDIR:-/tmp}/legacy-webkit-tests"
+    local bin="${TMPDIR:-/tmp}/revenant-tests"
     mkdir -p "$bin"
 
     "$root/tests/host/gen-required-encodings.sh" > /dev/null

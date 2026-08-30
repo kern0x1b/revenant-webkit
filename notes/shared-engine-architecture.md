@@ -4,17 +4,14 @@ Status: design, not built. Written 2026-08-26 so the shape is not lost.
 
 ## The name
 
-Proposed: **Basalt** — the engine framework is `Basalt.framework`, the app-facing
-facade is `BasaltKit.framework`. Dense volcanic rock: the thing you build on,
-and it survives heat. Short, no toy connotation, and it reads well in a path
-(`/Library/Frameworks/Basalt.framework`).
+**Revenant** — the engine framework is `Revenant.framework`, the app-facing
+facade is `RevenantKit.framework`.
 
-Alternatives considered, kept here so the decision can be revisited: *Lodestone*
-(what navigators used before instruments — thematically apt for a browser, but
-long), *Meridian* (elegant, less concrete), *Anvil* (solid, already common in
-tooling names).
-
-Nothing below depends on the name; substitute freely.
+One that has come back. The web declared this hardware dead: a phone from 2011
+cannot open a page written this decade, and every site's answer is to stop
+serving it. The engine now running on it is the current one, so the device is
+back among the living rather than preserved. Short, no toy connotation, and it
+reads well in a path (`/Library/Frameworks/Revenant.framework`).
 
 ## Why
 
@@ -40,10 +37,10 @@ living inside the app.
 
 Three layers, each with a job:
 
-1. **`Basalt.framework`** — the engine. WebKitLegacy, WebCore, JavaScriptCore
+1. **`Revenant.framework`** — the engine. WebKitLegacy, WebCore, JavaScriptCore
    and the C++ runtime, installed once at a fixed absolute path. Private: apps
    never link it directly.
-2. **`BasaltKit.framework`** — a thin Objective-C facade with a deliberately
+2. **`RevenantKit.framework`** — a thin Objective-C facade with a deliberately
    small, versioned surface. This is the only thing apps link. It owns the
    `WebView` setup, the manifest reading, the network protocol, the injection
    points and the debug affordances that currently live in `app/main.m`.
@@ -52,7 +49,7 @@ Three layers, each with a job:
 
 ### Install location
 
-`/Library/Frameworks/Basalt.framework` and `/Library/Frameworks/BasaltKit.framework`.
+`/Library/Frameworks/Revenant.framework` and `/Library/Frameworks/RevenantKit.framework`.
 
 Not `/System/Library` — that is inside the dyld shared cache and on the root
 partition; keeping out of it means no cache surgery, no signature problems, and
@@ -60,17 +57,17 @@ a clean uninstall.
 
 Use the versioned-bundle layout so a bad update is one symlink swap away:
 
-    Basalt.framework/
+    Revenant.framework/
         Versions/
-            A/Basalt
-            B/Basalt
+            A/Revenant
+            B/Revenant
             Current -> A
-        Basalt -> Versions/Current/Basalt
+        Revenant -> Versions/Current/Revenant
 
 ### Linking
 
-Apps and `BasaltKit` link `Basalt` by absolute install name
-(`/Library/Frameworks/Basalt.framework/Versions/Current/Basalt`), not
+Apps and `RevenantKit` link `Revenant` by absolute install name
+(`/Library/Frameworks/Revenant.framework/Versions/Current/Revenant`), not
 `@executable_path`. `build-app.sh` currently rewrites install names with
 `install_name_tool`; that step becomes "point at the shared path" instead of
 "copy into the bundle".
@@ -84,13 +81,13 @@ whenever the engine is touched.
 
 So the facade is not decoration, it is the mechanism:
 
-- `BasaltKit` exports only Objective-C, only classes and methods we define.
+- `RevenantKit` exports only Objective-C, only classes and methods we define.
 - Its `compatibility_version` is bumped only on a real break; `current_version`
   tracks builds.
-- `Basalt` is re-exported by nobody. Apps have no `LC_LOAD_DYLIB` on it.
+- `Revenant` is re-exported by nobody. Apps have no `LC_LOAD_DYLIB` on it.
 - Everything C++ stays behind the facade.
 
-Then an engine update is: build `Basalt`, replace it, apps keep running. An
+Then an engine update is: build `Revenant`, replace it, apps keep running. An
 update that changes the facade's ABI requires rebuilding apps — and the version
 bump makes that loud rather than silent.
 
@@ -160,7 +157,7 @@ selector matches nothing.
 
 ### One host binary
 
-If the app binary is `BasaltKit`'s host and reads everything from the manifest,
+If the app binary is `RevenantKit`'s host and reads everything from the manifest,
 then every app's executable is byte-identical. Ship it once and hard-link or
 copy it into each bundle. `tools/generate-webapp-plist.py` already generates the
 `Info.plist`; the same generator can lay down the whole bundle.
@@ -190,7 +187,7 @@ may end in "not worth the risk". It should not block the rest.
 
 ## Order of work
 
-1. Define the `BasaltKit` surface. Move everything in `app/main.m` that is not
+1. Define the `RevenantKit` surface. Move everything in `app/main.m` that is not
    process bootstrap behind it. This is the real work and it is independent of
    where the frameworks live.
 2. Install the engine to `/Library/Frameworks`, point one app at it, keep the
@@ -206,7 +203,7 @@ may end in "not worth the risk". It should not block the rest.
 - Code signing and entitlements for a framework outside an app bundle on a
   jailbroken iOS 6. `ldid`/`jtool` signing works for the binaries we ship today;
   a shared framework in `/Library` should be the same, but it is unverified.
-- Whether `Basalt` should be one merged dylib rather than three. Fewer images
+- Whether `Revenant` should be one merged dylib rather than three. Fewer images
   means less rebase/bind work for iOS 6's dyld and better locality; against
   that, the three-way split is what the build system produces naturally.
 - Storage isolation. Each app has its own WebKit storage path today

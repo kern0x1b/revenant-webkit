@@ -6,8 +6,8 @@ DEVICE=${DEVICE:?set DEVICE=root@host}
 PORT=${PORT:-22}
 PASS=${DEVICE_PASSWORD:-}
 SSH_OPTS="-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group1-sha1 -o Ciphers=+aes128-cbc -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-BACKUP=/var/backups/legacy-webkit-system-frameworks
-LIBCXX_DIR=/usr/lib/legacy-webkit
+BACKUP=/var/backups/revenant-system-frameworks
+LIBCXX_DIR=/usr/lib/revenant
 
 dev_ssh() { sshpass -p "$PASS" ssh $SSH_OPTS -p "$PORT" "$DEVICE" "$@"; }
 
