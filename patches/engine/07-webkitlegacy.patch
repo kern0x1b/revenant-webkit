@@ -31,10 +31,21 @@ index 065a68d60b..c2a5bcc19b 100644
 +    add_dependencies(WebCore WebKitLegacy_CopyHeaders)
 +endif ()
 diff --git a/Source/WebKitLegacy/SourcesCMakeCocoa.txt b/Source/WebKitLegacy/SourcesCMakeCocoa.txt
-index b3bc1c2527..89055d86ef 100644
+index b3bc1c2527..2847fb8282 100644
 --- a/Source/WebKitLegacy/SourcesCMakeCocoa.txt
 +++ b/Source/WebKitLegacy/SourcesCMakeCocoa.txt
-@@ -69,7 +69,7 @@ mac/Misc/WebCache.mm @nonARC
+@@ -46,6 +46,10 @@ Storage/WebDatabaseProvider.cpp
+ Storage/WebStorageNamespaceProvider.cpp
+ 
+ WebCoreSupport/LegacySocketProvider.cpp
++WebCoreSupport/SocketStreamHandle.cpp
++WebCoreSupport/SocketStreamHandleImpl.cpp
++WebCoreSupport/SocketStreamHandleImplCFNet.cpp
++WebCoreSupport/WebSocketChannel.cpp
+ WebCoreSupport/LegacyWebPageDebuggable.cpp
+ WebCoreSupport/LegacyWebPageInspectorController.cpp
+ WebCoreSupport/NetworkStorageSessionMap.cpp
+@@ -69,7 +73,7 @@ mac/Misc/WebCache.mm @nonARC
  mac/Misc/WebCoreStatistics.mm @nonARC
  mac/Misc/WebDownload.mm @nonARC
  mac/Misc/WebElementDictionary.mm @nonARC
@@ -43,7 +54,7 @@ index b3bc1c2527..89055d86ef 100644
  mac/Misc/WebKitLogInitialization.mm @nonARC
  mac/Misc/WebKitNSStringExtras.mm @nonARC
  mac/Misc/WebKitVersionChecks.mm @nonARC
-@@ -78,10 +78,10 @@ mac/Misc/WebLocalizableStringsInternal.mm @nonARC
+@@ -78,10 +82,10 @@ mac/Misc/WebLocalizableStringsInternal.mm @nonARC
  mac/Misc/WebNSDataExtras.mm @nonARC
  mac/Misc/WebNSFileManagerExtras.mm @nonARC
  mac/Misc/WebNSObjectExtras.mm @nonARC
@@ -56,7 +67,7 @@ index b3bc1c2527..89055d86ef 100644
  mac/Misc/WebUserContentURLPattern.mm @nonARC
  
  mac/Plugins/WebPluginPackage.mm @nonARC
-@@ -93,10 +93,10 @@ mac/Storage/WebDatabaseQuotaManager.mm @nonARC
+@@ -93,10 +97,10 @@ mac/Storage/WebDatabaseQuotaManager.mm @nonARC
  mac/Storage/WebStorageManager.mm @nonARC
  mac/Storage/WebStorageTrackerClient.mm @nonARC
  
@@ -70,7 +81,7 @@ index b3bc1c2527..89055d86ef 100644
  mac/WebCoreSupport/WebAlternativeTextClient.mm @nonARC
  mac/WebCoreSupport/WebChromeClient.mm @nonARC
  mac/WebCoreSupport/WebContextMenuClient.mm @nonARC
-@@ -104,7 +104,7 @@ mac/WebCoreSupport/WebDragClient.mm @nonARC
+@@ -104,7 +108,7 @@ mac/WebCoreSupport/WebDragClient.mm @nonARC
  mac/WebCoreSupport/WebEditorClient.mm @nonARC
  mac/WebCoreSupport/WebFrameNetworkingContext.mm @nonARC
  mac/WebCoreSupport/WebGeolocationClient.mm @nonARC
@@ -79,7 +90,7 @@ index b3bc1c2527..89055d86ef 100644
  mac/WebCoreSupport/WebKitFullScreenListener.mm @nonARC
  mac/WebCoreSupport/WebMediaKeySystemClient.mm @nonARC
  mac/WebCoreSupport/WebNotificationClient.mm @nonARC
-@@ -128,7 +128,7 @@ mac/WebView/WebDelegateImplementationCaching.mm @nonARC
+@@ -128,7 +132,7 @@ mac/WebView/WebDelegateImplementationCaching.mm @nonARC
  mac/WebView/WebDeviceOrientation.mm @nonARC
  mac/WebView/WebDeviceOrientationProviderMock.mm @nonARC
  mac/WebView/WebDocumentLoaderMac.mm @nonARC
@@ -88,7 +99,7 @@ index b3bc1c2527..89055d86ef 100644
  mac/WebView/WebGeolocationPosition.mm @nonARC
  mac/WebView/WebHTMLRepresentation.mm @nonARC
  mac/WebView/WebIndicateLayer.mm @nonARC
-@@ -141,11 +141,11 @@ mac/WebView/WebPolicyDelegate.mm @nonARC
+@@ -141,11 +145,11 @@ mac/WebView/WebPolicyDelegate.mm @nonARC
  mac/WebView/WebPreferences.mm @nonARC
  mac/WebView/WebPreferencesDefaultValues.mm @nonARC
  mac/WebView/WebResource.mm @nonARC
@@ -252,6 +263,45 @@ index 341b8ec1f7..a479c53aa3 100644
  mac/WebView/WebView.mm @nonARC @cost:16
  mac/WebView/WebViewRenderingUpdateScheduler.mm @nonARC
 +mac/DOM/WebDOMOperations.mm @nonARC @cost:11
+diff --git a/Source/WebKitLegacy/WebCoreSupport/LegacySocketProvider.cpp b/Source/WebKitLegacy/WebCoreSupport/LegacySocketProvider.cpp
+index 5f7bb8a993..ac4a749a3f 100644
+--- a/Source/WebKitLegacy/WebCoreSupport/LegacySocketProvider.cpp
++++ b/Source/WebKitLegacy/WebCoreSupport/LegacySocketProvider.cpp
+@@ -25,17 +25,15 @@
+ 
+ #import "LegacySocketProvider.h"
+ 
+-#ifdef BUILDING_WITH_CMAKE
+-// WebSocketChannel.cpp (in Sources.txt, not loaded by CMake) depends on SocketStreamHandle.
+-// Stub out -- WK2 NetworkProcess handles WebSockets.
+-#import <WebCore/WebTransportSession.h>
+-#import <wtf/CompletionHandler.h>
+-
+-RefPtr<WebCore::ThreadableWebSocketChannel> LegacySocketProvider::createWebSocketChannel(WebCore::Document&, WebCore::WebSocketChannelClient&, WebCore::IsInitiatedByDedicatedWorker)
+-{
+-    return nullptr;
+-}
+-#else
++// The channel is built in this build too.
++//
++// This was stubbed to return nullptr under CMake, with a comment saying the
++// network process handles WebSockets. That is true of WebKit2 and false here:
++// this port has no network process, and WebSocket::connect asserts that a
++// channel exists - so every site that opened a socket ended the process. The
++// implementation was never missing; only WebCoreSupport/WebSocketChannel.cpp
++// was absent from Sources.txt, while the socket handle beside it was already
++// listed.
+ #import "WebSocketChannel.h"
+ #import <WebCore/WebTransportSession.h>
+ #import <wtf/CompletionHandler.h>
+@@ -44,7 +42,6 @@ RefPtr<WebCore::ThreadableWebSocketChannel> LegacySocketProvider::createWebSocke
+ {
+     return WebCore::WebSocketChannel::create(document, client, *this);
+ }
+-#endif
+ 
+ std::pair<RefPtr<WebCore::WebTransportSession>, Ref<WebCore::WebTransportSessionPromise>> LegacySocketProvider::initializeWebTransportSession(WebCore::ScriptExecutionContext&, WebCore::WebTransportSessionClient&, const URL&, const WebCore::WebTransportOptions&)
+ {
 diff --git a/Source/WebKitLegacy/WebCoreSupport/LegacyWebPageDebuggable.cpp b/Source/WebKitLegacy/WebCoreSupport/LegacyWebPageDebuggable.cpp
 index 6bdc2dffdf..e813d27614 100644
 --- a/Source/WebKitLegacy/WebCoreSupport/LegacyWebPageDebuggable.cpp
@@ -296,6 +346,28 @@ index eee9cda388..e1474a8101 100644
 +
 +#endif // ENABLE(REMOTE_INSPECTOR)
 \ No newline at end of file
+diff --git a/Source/WebKitLegacy/WebCoreSupport/SocketStreamHandleImplCFNet.cpp b/Source/WebKitLegacy/WebCoreSupport/SocketStreamHandleImplCFNet.cpp
+index 11b3541abd..bc69e81c51 100644
+--- a/Source/WebKitLegacy/WebCoreSupport/SocketStreamHandleImplCFNet.cpp
++++ b/Source/WebKitLegacy/WebCoreSupport/SocketStreamHandleImplCFNet.cpp
+@@ -304,10 +304,17 @@ void SocketStreamHandleImpl::createStreams()
+     CFWriteStreamRef writeStream = 0;
+     CFStreamCreatePairWithSocketToHost(0, host.get(), port(), &readStream, &writeStream);
+     CFWriteStreamSetProperty(writeStream, _kCFStreamSocketSetNoDelay, kCFBooleanTrue);
++#if !defined(WEBKIT_IOS6)
+     if (m_auditData.sourceApplicationAuditData && m_auditData.sourceApplicationAuditData.get()) {
+         CFReadStreamSetProperty(readStream, kCFStreamPropertySourceApplication, m_auditData.sourceApplicationAuditData.get());
+         CFWriteStreamSetProperty(writeStream, kCFStreamPropertySourceApplication, m_auditData.sourceApplicationAuditData.get());
+     }
++#endif
++    // The stream is not tagged with the application it belongs to on this
++    // system: kCFStreamPropertySourceApplication does not exist in a CFNetwork
++    // from 2012, and referring to it stops the whole engine from loading. The
++    // tag is for the system's own accounting; the connection is the same
++    // without it.
+ 
+     m_readStream = adoptCF(readStream);
+     m_writeStream = adoptCF(writeStream);
 diff --git a/Source/WebKitLegacy/WebKitLegacy-iOS.exp b/Source/WebKitLegacy/WebKitLegacy-iOS.exp
 index 566b8e58b9..ded93dd8b0 100644
 --- a/Source/WebKitLegacy/WebKitLegacy-iOS.exp

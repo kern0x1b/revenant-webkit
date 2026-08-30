@@ -103,6 +103,13 @@ cmake -S $S -B $B -G Ninja \
   -DCMAKE_SHARED_LINKER_FLAGS="-flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0" \
   -DCMAKE_CXX_FLAGS="$CXXF" -DCMAKE_C_FLAGS="$CF" \
   -DCMAKE_OBJCXX_FLAGS="$CXXF -DWEBKIT_IOS6_OBJC_EXTRAS" -DCMAKE_OBJC_FLAGS="$CF -DWEBKIT_IOS6_OBJC_EXTRAS" \
+  `# find_library searches the host as well, and on a Mac it finds this` \
+  `# framework in the running system - a path that means nothing to a linker` \
+  `# targeting armv7, which then fails with "framework not found". It is an` \
+  `# optional dependency, so it is declared absent.` \
+  -DBROWSERENGINECORE_LIBRARY=BROWSERENGINECORE_LIBRARY-NOTFOUND \
+  -DBROWSERENGINEKIT_LIBRARY=BROWSERENGINEKIT_LIBRARY-NOTFOUND \
+  -DUNIFORMTYPEIDENTIFIERS_LIBRARY=UNIFORMTYPEIDENTIFIERS_LIBRARY-NOTFOUND \
   -DPYTHON_EXECUTABLE=/usr/bin/python3
 # Generator note: this build uses Ninja, unlike configure-webkit.sh (Unix Makefiles).
 # With the JIT on, JavaScriptCore's CMake splits jit/dfg/ftl/bytecode into a

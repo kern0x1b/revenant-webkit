@@ -4,7 +4,20 @@
 # armv7 slices and accepts a 6.0 deployment target.
 set(CMAKE_SYSTEM_NAME Darwin)
 set(CMAKE_SYSTEM_PROCESSOR arm)
-set(CMAKE_OSX_SYSROOT $ENV{IOS_SDK})
+# The SDK is remembered in the cache, not read from the environment each time.
+#
+# ninja re-runs cmake by itself whenever a source list changes, and that run does
+# not inherit the shell that configured the build. Reading the environment there
+# yields nothing and cmake quietly falls back to the newest installed SDK, which
+# compiles the whole tree against headers from a system fifteen years newer than
+# the target. It looks like hundreds of syntax errors in Apple's own headers.
+if(NOT IOS6_SDK)
+    set(IOS6_SDK "$ENV{IOS_SDK}" CACHE PATH "SDK used to build for armv7" FORCE)
+endif()
+if(NOT IOS6_SDK)
+    message(FATAL_ERROR "IOS_SDK is not set and no SDK is remembered in the cache")
+endif()
+set(CMAKE_OSX_SYSROOT ${IOS6_SDK} CACHE PATH "SDK the compiler is pointed at" FORCE)
 set(CMAKE_OSX_ARCHITECTURES armv7)
 set(CMAKE_OSX_DEPLOYMENT_TARGET 6.0)
 set(CMAKE_C_COMPILER /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang)
