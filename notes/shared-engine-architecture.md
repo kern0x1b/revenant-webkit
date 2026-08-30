@@ -4,8 +4,9 @@ Status: design, not built. Written 2026-08-26 so the shape is not lost.
 
 ## The name
 
-**Revenant** — the engine framework is `Revenant.framework`, the app-facing
-facade is `RevenantKit.framework`.
+The project is **Revenant WebKit**; the frameworks it installs are
+`Revenant.framework` for the engine and `RevenantKit.framework` for the
+app-facing facade.
 
 One that has come back. The web declared this hardware dead: a phone from 2011
 cannot open a page written this decade, and every site's answer is to stop

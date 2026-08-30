@@ -1,6 +1,6 @@
-# Revenant
+# Revenant WebKit
 
-**A current web engine for hardware the web left for dead.**
+**A current WebKit for hardware the web left for dead.**
 
 WebKit 2.53 built for armv7, running today's websites on an iPhone 4S from 2011:
 a dual-core 800 MHz device with 512 MB of memory, on iOS 6.1.3.
