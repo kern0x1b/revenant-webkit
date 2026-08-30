@@ -8,7 +8,7 @@
 # carry the system install names, which is also how they refer to each other.
 #
 #   ./build-app-sys.sh platform/apps/threads.json
-set -e
+set -eu
 P=$(cd "$(dirname "$0")/.." && pwd)
 B=$P/build-254-lto
 SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}

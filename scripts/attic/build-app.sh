@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Package the browser: the app binary plus the three frameworks and the C++
 # runtime, all loaded from inside the bundle by @executable_path.
-set -e
+set -eu
 P=$(cd "$(dirname "$0")/.." && pwd)
 # build-254 is the JIT-enabled engine and is what ships. build-cocoa is the older
 # CLoop build, kept for comparison; ask for it by name when you want it.
