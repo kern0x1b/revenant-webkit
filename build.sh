@@ -18,7 +18,7 @@ step "libc++ for armv7";        "$P/scripts/build-libcxx.sh"
 step "ICU";                     "$P/scripts/build-icu.sh"
 step "OpenSSL";                 "$P/scripts/build-openssl.sh"
 step "compatibility library";   "$P/scripts/build-compat.sh"
-step "configure the engine";    "$P/scripts/configure-webkit-254-bmalloc.sh"
+step "configure the engine";    "$P/scripts/configure-engine.sh"
 step "engine";                  (cd "$P/build-254-lto" && ninja WebCore WebKitLegacy JavaScriptCore)
 step "application";             "$P/scripts/build-app-lto.sh" "$APP"
 

@@ -69,7 +69,7 @@ when only one thing changed:
 | `scripts/build-icu.sh` | ICU, trimmed to the languages in `tools/icu-keep-languages.txt` |
 | `scripts/build-openssl.sh` | OpenSSL, for TLS and Web Crypto |
 | `scripts/build-compat.sh` | `libios6compat.a`, the symbols iOS 6 lacks |
-| `scripts/configure-webkit-254-bmalloc.sh` | CMake configure |
+| `scripts/configure-engine.sh` | CMake configure; the flags carry why each is set |
 | `scripts/build-app-lto.sh` | The application around the built engine |
 
 The result is `dist/Threads-Native.app`: the application, three frameworks, the

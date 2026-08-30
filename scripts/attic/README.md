@@ -18,7 +18,7 @@ README: `fetch-source.sh`, `build-libcxx.sh`, `build-icu.sh`, `build-openssl.sh`
 | `configure-webkit-254-slim.sh` | Feature-stripped, a measured dead end |
 | `configure-webkit-254-bm.sh` | First bmalloc attempt |
 | `configure-webkit-254-bm2.sh` | Second, with a different page size |
-| `configure-webkit-254-lto.sh` | LTO before it was folded into the bmalloc configure |
+| `configure-webkit-254-bmalloc.sh` | bmalloc, measured slower than the system allocator here |
 | `configure-jsc.sh` | JavaScriptCore alone, for the JIT work |
 | `build-webkit.sh` | Driver for the 603 build |
 | `build-app.sh`, `build-app-sys.sh` | Application against those earlier trees |
