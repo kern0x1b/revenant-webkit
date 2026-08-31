@@ -667,10 +667,37 @@ static BOOL triggerFired(const char *path, time_t *lastSeen, BOOL *seeded)
 // to run before that commit, so the scroll offset read here is the one the frame
 // is drawn with and the correction lands in the same transaction as the scroll.
 // Nothing about this depends on when the display link happened to fire.
+// The engine keeps its own fixed elements still, and does it better than this.
+//
+// This application used to publish the scroll window to the engine on every
+// frame, move pinned layers before each commit, and correct their positions
+// afterwards. Each piece was added to fix something real at the time, and
+// together they were what made the bars move: measured over four flicks, the
+// top bar's screen position varied by 15 px and the bottom bar's by 10 with all
+// of it running, and by 0 px with none of it. The reader saw the same.
+//
+// The reason is that the engine already repositions fixed layers as the scroll
+// changes, and it does so in the transaction that carries the scroll. Anything
+// this side adds arrives in a different transaction - a frame late, or later
+// still when the web thread is inside the site's script - so the bar is drawn
+// where it was, not where it is.
+//
+// The machinery is still here, one flag away, because it was written against
+// measurements that were real: /tmp/native-legacy-fixed brings it back.
+static bool stockFixedBehaviour(void)
+{
+    static int stock = -1;
+    if (stock < 0)
+        stock = access("/tmp/native-legacy-fixed", F_OK) == 0 ? 0 : 1;
+    return stock == 1;
+}
+
 static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRunLoopActivity activity, void *context)
 {
     (void)observer;
     (void)activity;
+    if (stockFixedBehaviour())
+        return;
     [(id)context correctPinnedLayers];
 }
 
@@ -783,6 +810,49 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
         logLine(@"page cache off");
     } else
         logLine(@"could not reach WebPreferences to switch the page cache off");
+
+    // The engine is not allowed to decide it is a browser.
+    //
+    // WebPreferences starts with automaticallyDetectsCacheModel set, and
+    // -_didPerformFirstNavigation raises the model to DocumentBrowser the first
+    // time a page navigates. That is the widest tier: a larger memory cache, a
+    // back-forward cache, and a tile layer pool - sized for a machine with room
+    // to spare. This device has 512 MB in total and was measured climbing from
+    // 96 MB resident to 226 MB on one feed, dumping its caches on the way and
+    // then being taken away by the system. The constructor defaults are tighter
+    // than any tier, and they stay.
+    // The parsed form of the site's scripts, kept between launches.
+    //
+    // The single largest allocator in the process is the JavaScript parser's
+    // arena: measured over one feed, 196 MB in 25758 blocks, because the site's
+    // scripts are parsed again on every load and the resource cache holds zero
+    // bytes of script. The engine can write the compiled bytecode to disk and
+    // read it back instead of parsing, and this port already builds that - it
+    // was simply never switched on in this application.
+    Class bytecodeWebView = NSClassFromString(@"WebView");
+    // Off by default, and measured that way.
+    //
+    // Caching the compiled form removes the parsing - the parser's arena is the
+    // largest allocator in the process - but the compiled form then lives in
+    // memory, and on this device that costs more than the parsing saves:
+    // resident 229 and 250 MB with it against 214 without, over comparable
+    // feeds. It stays one flag away for a device with room.
+    if ([bytecodeWebView respondsToSelector:@selector(_setJavaScriptBytecodeCacheDirectory:maximumSize:)]
+        && access("/tmp/native-bytecode-cache", F_OK) == 0) {
+        NSArray *caches = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+        NSString *directory = [[caches count] ? [caches objectAtIndex:0] : @"/tmp"
+            stringByAppendingPathComponent:@"bytecode"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:directory
+            withIntermediateDirectories:YES attributes:nil error:NULL];
+        ((void (*)(id, SEL, id, unsigned long long))objc_msgSend)(bytecodeWebView,
+            @selector(_setJavaScriptBytecodeCacheDirectory:maximumSize:), directory, 32ULL * 1024 * 1024);
+        logLine(@"bytecode cache at %@", directory);
+    }
+
+    if ([preferences respondsToSelector:@selector(setAutomaticallyDetectsCacheModel:)]) {
+        [preferences setAutomaticallyDetectsCacheModel:NO];
+        logLine(@"cache model pinned to the engine's own defaults");
+    }
     _webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [_window addSubview:_webView];
     [_window makeKeyAndVisible];
@@ -1390,21 +1460,21 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
         lastLayoutViewportPublish = publishNow;
         id viewportTarget = [self engineWebView];
         SEL setLayoutViewport = @selector(_setLayoutViewportRect:);
-        if ([viewportTarget respondsToSelector:setLayoutViewport]
+        if ([viewportTarget respondsToSelector:setLayoutViewport] && !stockFixedBehaviour()
             && access("/tmp/native-no-layout-viewport", F_OK) != 0)
             ((void (*)(id, SEL, CGRect))objc_msgSend)(viewportTarget, setLayoutViewport, onScreen);
     }
 
     // scrollOrZoomChanged: wraps its own layer moves in a transaction with
     // actions disabled, so there is nothing to add around it here.
-    id fixedContent = [self engineFixedContent];
+    id fixedContent = stockFixedBehaviour() ? nil : [self engineFixedContent];
     if (fixedContent)
         ((void (*)(id, SEL, CGRect))objc_msgSend)(fixedContent, @selector(scrollOrZoomChanged:), onScreen);
     lastCorrectedOffset = offset.y;
 
     id engineWebView = [self engineWebView];
     SEL publish = @selector(_setCustomFixedPositionLayoutRectInWebThread:synchronize:);
-    if ([engineWebView respondsToSelector:publish])
+    if ([engineWebView respondsToSelector:publish] && !stockFixedBehaviour())
         ((void (*)(id, SEL, CGRect, BOOL))objc_msgSend)(engineWebView, publish, onScreen, NO);
 }
 
@@ -2386,6 +2456,143 @@ static const char *nameForMemoryTag(unsigned tag)
     }
 }
 
+// The engine's own accounting, fetched on the thread that owns it.
+//
+// WebCoreStatistics and WebCache read structures the web thread owns; calling
+// them from the pulse thread ends the process on an assertion. The request is
+// posted to the web thread and the answer is left in a buffer, which the next
+// pulse prints - one turn late and no risk.
+static char g_engineMemoryReport[512];
+static pthread_mutex_t g_engineMemoryLock = PTHREAD_MUTEX_INITIALIZER;
+
+static void requestEngineMemoryReport(void)
+{
+    void (*runOnWebThread)(void (^)(void)) = dlsym(RTLD_DEFAULT, "WebThreadRun");
+    if (!runOnWebThread)
+        return;
+    runOnWebThread(^{
+        Class statistics = NSClassFromString(@"WebCoreStatistics");
+        Class webCache = NSClassFromString(@"WebCache");
+        char line[512];
+        int written = 0;
+        if ([statistics respondsToSelector:@selector(memoryStatistics)]) {
+            NSDictionary *engine = [statistics performSelector:@selector(memoryStatistics)];
+            written += snprintf(line + written, sizeof(line) - written,
+                "JS heap %.1f MB (free %.1f), JIT %.1f MB, fastMalloc %.1f MB",
+                [[engine objectForKey:@"JavaScriptHeapSize"] doubleValue] / 1048576.0,
+                [[engine objectForKey:@"JavaScriptFreeSize"] doubleValue] / 1048576.0,
+                [[engine objectForKey:@"JavaScriptJITSize"] doubleValue] / 1048576.0,
+                [[engine objectForKey:@"FastMallocCommittedVMBytes"] doubleValue] / 1048576.0);
+        }
+        if ([webCache respondsToSelector:@selector(statistics)]) {
+            NSArray *cache = [webCache performSelector:@selector(statistics)];
+            if ([cache count] >= 4) {
+                NSDictionary *counts = [cache objectAtIndex:0];
+                NSDictionary *sizes = [cache objectAtIndex:1];
+                NSDictionary *decoded = [cache objectAtIndex:3];
+                written += snprintf(line + written, sizeof(line) - written,
+                    "; cached images %.0f (%.1f MB, decoded %.1f), scripts %.0f (%.1f MB), styles %.1f MB",
+                    [[counts objectForKey:@"Images"] doubleValue],
+                    [[sizes objectForKey:@"Images"] doubleValue] / 1048576.0,
+                    [[decoded objectForKey:@"Images"] doubleValue] / 1048576.0,
+                    [[counts objectForKey:@"Scripts"] doubleValue],
+                    [[sizes objectForKey:@"Scripts"] doubleValue] / 1048576.0,
+                    [[sizes objectForKey:@"CSS"] doubleValue] / 1048576.0);
+            }
+        }
+        pthread_mutex_lock(&g_engineMemoryLock);
+        strlcpy(g_engineMemoryReport, line, sizeof(g_engineMemoryReport));
+        pthread_mutex_unlock(&g_engineMemoryLock);
+    });
+}
+
+static void reportEngineMemory(FILE *log)
+{
+    pthread_mutex_lock(&g_engineMemoryLock);
+    if (g_engineMemoryReport[0])
+        fprintf(log, "    engine: %s\n", g_engineMemoryReport);
+    pthread_mutex_unlock(&g_engineMemoryLock);
+}
+
+// What each allocator zone is holding, largest first.
+//
+// A build with the engine's heap breakdown turned on gives every class its own
+// zone, so this names the memory by what asked for it rather than by size class.
+// Without that build there are only a handful of zones and the report is short.
+// Free pages handed back to the system.
+//
+// The allocator keeps what it has freed, on the reasonable assumption that it
+// will be asked again. Measured here, the regions tagged for large allocations
+// held 85 MB while the blocks actually live in them came to 27 - the difference
+// is memory this process is charged for and is not using, on a device where
+// being charged for it is what gets the process killed.
+//
+// malloc_zone_pressure_relief is the supported way to ask for it back, the same
+// call the system makes under memory pressure. It is not free: the pages have to
+// be faulted in again if the allocator wants them, so this runs on a slow
+// cadence rather than every turn.
+static void returnFreePages(void)
+{
+    static int enabled = -1;
+    if (enabled < 0)
+        enabled = access("/tmp/native-keep-free-pages", F_OK) == 0 ? 0 : 1;
+    if (!enabled)
+        return;
+
+    vm_address_t *zones = NULL;
+    unsigned count = 0;
+    if (malloc_get_all_zones(mach_task_self(), NULL, &zones, &count) != KERN_SUCCESS || !zones)
+        return;
+    for (unsigned i = 0; i < count; i++)
+        malloc_zone_pressure_relief((malloc_zone_t *)zones[i], 0);
+}
+
+// How much the process is charged for right now, in megabytes.
+static double residentMegabytes(void)
+{
+    struct task_basic_info info;
+    mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&info, &count) != KERN_SUCCESS)
+        return 0;
+    return info.resident_size / 1048576.0;
+}
+
+static void reportMemoryZones(FILE *log)
+{
+    vm_address_t *zones = NULL;
+    unsigned count = 0;
+    if (malloc_get_all_zones(mach_task_self(), NULL, &zones, &count) != KERN_SUCCESS || !zones)
+        return;
+
+    struct { const char *name; size_t bytes; } entries[128];
+    unsigned kept = 0;
+    size_t total = 0;
+    for (unsigned i = 0; i < count && kept < 128; i++) {
+        malloc_zone_t *zone = (malloc_zone_t *)zones[i];
+        malloc_statistics_t statistics;
+        memset(&statistics, 0, sizeof(statistics));
+        malloc_zone_statistics(zone, &statistics);
+        total += statistics.size_in_use;
+        if (statistics.size_in_use < 262144)
+            continue;
+        const char *name = malloc_get_zone_name(zone);
+        entries[kept].name = name ? name : "?";
+        entries[kept].bytes = statistics.size_in_use;
+        kept++;
+    }
+    for (unsigned a = 0; a + 1 < kept; a++)
+        for (unsigned b = a + 1; b < kept; b++)
+            if (entries[b].bytes > entries[a].bytes) {
+                __typeof__(entries[0]) swap = entries[a];
+                entries[a] = entries[b];
+                entries[b] = swap;
+            }
+
+    fprintf(log, "    zones: %u zones, %.1f MB in use\n", count, total / 1048576.0);
+    for (unsigned i = 0; i < kept && i < 14; i++)
+        fprintf(log, "      %6.2f MB  %s\n", entries[i].bytes / 1048576.0, entries[i].name);
+}
+
 static void reportMemoryRegions(FILE *log)
 {
     vm_address_t address = 0;
@@ -2522,8 +2729,31 @@ static void *heartbeat(void *unused)
         } else
             fprintf(log, "alive %d s\n", second);
 
-        if (!(second % 20))
+        // Returned on how much is held rather than on a schedule.
+        //
+        // The allocator keeps freed pages for reuse, which is right on a machine
+        // with room and wrong on one where the system kills the process for
+        // holding them. Below 160 MB the pages are left alone and the allocator
+        // stays fast; above it they are handed back every few seconds, and
+        // harder the closer the process gets to the ceiling that kills it.
+        {
+            double held = residentMegabytes();
+            int period = held > 200 ? 2 : held > 160 ? 5 : 30;
+            if (!(second % period))
+                returnFreePages();
+        }
+
+        if (!(second % 20)) {
             reportMemoryRegions(log);
+
+            // What the engine says it is holding, rather than what the kernel
+            // sees. Both of these read structures the web thread owns, and
+            // reading them from here trips the engine's own assertion, so the
+            // work is posted there and the answer is picked up on the next turn.
+            requestEngineMemoryReport();
+            reportEngineMemory(log);
+            reportMemoryZones(log);
+        }
 
         thread_act_array_t threads;
         mach_msg_type_number_t threadCount = 0;
@@ -2554,17 +2784,25 @@ static void *heartbeat(void *unused)
 int NativeAppMain(int argc, char *argv[])
 {
     pthread_t pulse;
-    pthread_create(&pulse, NULL, heartbeat, NULL);
+    // These threads watch and measure; they do not need a megabyte of stack
+    // each, and on this device the stacks are charged to the process whether
+    // they are used or not. The default is 512 KB; the deepest of these calls a
+    // handful of frames.
+    pthread_attr_t small;
+    pthread_attr_init(&small);
+    pthread_attr_setstacksize(&small, 64 * 1024);
+
+    pthread_create(&pulse, &small, heartbeat, NULL);
     pthread_detach(pulse);
 
     pthread_t profiler;
-    pthread_create(&profiler, NULL, sampler, NULL);
+    pthread_create(&profiler, &small, sampler, NULL);
     pthread_t webProfiler;
-    pthread_create(&webProfiler, NULL, webThreadSampler, NULL);
+    pthread_create(&webProfiler, &small, webThreadSampler, NULL);
     pthread_detach(profiler);
 
     pthread_t watchdog;
-    pthread_create(&watchdog, NULL, mainThreadWatchdog, NULL);
+    pthread_create(&watchdog, &small, mainThreadWatchdog, NULL);
     pthread_detach(watchdog);
 
     installDeathTraps();

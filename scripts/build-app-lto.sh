@@ -41,6 +41,12 @@ rm -rf "$APP" && mkdir -p "$APP/Frameworks"
     "$P/third_party/openssl-armv7/lib/libssl.a" \
     "$P/third_party/openssl-armv7/lib/libcrypto.a" -o "$APP/TLS.dylib"
 
+# The memory probe, built beside the TLS library. It is inert unless
+# /tmp/native-mem-probe exists, and native-main inserts it only then.
+"$TC/usr/bin/clang" -target armv7-apple-ios6.0 -isysroot "$SDK" -O2 -fno-omit-frame-pointer -dynamiclib \
+    -install_name "@executable_path/MemProbe.dylib" \
+    "$P/app/mem-probe.c" -o "$APP/MemProbe.dylib"
+
 SYS_WK=/System/Library/PrivateFrameworks/WebKit.framework/WebKit
 SYS_WC=/System/Library/PrivateFrameworks/WebCore.framework/WebCore
 # iOS 6 carries JavaScriptCore as a private framework; it only became public in iOS 7.

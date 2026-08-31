@@ -57,7 +57,30 @@ int main(int argc, char *argv[])
     // the system kills it mid-scroll. Both soak deaths were exactly this: no
     // crash, no signal, resident climbing to ~170 MB and then SIGKILL. Telling
     // the collector the machine is small keeps it collecting instead of growing.
-    setenv("JSC_forceRAMSize", "67108864", 1);
+    // Measured on a fixed local workload, so the answer is not the network's:
+    //
+    //   told 64 MB   benchmark 2481 ms   resident 170.3 MB   JS heap 22.5 MB
+    //   told 24 MB   benchmark 2492 ms   resident 133.0 MB   JS heap  1.0 MB
+    //
+    // Thirty-seven megabytes back for a difference in speed smaller than the
+    // noise between two runs. The collector spends the difference on collecting,
+    // which on this device is the better trade: the memory it was holding is
+    // what the system kills the process for.
+    setenv("JSC_forceRAMSize", "25165824", 1);
+
+    // The optimising compiler, kept within this machine.
+    //
+    // Its working vectors are the second largest allocator in the process after
+    // the parser - AbstractValue, VariableEvent and the assembler's link records
+    // together accounted for 58 MB over one feed. Two things bound them: one
+    // compiler thread rather than one per core, on a device whose other core is
+    // running the page; and a smaller ceiling on what is worth optimising, so a
+    // single enormous function does not build enormous vectors.
+    //
+    // Measured over two pairs of runs on the site: parked 3% and 1% against 4%,
+    // freezes 2 and 1 against 3, memory unchanged.
+    setenv("JSC_numberOfDFGCompilerThreads", "1", 1);
+    setenv("JSC_maximumOptimizationCandidateBytecodeCost", "20000", 1);
 
     // Every JavaScriptCore option, settable without a rebuild.
     //
@@ -99,10 +122,26 @@ int main(int argc, char *argv[])
         // can be left out with a file, to compare against the system's.
         char tls[PATH_MAX];
         snprintf(tls, sizeof(tls), "%s/TLS.dylib", bundle);
+        char inserted[PATH_MAX * 2];
+        inserted[0] = 0;
         if (access("/tmp/native-system-tls", F_OK) != 0 && access(tls, F_OK) == 0) {
-            setenv("DYLD_INSERT_LIBRARIES", tls, 1);
+            strlcpy(inserted, tls, sizeof(inserted));
             note(@"using our own TLS: %s", tls);
         }
+
+        // The memory probe, when it is asked for. It charges every large block
+        // to the code that asked for it, which is how the engine's own heap gets
+        // a name without the heap-breakdown build, which traps on this port.
+        char probe[PATH_MAX];
+        snprintf(probe, sizeof(probe), "%s/MemProbe.dylib", bundle);
+        if (access("/tmp/native-mem-probe", F_OK) == 0 && access(probe, F_OK) == 0) {
+            if (inserted[0])
+                strlcat(inserted, ":", sizeof(inserted));
+            strlcat(inserted, probe, sizeof(inserted));
+            note(@"charging large allocations to their callers");
+        }
+        if (inserted[0])
+            setenv("DYLD_INSERT_LIBRARIES", inserted, 1);
 
         char self[PATH_MAX];
         uint32_t length = sizeof(self);

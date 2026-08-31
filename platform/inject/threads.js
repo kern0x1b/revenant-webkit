@@ -475,6 +475,88 @@
     scheduleLook();
 
     window.__appchromeReady = true;
+    /* Where the page's own time goes, when asked for it.
+     *
+     * The engine's profiler says JavaScript, and the page's JavaScript is not
+     * ours to read - but every long piece of it is entered through one of a
+     * handful of doors: a timer, an animation frame, an observer, or the
+     * message channel a scheduler uses to keep working across tasks. Counted
+     * here, from before the page's own scripts run, they say which door.
+     *
+     * Off unless the page is asked for it, and it is asked for by loading with
+     * ?__cost=1, so nothing measures itself in ordinary use. */
+    if (/[?&]__cost=1/.test(location.search)) {
+        window.__cost = {};
+        var account = function (kind, ms) {
+            var c = window.__cost[kind] || { calls: 0, ms: 0, worst: 0 };
+            c.calls++; c.ms += ms;
+            if (ms > c.worst) c.worst = ms;
+            window.__cost[kind] = c;
+        };
+        var time = function (kind, fn, self, args) {
+            var started = Date.now();
+            try { return fn.apply(self, args); }
+            finally { account(kind, Date.now() - started); }
+        };
+
+        var rAF = window.requestAnimationFrame;
+        window.requestAnimationFrame = function (fn) {
+            return rAF.call(window, function (t) { return time('animation frame', fn, window, [t]); });
+        };
+        var timeout = window.setTimeout;
+        window.setTimeout = function (fn, delay) {
+            if (typeof fn !== 'function') return timeout.apply(window, arguments);
+            return timeout.call(window, function () { return time('timer', fn, window, []); }, delay);
+        };
+        var interval = window.setInterval;
+        window.setInterval = function (fn, delay) {
+            if (typeof fn !== 'function') return interval.apply(window, arguments);
+            return interval.call(window, function () { return time('repeating timer', fn, window, []); }, delay);
+        };
+        if (window.IntersectionObserver) {
+            var IO = window.IntersectionObserver;
+            window.IntersectionObserver = function (callback, options) {
+                return new IO(function (entries, observer) {
+                    return time('intersection observer', callback, window, [entries, observer]);
+                }, options);
+            };
+        }
+        if (window.MutationObserver) {
+            var MO = window.MutationObserver;
+            window.MutationObserver = function (callback) {
+                return new MO(function (records, observer) {
+                    return time('mutation observer', callback, window, [records, observer]);
+                });
+            };
+        }
+        /* The scheduler's door. React posts a message to itself to continue work
+         * in a later task, so a single one of these can be seconds long. */
+        var portDescriptor = window.MessagePort
+            && Object.getOwnPropertyDescriptor(MessagePort.prototype, 'onmessage');
+        if (portDescriptor && portDescriptor.set) {
+            Object.defineProperty(MessagePort.prototype, 'onmessage', {
+                configurable: true, get: portDescriptor.get,
+                set: function (fn) {
+                    if (typeof fn !== 'function') return portDescriptor.set.call(this, fn);
+                    var port = this;
+                    return portDescriptor.set.call(this, function (event) {
+                        return time('scheduler', fn, port, [event]);
+                    });
+                }
+            });
+        }
+        var addListener = EventTarget.prototype.addEventListener;
+        EventTarget.prototype.addEventListener = function (type, listener, options) {
+            if (typeof listener === 'function' && (type === 'message' || type === 'scroll' || type === 'touchmove')) {
+                var self = this;
+                return addListener.call(this, type, function (event) {
+                    return time('listener: ' + type, listener, self, [event]);
+                }, options);
+            }
+            return addListener.apply(this, arguments);
+        };
+    }
+
     window.__appchromeV = 34;
     } catch (error) {
         window.__appchromeError = String(error && error.message || error);

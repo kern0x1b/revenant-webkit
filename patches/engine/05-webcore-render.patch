@@ -866,10 +866,18 @@ index 8931fd160b..07aa39bf04 100644
      m_anchorPositionsOnLastUpdate.clear();
  
 diff --git a/Source/WebCore/style/StyleScope.cpp b/Source/WebCore/style/StyleScope.cpp
-index f1bbaf577b..8727f7020d 100644
+index f1bbaf577b..abf4f0bbda 100644
 --- a/Source/WebCore/style/StyleScope.cpp
 +++ b/Source/WebCore/style/StyleScope.cpp
-@@ -83,6 +83,7 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(Scope);
+@@ -26,6 +26,7 @@
+  */
+ 
+ #include "config.h"
++#include <unistd.h>
+ #include "StyleScope.h"
+ 
+ #include "CSSCounterStyleRegistry.h"
+@@ -83,6 +84,7 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(Scope);
  Scope::Scope(Document& document)
      : m_document(document)
      , m_pendingUpdateTimer(*this, &Scope::pendingUpdateTimerFired)
@@ -877,7 +885,7 @@ index f1bbaf577b..8727f7020d 100644
      , m_customPropertyRegistry(makeUniqueRef<CustomPropertyRegistry>(*this))
      , m_counterStyleRegistry(makeUniqueRef<CSSCounterStyleRegistry>())
  {
-@@ -92,6 +93,7 @@ Scope::Scope(ShadowRoot& shadowRoot)
+@@ -92,6 +94,7 @@ Scope::Scope(ShadowRoot& shadowRoot)
      : m_document(shadowRoot.documentScope())
      , m_shadowRoot(&shadowRoot)
      , m_pendingUpdateTimer(*this, &Scope::pendingUpdateTimerFired)
@@ -885,7 +893,7 @@ index f1bbaf577b..8727f7020d 100644
      , m_customPropertyRegistry(makeUniqueRef<CustomPropertyRegistry>(*this))
      , m_counterStyleRegistry(makeUniqueRef<CSSCounterStyleRegistry>())
  {
-@@ -235,9 +237,10 @@ void Scope::addPendingSheet(const Element& element)
+@@ -235,9 +238,10 @@ void Scope::addPendingSheet(const Element& element)
  
      LOG_WITH_STREAM(StyleSheets, stream << "Scope " << this << " addPendingSheet() " << element << " isInHead " << isInHead);
  
@@ -898,7 +906,7 @@ index f1bbaf577b..8727f7020d 100644
          m_elementsInBodyWithPendingSheets.add(element);
  }
  
-@@ -257,6 +260,7 @@ void Scope::addPendingSheet(const ProcessingInstruction& processingInstruction)
+@@ -257,6 +261,7 @@ void Scope::addPendingSheet(const ProcessingInstruction& processingInstruction)
      ASSERT(!m_processingInstructionsWithPendingSheets.contains(processingInstruction));
  
      m_processingInstructionsWithPendingSheets.add(processingInstruction);
@@ -906,7 +914,7 @@ index f1bbaf577b..8727f7020d 100644
  }
  
  void Scope::removePendingSheet(const ProcessingInstruction& processingInstruction)
-@@ -283,8 +287,45 @@ bool Scope::hasPendingSheetsInBody() const
+@@ -283,8 +288,45 @@ bool Scope::hasPendingSheetsInBody() const
      return !m_elementsInBodyWithPendingSheets.isEmptyIgnoringNullReferences();
  }
  
@@ -951,6 +959,50 @@ index f1bbaf577b..8727f7020d 100644
 +
      if (hasPendingSheets())
          return;
+ 
+@@ -545,6 +587,43 @@ static void filterEnabledNonemptyCSSStyleSheets(Vector<Ref<CSSStyleSheet>>& resu
+ 
+ void Scope::updateActiveStyleSheets(UpdateType updateType)
+ {
++#if defined(WEBKIT_IOS6)
++    // How often the author's rules are rebuilt, and how long it takes.
++    //
++    // Sorting inside RuleSetBuilder is the single most expensive function in the
++    // engine on this page - more than selector matching, more than layout - and
++    // the page has sixteen thousand rules that do not change. That points at
++    // rebuilding rather than at the rules, so the rebuilds are counted here.
++    static int reportRebuilds = -1;
++    if (reportRebuilds < 0)
++        reportRebuilds = access("/tmp/native-style-rebuilds", F_OK) == 0 ? 1 : 0;
++    struct RebuildTimer {
++        bool report;
++        MonotonicTime startedAt;
++        UpdateType type;
++        RebuildTimer(bool r, UpdateType t) : report(r), startedAt(MonotonicTime::now()), type(t) { }
++        ~RebuildTimer()
++        {
++            if (!report)
++                return;
++            static FILE* log;
++            static unsigned count;
++            static double total;
++            if (!log) {
++                log = fopen("/tmp/native-style-rebuilds.log", "w");
++                if (log)
++                    setvbuf(log, nullptr, _IOLBF, 0);
++            }
++            double ms = (MonotonicTime::now() - startedAt).milliseconds();
++            count++;
++            total += ms;
++            if (log)
++                fprintf(log, "rebuild %u: %.1f ms, type %d, %.0f ms total\n",
++                    count, ms, (int)type, total);
++        }
++    } rebuildTimer(reportRebuilds == 1, updateType);
++#endif
++
+     RELEASE_ASSERT(!m_isUpdatingStyleResolver);
+     ASSERT(!m_pendingUpdate);
  
 diff --git a/Source/WebCore/style/StyleScope.h b/Source/WebCore/style/StyleScope.h
 index 8dcefcf638..251e37ad5b 100644
