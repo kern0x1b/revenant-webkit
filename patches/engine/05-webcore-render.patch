@@ -255,7 +255,7 @@ index e85fa7aef1..43f5a3caa6 100644
  
      FloatRect backgroundBoxForSimpleContainerPainting() const;
 diff --git a/Source/WebCore/rendering/RenderLayerCompositor.cpp b/Source/WebCore/rendering/RenderLayerCompositor.cpp
-index 155de4b982..d19f65a91b 100644
+index 155de4b982..82c7071fb4 100644
 --- a/Source/WebCore/rendering/RenderLayerCompositor.cpp
 +++ b/Source/WebCore/rendering/RenderLayerCompositor.cpp
 @@ -24,6 +24,7 @@
@@ -283,7 +283,7 @@ index 155de4b982..d19f65a91b 100644
  
      if (cachedIsUnderMemoryPressureOrWarning != nowUnderMemoryPressure) {
          cachedMemoryPolicy = MemoryPressureHandler::singleton().currentMemoryUsagePolicy();
-@@ -1040,6 +1049,37 @@ static std::optional<ScrollingNodeID> frameHostingNodeForFrame(LocalFrame& frame
+@@ -1040,10 +1049,70 @@ static std::optional<ScrollingNodeID> frameHostingNodeForFrame(LocalFrame& frame
  // Returns true on a successful update.
  bool RenderLayerCompositor::updateCompositingLayers(CompositingUpdateType updateType, RenderLayer* updateRootArg)
  {
@@ -321,7 +321,40 @@ index 155de4b982..d19f65a91b 100644
      LOG_WITH_STREAM(Compositing, stream << "RenderLayerCompositor " << this << " [" << m_renderView.frameView() << "] updateCompositingLayers " << updateType << " contentLayersCount " << m_contentLayersCount);
  
      TraceScope tracingScope(CompositingUpdateStart, CompositingUpdateEnd);
-@@ -1243,6 +1283,25 @@ bool RenderLayerCompositor::allowBackingStoreDetachingForFixedPosition(RenderLay
+ 
++#if defined(WEBKIT_IOS6)
++    struct CompositingUpdateTimer {
++        bool report;
++        CompositingUpdateType type;
++        MonotonicTime startedAt;
++        CompositingUpdateTimer(bool r, CompositingUpdateType t)
++            : report(r), type(t), startedAt(r ? MonotonicTime::now() : MonotonicTime()) { }
++        ~CompositingUpdateTimer()
++        {
++            if (!report)
++                return;
++            static unsigned counts[8];
++            static double totals[8];
++            static MonotonicTime lastReport;
++            unsigned index = static_cast<unsigned>(type) & 7;
++            counts[index]++;
++            totals[index] += (MonotonicTime::now() - startedAt).milliseconds();
++            MonotonicTime now = MonotonicTime::now();
++            if (now - lastReport > 3_s) {
++                lastReport = now;
++                for (unsigned i = 0; i < 8; i++) {
++                    if (counts[i])
++                        WTFLogAlways("[compositing] kind %u: %u updates, %.0f ms", i, counts[i], totals[i]);
++                }
++            }
++        }
++    } compositingUpdateTimer(getenv("WEBKIT_IOS6_COMPOSITING_LOG") != nullptr, updateType);
++#endif
++
+ #if ENABLE(TREE_DEBUGGING)
+     if (compositingLogEnabled())
+         showPaintOrderTree(m_renderView.layer());
+@@ -1243,6 +1312,25 @@ bool RenderLayerCompositor::allowBackingStoreDetachingForFixedPosition(RenderLay
          fixedLayoutRect = frameView->rectForFixedPositionLayout();
  
      bool allowDetaching = !fixedLayoutRect.intersects(absoluteBounds);
@@ -347,7 +380,7 @@ index 155de4b982..d19f65a91b 100644
      LOG_WITH_STREAM(Compositing, stream << "RenderLayerCompositor (layer " << &layer << ") allowsBackingStoreDetaching - absoluteBounds " << absoluteBounds << " layoutViewportRect " << fixedLayoutRect << ", allowDetaching " << allowDetaching);
      return allowDetaching;
  }
-@@ -4125,16 +4184,28 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
+@@ -4125,16 +4213,28 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
  
      auto position = renderer.style().position();
      bool isFixed = renderer.isFixedPositioned();
@@ -377,7 +410,7 @@ index 155de4b982..d19f65a91b 100644
  
      if (isSticky)
          return isAsyncScrollableStickyLayer(layer);
-@@ -4149,10 +4220,17 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
+@@ -4149,10 +4249,17 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
  
      // Don't promote fixed position elements that are descendants of a non-view container, e.g. transformed elements.
      // They will stay fixed wrt the container rather than the enclosing frame.
@@ -395,7 +428,7 @@ index 155de4b982..d19f65a91b 100644
  
      bool paintsContent = layer.isVisuallyNonEmpty() || layer.hasVisibleDescendant();
      if (!paintsContent) {
-@@ -4160,6 +4238,7 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
+@@ -4160,6 +4267,7 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
          return false;
      }
  
@@ -403,7 +436,7 @@ index 155de4b982..d19f65a91b 100644
      // Scroll-adjusted boxes can be scrolled into view, so don't check viewport intersection on them.
      if (!layer.anchorScrollAdjustment() && !fixedLayerIntersectsViewport(layer)) {
          queryData.nonCompositedForPositionReason = RenderLayer::NotCompositedForBoundsOutOfView;
-@@ -5469,7 +5548,11 @@ FixedPositionViewportConstraints RenderLayerCompositor::computeFixedViewportCons
+@@ -5469,7 +5577,11 @@ FixedPositionViewportConstraints RenderLayerCompositor::computeFixedViewportCons
  
      FixedPositionViewportConstraints constraints;
      constraints.setLayerPositionAtLastLayout(scrollingNodeLayer->position());
@@ -415,7 +448,7 @@ index 155de4b982..d19f65a91b 100644
      constraints.setAlignmentOffset(scrollingNodeLayer->pixelAlignmentOffset());
  
      const Style::ComputedStyle& style = layer.renderer().style();
-@@ -5517,7 +5600,11 @@ StickyPositionViewportConstraints RenderLayerCompositor::computeStickyViewportCo
+@@ -5517,7 +5629,11 @@ StickyPositionViewportConstraints RenderLayerCompositor::computeStickyViewportCo
      StickyPositionViewportConstraints constraints;
      renderer.computeStickyPositionConstraints(constraints, renderer.constrainingRectForStickyPosition());
  
@@ -866,7 +899,7 @@ index 8931fd160b..07aa39bf04 100644
      m_anchorPositionsOnLastUpdate.clear();
  
 diff --git a/Source/WebCore/style/StyleScope.cpp b/Source/WebCore/style/StyleScope.cpp
-index f1bbaf577b..abf4f0bbda 100644
+index f1bbaf577b..aa5fc0629e 100644
 --- a/Source/WebCore/style/StyleScope.cpp
 +++ b/Source/WebCore/style/StyleScope.cpp
 @@ -26,6 +26,7 @@
@@ -893,7 +926,15 @@ index f1bbaf577b..abf4f0bbda 100644
      , m_customPropertyRegistry(makeUniqueRef<CustomPropertyRegistry>(*this))
      , m_counterStyleRegistry(makeUniqueRef<CSSCounterStyleRegistry>())
  {
-@@ -235,9 +238,10 @@ void Scope::addPendingSheet(const Element& element)
+@@ -186,7 +189,6 @@ void Scope::releaseMemory()
+         });
+     }
+ #endif
+-    clearResolver();
+ }
+ 
+ Scope& Scope::forNode(Node& node)
+@@ -235,9 +237,10 @@ void Scope::addPendingSheet(const Element& element)
  
      LOG_WITH_STREAM(StyleSheets, stream << "Scope " << this << " addPendingSheet() " << element << " isInHead " << isInHead);
  
@@ -906,7 +947,7 @@ index f1bbaf577b..abf4f0bbda 100644
          m_elementsInBodyWithPendingSheets.add(element);
  }
  
-@@ -257,6 +261,7 @@ void Scope::addPendingSheet(const ProcessingInstruction& processingInstruction)
+@@ -257,6 +260,7 @@ void Scope::addPendingSheet(const ProcessingInstruction& processingInstruction)
      ASSERT(!m_processingInstructionsWithPendingSheets.contains(processingInstruction));
  
      m_processingInstructionsWithPendingSheets.add(processingInstruction);
@@ -914,7 +955,7 @@ index f1bbaf577b..abf4f0bbda 100644
  }
  
  void Scope::removePendingSheet(const ProcessingInstruction& processingInstruction)
-@@ -283,8 +288,45 @@ bool Scope::hasPendingSheetsInBody() const
+@@ -283,8 +287,45 @@ bool Scope::hasPendingSheetsInBody() const
      return !m_elementsInBodyWithPendingSheets.isEmptyIgnoringNullReferences();
  }
  
@@ -960,7 +1001,7 @@ index f1bbaf577b..abf4f0bbda 100644
      if (hasPendingSheets())
          return;
  
-@@ -545,6 +587,43 @@ static void filterEnabledNonemptyCSSStyleSheets(Vector<Ref<CSSStyleSheet>>& resu
+@@ -545,6 +586,43 @@ static void filterEnabledNonemptyCSSStyleSheets(Vector<Ref<CSSStyleSheet>>& resu
  
  void Scope::updateActiveStyleSheets(UpdateType updateType)
  {

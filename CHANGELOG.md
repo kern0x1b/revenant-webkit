@@ -25,6 +25,14 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Fixed
+- **The style resolver, thrown away every time the system asked for memory.**
+  WebCore's memory-release path clears the resolver, and on a 512 MB device
+  running a 250 MB process that path runs constantly. Rebuilding it means
+  re-reading every rule of the site's stylesheets: measured at 950 ms a time,
+  47 times in a four-minute session - 35 seconds of processor spent
+  reconstructing something that had not changed. The compiled selectors are
+  still released. Over the same scripted session: 1.4 s of rebuilding instead of
+  35.5, and resident memory lower rather than higher, 195 MB against 202.
 - **Inline caches, which this architecture had them switched off for.**
   `forceICFailure` — the option that makes every inline cache refuse to install —
   defaults to `is32Bit()` upstream, so on armv7 no call ever linked and no
