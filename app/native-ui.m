@@ -420,13 +420,25 @@ static void buildMethodSpans(void)
         return;
     objc_getClassList(classes, classCount);
 
-    int capacity = 262144, used = 0;
+    // Grown from a small table rather than reserved at the largest size it could
+    // need. Reserving it cost four megabytes for the whole life of the process -
+    // the largest single block this application held - to symbolise stacks that
+    // are only asked for while profiling.
+    int capacity = 8192, used = 0;
     MethodSpan *spans = (MethodSpan *)malloc(sizeof(MethodSpan) * capacity);
     if (!spans) {
         free(classes);
         return;
     }
-    for (int c = 0; c < classCount && used < capacity - 2; c++) {
+    for (int c = 0; c < classCount; c++) {
+        if (used >= capacity - 2) {
+            int grown = capacity * 2;
+            MethodSpan *larger = (MethodSpan *)realloc(spans, sizeof(MethodSpan) * grown);
+            if (!larger)
+                break;
+            spans = larger;
+            capacity = grown;
+        }
         for (int meta = 0; meta < 2; meta++) {
             Class cls = meta ? object_getClass((id)classes[c]) : classes[c];
             unsigned int count = 0;
