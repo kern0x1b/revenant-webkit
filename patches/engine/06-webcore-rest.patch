@@ -2049,6 +2049,72 @@ index 00b8770ff9..401c75ce8b 100644
      ASSERT(renderView());
      CheckedRef renderView = *this->renderView();
  
+diff --git a/Source/WebCore/page/MemoryRelease.cpp b/Source/WebCore/page/MemoryRelease.cpp
+index 3def801240..8d2648af02 100644
+--- a/Source/WebCore/page/MemoryRelease.cpp
++++ b/Source/WebCore/page/MemoryRelease.cpp
+@@ -24,6 +24,9 @@
+  */
+ 
+ #include "config.h"
++#include <stdlib.h>
++#include <mach/mach.h>
++#include <mach/task.h>
+ #include "MemoryRelease.h"
+ 
+ #include "AsyncNodeDeletionQueueInlines.h"
+@@ -82,6 +85,31 @@
+ 
+ namespace WebCore {
+ 
++#if defined(WEBKIT_IOS6)
++static double residentMegabytes()
++{
++    struct task_basic_info info;
++    mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
++    if (task_info(mach_task_self(), TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS)
++        return 0;
++    return info.resident_size / 1048576.0;
++}
++
++static double codeDeletionThresholdMegabytes()
++{
++    static const double threshold = [] -> double {
++        if (const char* override = getenv("WEBKIT_IOS6_CODE_DELETION_THRESHOLD_MB")) {
++            double value = atof(override);
++            if (value > 0)
++                return value;
++        }
++        return 280;
++    }();
++    return threshold;
++}
++#endif
++
++
+ static void releaseNoncriticalMemory(MaintainMemoryCache maintainMemoryCache)
+ {
+     RenderTheme::singleton().purgeCaches();
+@@ -160,10 +188,19 @@ static void releaseCriticalMemory(Synchronous synchronous, MaintainBackForwardCa
+             protect(localFrame->editor())->releaseMemory();
+     }
+ 
++#if defined(WEBKIT_IOS6)
++    if (residentMegabytes() >= codeDeletionThresholdMegabytes()) {
++        if (synchronous == Synchronous::Yes)
++            GarbageCollectionController::singleton().deleteAllCode(JSC::PreventCollectionAndDeleteAllCode);
++        else
++            GarbageCollectionController::singleton().deleteAllCode(JSC::DeleteAllCodeIfNotCollecting);
++    }
++#else
+     if (synchronous == Synchronous::Yes)
+         GarbageCollectionController::singleton().deleteAllCode(JSC::PreventCollectionAndDeleteAllCode);
+     else
+         GarbageCollectionController::singleton().deleteAllCode(JSC::DeleteAllCodeIfNotCollecting);
++#endif
+ 
+ #if ENABLE(VIDEO)
+     for (auto& mediaElement : HTMLMediaElement::allMediaElements())
 diff --git a/Source/WebCore/page/PointerCaptureController.cpp b/Source/WebCore/page/PointerCaptureController.cpp
 index a066648964..128db5815d 100644
 --- a/Source/WebCore/page/PointerCaptureController.cpp

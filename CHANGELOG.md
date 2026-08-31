@@ -25,6 +25,16 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Fixed
+- **Compiled JavaScript, thrown away on the same schedule.** The memory-release
+  path also deletes every code block in the process, and the site's route change
+  then spends its time parsing and generating bytecode again - parser, bytecode
+  generator and `newCodeBlockFor` together dominate the profile of a tab switch.
+  Sampled from inside the page, the stretches where it cannot run a timer at all:
+  worst 22.5 s and 79 s in total across four switches with the code deleted,
+  against worst 10.6 s and 44 s with it kept. The code is now deleted only when
+  the process is actually near the limit that kills it, 280 MB, which the same
+  session does not reach; `WEBKIT_IOS6_CODE_DELETION_THRESHOLD_MB` moves the
+  line.
 - **The style resolver, thrown away every time the system asked for memory.**
   WebCore's memory-release path clears the resolver, and on a 512 MB device
   running a 250 MB process that path runs constantly. Rebuilding it means
