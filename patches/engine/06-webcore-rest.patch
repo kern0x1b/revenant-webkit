@@ -1,8 +1,24 @@
 diff --git a/Source/WebCore/CMakeLists.txt b/Source/WebCore/CMakeLists.txt
-index 02a0c65af3..45e8acba4f 100644
+index 02a0c65af3..0c3f6535eb 100644
 --- a/Source/WebCore/CMakeLists.txt
 +++ b/Source/WebCore/CMakeLists.txt
-@@ -2263,7 +2263,7 @@ if (USE_ANGLE_EGL)
+@@ -1347,6 +1347,7 @@ set(WebCore_NON_SVG_IDL_FILES
+     html/TimeRanges.idl
+     html/URLSearchParams.idl
+     html/UserActivation.idl
++    page/Scheduling.idl
+     html/ValidityState.idl
+     html/VideoFrameMetadata.idl
+     html/VideoFrameRequestCallback.idl
+@@ -2116,6 +2117,7 @@ set(WebCore_SUPPLEMENTAL_IDL_FILES
+     page/DOMWindow+RequestIdleCallback.idl
+     page/DOMWindow+Selection.idl
+     page/DOMWindow+VisualViewport.idl
++    page/Navigator+Scheduling.idl
+     page/Navigator+UserActivation.idl
+     page/NavigatorCookies.idl
+     page/NavigatorGlobalPrivacyControl.idl
+@@ -2263,7 +2265,7 @@ if (USE_ANGLE_EGL)
      )
  elseif (USE_LIBEPOXY)
      list(APPEND WebCore_LIBRARIES Epoxy::Epoxy)
@@ -11,7 +27,7 @@ index 02a0c65af3..45e8acba4f 100644
      list(APPEND WebCore_LIBRARIES OpenGL::GLES)
  
      list(APPEND WebCore_SYSTEM_INCLUDE_DIRECTORIES
-@@ -3251,6 +3251,30 @@ endif ()
+@@ -3251,6 +3253,30 @@ endif ()
  
  WEBKIT_FRAMEWORK(WebCore)
  
@@ -43,7 +59,7 @@ index 02a0c65af3..45e8acba4f 100644
      WEBKIT_TARGET_USE_PGO(WebCore PROFILE WebCore)
  endif ()
 diff --git a/Source/WebCore/Headers.cmake b/Source/WebCore/Headers.cmake
-index 25b5efb87a..7b0541f3cf 100644
+index 25b5efb87a..833bee00de 100644
 --- a/Source/WebCore/Headers.cmake
 +++ b/Source/WebCore/Headers.cmake
 @@ -980,6 +980,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
@@ -54,6 +70,14 @@ index 25b5efb87a..7b0541f3cf 100644
      bindings/js/ScriptController.h
      bindings/js/ScriptWrappable.h
      bindings/js/ScriptWrappableInlines.h
+@@ -2086,6 +2087,7 @@ set(WebCore_PRIVATE_FRAMEWORK_HEADERS
+     page/SettingsBase.h
+     page/ShadowRealmGlobalScope.h
+     page/ShareData.h
++    page/Scheduling.h
+     page/SocketProvider.h
+     page/SpeechRecognitionProvider.h
+     page/SpeechSynthesisClient.h
 diff --git a/Source/WebCore/Modules/ShapeDetection/Implementation/Cocoa/VisionUtilities.mm b/Source/WebCore/Modules/ShapeDetection/Implementation/Cocoa/VisionUtilities.mm
 index 12e7c92802..108f4f82da 100644
 --- a/Source/WebCore/Modules/ShapeDetection/Implementation/Cocoa/VisionUtilities.mm
@@ -391,7 +415,7 @@ index 70e1096e41..8afdaa65e1 100644
  )
 +
 diff --git a/Source/WebCore/Sources.txt b/Source/WebCore/Sources.txt
-index f73a2744df..fc28163e97 100644
+index f73a2744df..272416e376 100644
 --- a/Source/WebCore/Sources.txt
 +++ b/Source/WebCore/Sources.txt
 @@ -57,37 +57,37 @@ Modules/WebGPU/GPUTexture.cpp
@@ -471,6 +495,15 @@ index f73a2744df..fc28163e97 100644
  bindings/js/ScriptCachedFrameData.cpp
  bindings/js/ScriptController.cpp
  bindings/js/ScriptModuleLoader.cpp
+@@ -2250,6 +2251,8 @@ page/NavigationDestination.cpp
+ page/NavigationHistoryEntry.cpp
+ page/NavigationTransition.cpp
+ page/Navigator.cpp
++page/Scheduling.cpp
++page/NavigatorScheduling.cpp
+ page/NavigatorBase.cpp
+ page/NavigatorGlobalPrivacyControl.cpp
+ page/NavigatorLoginStatus.cpp
 diff --git a/Source/WebCore/SourcesCMakeCocoa.txt b/Source/WebCore/SourcesCMakeCocoa.txt
 index 66b6ac2bb0..d96232229b 100644
 --- a/Source/WebCore/SourcesCMakeCocoa.txt

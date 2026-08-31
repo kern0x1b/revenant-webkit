@@ -205,6 +205,27 @@ index d764ed66a9..5108547b92 100644
          }
          return { };
      }
+diff --git a/Source/JavaScriptCore/bytecode/CallLinkStatus.cpp b/Source/JavaScriptCore/bytecode/CallLinkStatus.cpp
+index 39c5d1c29f..64bb887fff 100644
+--- a/Source/JavaScriptCore/bytecode/CallLinkStatus.cpp
++++ b/Source/JavaScriptCore/bytecode/CallLinkStatus.cpp
+@@ -26,6 +26,8 @@
+ #include "config.h"
+ #include "CallLinkStatus.h"
+ 
++#include "Options.h"
++
+ #include "BytecodeStructs.h"
+ #include "CallLinkInfo.h"
+ #include "CodeBlock.h"
+@@ -234,6 +236,7 @@ CallLinkStatus CallLinkStatus::computeFromCallLinkInfo(
+     
+     result.m_couldTakeSlowPath = !!callLinkInfo.slowPathCount();
+ 
++
+     return result;
+ }
+ 
 diff --git a/Source/JavaScriptCore/bytecode/CodeBlockInlines.h b/Source/JavaScriptCore/bytecode/CodeBlockInlines.h
 index d04dddf4b3..79ef608457 100644
 --- a/Source/JavaScriptCore/bytecode/CodeBlockInlines.h
@@ -1700,7 +1721,7 @@ index 308c8da9dd..6b87ab0174 100644
      static double defaultQuickDFGTierUpThresholdFactor()
      {
 diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
-index 30507f47b3..7902197756 100644
+index 30507f47b3..73f2d65db9 100644
 --- a/Source/JavaScriptCore/runtime/OptionsList.h
 +++ b/Source/JavaScriptCore/runtime/OptionsList.h
 @@ -25,6 +25,44 @@
@@ -1759,6 +1780,15 @@ index 30507f47b3..7902197756 100644
      v(Bool, useDOMJIT, is64Bit(), Normal, "allows the DOMJIT to be used if true"_s) \
      \
      v(Bool, reportMustSucceedExecutableAllocations, false, Normal, nullptr) \
+@@ -101,7 +139,7 @@ bool hasCapacityToUseLargeGigacage();
+     v(Size, jitMemoryReservationAddress, 0, Restricted, "If non-zero, we will attempt to allocate JIT memory at the address provided and crash if we cannot.") \
+     \
+     v(Bool, forceCodeBlockLiveness, false, Normal, nullptr) \
+-    v(Bool, forceICFailure, is32Bit(), Normal, nullptr) \
++    v(Bool, forceICFailure, false, Normal, nullptr) \
+     v(Bool, forceUnlinkedDFG, false, Normal, nullptr) \
+     \
+     v(Unsigned, repatchCountForCoolDown, 8, Normal, nullptr) \
 @@ -351,12 +389,12 @@ bool hasCapacityToUseLargeGigacage();
      v(Double, dfgThresholdScaleForLowP0Cores, 2.0, Normal, "On low P0-core-count Apple silicon Macs, scale the DFG tier-up thresholds (thresholdForOptimize*) by this factor."_s) \
      v(Double, ftlThresholdScaleForLowP0Cores, 1.5, Normal, "On low P0-core-count Apple silicon Macs, scale the FTL tier-up thresholds (thresholdForFTLOptimize*) by this factor."_s) \
@@ -1809,6 +1839,31 @@ index 76a66a05be..1bf9a6a714 100644
  #include "Debugger.h"
  #include "EvalCodeBlock.h"
  #include "FunctionCodeBlock.h"
+diff --git a/Source/JavaScriptCore/runtime/VM.cpp b/Source/JavaScriptCore/runtime/VM.cpp
+index 808600c421..a3cced1818 100644
+--- a/Source/JavaScriptCore/runtime/VM.cpp
++++ b/Source/JavaScriptCore/runtime/VM.cpp
+@@ -27,6 +27,7 @@
+  */
+ 
+ #include "config.h"
++#include <unistd.h>
+ #include "VM.h"
+ 
+ #include "AbortReason.h"
+@@ -1501,6 +1502,12 @@ void sanitizeStackForVM(VM& vm)
+ 
+     logSanitizeStack(vm);
+ 
++// Measured on this port: the fill covers 68 bytes on average over eighty
++    // thousand calls in one route change, with a worst case of 60 KB seen twice.
++    // The four-byte-per-iteration loop below is therefore not worth rewriting,
++    // and the name's appearance in profiles is the nearest-symbol artefact that
++    // link-time optimisation produces.
++
+     RELEASE_ASSERT(stack.contains(vm.lastStackTop()), 0xaa10, vm.lastStackTop(), stack.origin(), stack.end());
+ #if ENABLE(C_LOOP)
+     vm.cloopStack().sanitizeStack();
 diff --git a/Source/JavaScriptCore/yarr/YarrJIT.cpp b/Source/JavaScriptCore/yarr/YarrJIT.cpp
 index fbaab7dfc0..759088a70a 100644
 --- a/Source/JavaScriptCore/yarr/YarrJIT.cpp

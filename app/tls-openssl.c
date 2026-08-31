@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
@@ -67,6 +68,13 @@ typedef struct Session {
     SSLWriteFunc write;
     SSLConnectionRef connection;
     char host[256];
+    struct timeval startedAt;
+    struct timeval wroteAt;
+    struct timeval lastReadAt;
+    int leftOverPending;
+    size_t wroteBytes;
+    size_t readBytes;
+    bool awaitingFirstByte;
     bool handshakeDone;
     bool failed;
     struct Session *next;
@@ -104,8 +112,7 @@ static void forgetSession(SSLContextRef context)
         *link = session->next;
         if (session->ssl)
             SSL_free(session->ssl);
-        if (session->sslContext)
-            SSL_CTX_free(session->sslContext);
+        /* The context is shared and outlives every session. */
         free(session);
     }
     pthread_mutex_unlock(&sessionsLock);
@@ -174,6 +181,69 @@ static BIO_METHOD *transportMethod(void)
     return method;
 }
 
+
+/* Sessions kept per host, so a second connection resumes the first.
+ *
+ * OpenSSL's client cache stores what the server hands out but never looks
+ * anything up: a client is expected to know which session belongs to which
+ * host. Measured before this, a single tab change did twenty-four full
+ * handshakes; a resumed one saves a round trip and the signature work with it.
+ */
+#define SESSION_SLOTS 32
+
+static struct {
+    char host[256];
+    SSL_SESSION *session;
+} g_sessions[SESSION_SLOTS];
+static pthread_mutex_t g_sessionsLock = PTHREAD_MUTEX_INITIALIZER;
+
+static void rememberSession(const char *host, SSL *ssl)
+{
+    if (!host || !host[0])
+        return;
+    SSL_SESSION *session = SSL_get1_session(ssl);
+    if (!session)
+        return;
+    pthread_mutex_lock(&g_sessionsLock);
+    unsigned slot = 0, hash = 0;
+    for (const char *c = host; *c; c++)
+        hash = hash * 31u + (unsigned char)*c;
+    slot = hash % SESSION_SLOTS;
+    for (unsigned probe = 0; probe < 4; probe++) {
+        unsigned index = (slot + probe) % SESSION_SLOTS;
+        if (!g_sessions[index].host[0] || !strcmp(g_sessions[index].host, host)) {
+            if (g_sessions[index].session)
+                SSL_SESSION_free(g_sessions[index].session);
+            strlcpy(g_sessions[index].host, host, sizeof(g_sessions[index].host));
+            g_sessions[index].session = session;
+            session = NULL;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_sessionsLock);
+    if (session)
+        SSL_SESSION_free(session);
+}
+
+static void applyRememberedSession(const char *host, SSL *ssl)
+{
+    if (!host || !host[0])
+        return;
+    pthread_mutex_lock(&g_sessionsLock);
+    unsigned hash = 0;
+    for (const char *c = host; *c; c++)
+        hash = hash * 31u + (unsigned char)*c;
+    unsigned slot = hash % SESSION_SLOTS;
+    for (unsigned probe = 0; probe < 4; probe++) {
+        unsigned index = (slot + probe) % SESSION_SLOTS;
+        if (g_sessions[index].session && !strcmp(g_sessions[index].host, host)) {
+            SSL_set_session(ssl, g_sessions[index].session);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_sessionsLock);
+}
+
 static bool startSession(Session *session)
 {
     if (session->ssl)
@@ -186,11 +256,26 @@ static bool startSession(Session *session)
         initialised = true;
     }
 
-    session->sslContext = SSL_CTX_new(TLS_client_method());
-    if (!session->sslContext)
-        return false;
-    SSL_CTX_set_min_proto_version(session->sslContext, TLS1_VERSION);
-    SSL_CTX_set_max_proto_version(session->sslContext, TLS1_3_VERSION);
+    // One context for the whole process, so a second connection to a host can
+    // resume the first one's session instead of doing the full handshake again.
+    // A context per connection - which this used to do - makes resumption
+    // impossible by construction: the session cache lives in the context.
+    static SSL_CTX *shared;
+    if (!shared) {
+        shared = SSL_CTX_new(TLS_client_method());
+        if (!shared)
+            return false;
+        SSL_CTX_set_min_proto_version(shared, TLS1_VERSION);
+        SSL_CTX_set_max_proto_version(shared, TLS1_3_VERSION);
+        SSL_CTX_set_session_cache_mode(shared, SSL_SESS_CACHE_CLIENT);
+        SSL_CTX_sess_set_cache_size(shared, 64);
+        // Reading and writing in whole records rather than a byte at a time,
+        // and letting a write be satisfied in part, which is what a socket that
+        // can only take so much at once needs.
+        SSL_CTX_set_mode(shared, SSL_MODE_ENABLE_PARTIAL_WRITE
+            | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_RELEASE_BUFFERS);
+    }
+    session->sslContext = shared;
     /* The chain is verified by the system afterwards, through the SecTrustRef
      * built in SSLCopyPeerTrust, which is where this platform's trust store
      * lives. Verifying here as well would only duplicate it with a different
@@ -208,6 +293,7 @@ static bool startSession(Session *session)
     BIO_set_init(bio, 1);
     SSL_set_bio(session->ssl, bio, bio);
     SSL_set_connect_state(session->ssl);
+    applyRememberedSession(session->host, session->ssl);
     if (session->host[0]) {
         SSL_set_tlsext_host_name(session->ssl, session->host);
         X509_VERIFY_PARAM_set1_host(SSL_get0_param(session->ssl), session->host, 0);
@@ -273,6 +359,8 @@ OSStatus ourSSLHandshake(SSLContextRef context)
         return errSSLInternal;
     if (session->handshakeDone)
         return noErr;
+    if (!session->startedAt.tv_sec)
+        gettimeofday(&session->startedAt, NULL);
     if (!startSession(session)) {
         session->failed = true;
         return errSSLInternal;
@@ -281,8 +369,14 @@ OSStatus ourSSLHandshake(SSLContextRef context)
     int result = SSL_do_handshake(session->ssl);
     if (result == 1) {
         session->handshakeDone = true;
-        note("handshake with %s: %s, %s", session->host,
-            SSL_get_version(session->ssl), SSL_get_cipher(session->ssl));
+        struct timeval now;
+        gettimeofday(&now, NULL);
+        double took = (now.tv_sec - session->startedAt.tv_sec) * 1000.0
+            + (now.tv_usec - session->startedAt.tv_usec) / 1000.0;
+        note("handshake with %s: %s, %s, %.0f ms, resumed %d", session->host,
+            SSL_get_version(session->ssl), SSL_get_cipher(session->ssl),
+            took, SSL_session_reused(session->ssl));
+        rememberSession(session->host, session->ssl);
         return noErr;
     }
 
@@ -304,6 +398,63 @@ OSStatus ourSSLRead(SSLContextRef context, void *data, size_t length, size_t *pr
     if (!session || !session->ssl)
         return errSSLInternal;
 
+    // As much as the caller asked for, not as much as one record happens to
+    // hold. Returning early leaves the rest for another turn of the run loop,
+    // and a hundred-kilobyte response then arrives in dozens of turns - which is
+    // where a second and a half per request was going.
+    size_t filled = 0;
+    while (filled < length) {
+        int result = SSL_read(session->ssl, (char *)data + filled, (int)(length - filled));
+        if (result <= 0)
+            break;
+        filled += (size_t)result;
+    }
+    if (filled) {
+        // A gap between reads while the layer still holds decrypted bytes means
+        // the data arrived and nobody came back for it. That is the shape of a
+        // stall this port has been chasing: the processor idle, the server
+        // finished, and seconds passing.
+        {
+            struct timeval now;
+            gettimeofday(&now, NULL);
+            if (session->lastReadAt.tv_sec) {
+                double gap = (now.tv_sec - session->lastReadAt.tv_sec) * 1000.0
+                    + (now.tv_usec - session->lastReadAt.tv_usec) / 1000.0;
+                if (gap > 500 && session->leftOverPending)
+                    note("%s: %.0f ms between reads with %d bytes already decrypted",
+                        session->host, gap, session->leftOverPending);
+            }
+            session->lastReadAt = now;
+            session->leftOverPending = SSL_pending(session->ssl);
+        }
+        if (session->awaitingFirstByte) {
+            session->awaitingFirstByte = false;
+            // The ticket a 1.3 server sends arrives after the handshake, with or
+            // just before the first response, so the session is taken again here.
+            rememberSession(session->host, session->ssl);
+            struct timeval now;
+            gettimeofday(&now, NULL);
+            double waited = (now.tv_sec - session->wroteAt.tv_sec) * 1000.0
+                + (now.tv_usec - session->wroteAt.tv_usec) / 1000.0;
+            note("%s: first byte %.0f ms after a %zu byte request",
+                session->host, waited, session->wroteBytes);
+        }
+        // How the body arrives, not just when it starts. A response that takes
+        // seconds while its first byte took fifty milliseconds is arriving in
+        // dribs, and the question is who is holding it up.
+        size_t was = session->readBytes;
+        session->readBytes += filled;
+        if (was / 32768 != session->readBytes / 32768) {
+            struct timeval now;
+            gettimeofday(&now, NULL);
+            double since = (now.tv_sec - session->wroteAt.tv_sec) * 1000.0
+                + (now.tv_usec - session->wroteAt.tv_usec) / 1000.0;
+            note("%s: %zu KB in %.0f ms", session->host, session->readBytes / 1024, since);
+        }
+        if (processed)
+            *processed = filled;
+        return noErr;
+    }
     int result = SSL_read(session->ssl, data, (int)length);
     if (result > 0) {
         if (processed)
@@ -330,6 +481,17 @@ OSStatus ourSSLWrite(SSLContextRef context, const void *data, size_t length, siz
 
     int result = SSL_write(session->ssl, data, (int)length);
     if (result > 0) {
+        // When a request goes out, the clock starts. The answer to "is the site
+        // slow or is the server slow" is the gap between this and the first byte
+        // that comes back, and it can only be measured here: while the page is
+        // waiting, nothing in the page runs to measure anything.
+        if (!session->awaitingFirstByte) {
+            gettimeofday(&session->wroteAt, NULL);
+            session->awaitingFirstByte = true;
+            session->wroteBytes = 0;
+            session->readBytes = 0;
+        }
+        session->wroteBytes += (size_t)result;
         if (processed)
             *processed = (size_t)result;
         return noErr;

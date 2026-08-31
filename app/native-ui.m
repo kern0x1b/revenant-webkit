@@ -256,8 +256,60 @@ static FILE *touchLog(void)
     return log;
 }
 
+// A touch, announced to the engine before it is delivered.
+//
+// The page's scheduler asks navigator.scheduling.isInputPending() before
+// deciding to keep working, and the answer has to come from here: while the
+// scheduler is inside one of its stretches - eight seconds, measured on this
+// device - nothing in the page runs, so nothing in the page can record that a
+// finger has landed. The flags live in WebCore and are read by the thread
+// running script.
+static volatile int *inputPendingFlag(void)
+{
+    static volatile int *flag;
+    static bool looked;
+    if (!looked) {
+        looked = true;
+        flag = (volatile int *)dlsym(RTLD_DEFAULT, "g_webkitIOS6InputPending");
+        if (!flag)
+            logLine(@"the engine does not export the input-pending flag");
+    }
+    return flag;
+}
+
+static volatile int *continuousInputFlag(void)
+{
+    static volatile int *flag;
+    static bool looked;
+    if (!looked) {
+        looked = true;
+        flag = (volatile int *)dlsym(RTLD_DEFAULT, "g_webkitIOS6ContinuousInputPending");
+    }
+    return flag;
+}
+
 - (void)sendEvent:(UIEvent *)event
 {
+    if (event.type == UIEventTypeTouches) {
+        volatile int *pending = inputPendingFlag();
+        volatile int *continuous = continuousInputFlag();
+        bool discrete = false, moving = false;
+        for (UITouch *touch in [event allTouches]) {
+            if (touch.phase == UITouchPhaseBegan || touch.phase == UITouchPhaseEnded)
+                discrete = true;
+            else if (touch.phase == UITouchPhaseMoved)
+                moving = true;
+        }
+        // Raised on the touch that starts or ends a gesture - the ones a page
+        // reacts to - and lowered once the engine has had the event. A finger
+        // merely moving is continuous input, which a scheduler only wants to
+        // hear about if it asks.
+        if (pending && discrete)
+            *pending = 1;
+        if (continuous)
+            *continuous = moving ? 1 : 0;
+    }
+
     FILE *log = touchLog();
     if (log && event.type == UIEventTypeTouches) {
         UITouch *touch = [[event allTouches] anyObject];
@@ -275,6 +327,9 @@ static FILE *touchLog(void)
     double before = CFAbsoluteTimeGetCurrent();
     [super sendEvent:event];
     double took = CFAbsoluteTimeGetCurrent() - before;
+    // The flag is not lowered here: this returns as soon as the touch is queued,
+    // long before the thread running script has seen it. The engine lowers it
+    // when it answers the page's question.
     if (log && event.type == UIEventTypeTouches && took > 0.05)
         fprintf(log, "%.3f dispatch took %.0f ms\n", CFAbsoluteTimeGetCurrent(), took * 1000);
 }
@@ -485,6 +540,7 @@ static bool nameByMethodTable(uintptr_t address, char *out, size_t size)
         methodSpans[found].selectorName, (unsigned)(address - methodSpans[found].address));
     return true;
 }
+
 
 static volatile double lastScrollActivity;
 
@@ -785,8 +841,9 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     // writes a line to a file inside -sendEvent:, which is UIKit's touch delivery
     // path - synchronous I/O on the main thread for every touch, and it showed up
     // in the stack of a frozen interface.
-    Class windowClass = access("/tmp/native-watch-touches", F_OK) == 0
-        ? [TouchLoggingWindow class] : [UIWindow class];
+    // Always this window now: besides the optional touch log it tells the engine
+    // that a finger has landed, which is what lets the page's scheduler yield.
+    Class windowClass = [TouchLoggingWindow class];
     _window = [[windowClass alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     _window.backgroundColor = [UIColor whiteColor];
 
@@ -890,6 +947,7 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     [self watchForScrollRequest];
     [self watchForTypeRequest];
     [self servePendingPress];
+
     // Where each framework landed, once, so a stack from a stripped binary can be
     // read offline against the unstripped copy in dist/unstripped:
     //   atos -o dist/unstripped/WebCore -arch armv7 -l <base> <address>
@@ -898,7 +956,8 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
         if (!name)
             continue;
         if (!strstr(name, "WebCore") && !strstr(name, "JavaScriptCore")
-            && !strstr(name, "WebKit.framework") && !strstr(name, "NativeUI"))
+            && !strstr(name, "WebKit.framework") && !strstr(name, "NativeUI")
+            && !strstr(name, "TLS.dylib") && !strstr(name, "MemProbe"))
             continue;
         logLine(@"[image] %p %s", _dyld_get_image_header(image), strrchr(name, '/') + 1);
     }
@@ -1964,6 +2023,12 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
                 id window = [self engineWindow];
                 Class eventClass = NSClassFromString(@"WebEvent");
                 if (window && eventClass) {
+                    // A tap asked for from outside stands for a finger, so it
+                    // raises the same flag a finger does. Without this the
+                    // measurement of the flag measures the harness instead.
+                    volatile int *pending = inputPendingFlag();
+                    if (pending)
+                        *pending = 1;
                     for (int type = 0; type <= 1; type++) {
                         id event = [[eventClass alloc] initWithMouseEventType:type timeStamp:CFAbsoluteTimeGetCurrent() location:where];
                         [window sendEvent:event];
@@ -2337,6 +2402,20 @@ static void *webThreadSampler(void *unused)
             // image bases the application logs at launch.
             for (int i = 0; i < depth; i++)
                 fprintf(log, "%s%p", i ? ";" : "", (void *)frames[i]);
+            // The library the top frame belongs to, when it is not one of ours.
+            //
+            // Samples outside our frameworks land in the shared cache, whose
+            // addresses cannot be mapped to a library offline without the slide
+            // the loader chose. Asking here costs one lookup per sample and
+            // answers the question the profile could not: which system library
+            // the time is in.
+            if (depth > 0) {
+                Dl_info info;
+                if (dladdr((const void *)frames[0], &info) && info.dli_fname) {
+                    const char *slash = strrchr(info.dli_fname, '/');
+                    fprintf(log, " @%s", slash ? slash + 1 : info.dli_fname);
+                }
+            }
             fprintf(log, "\n");
         } else
             thread_resume(webThread);
@@ -2408,15 +2487,27 @@ static void *sampler(void *unused)
                 char line[512];
                 Dl_info info;
                 int n;
+                // Which thread this is, not just where it stands. A stack
+                // symbolised to the nearest exported name is a guess; the thread
+                // that owns it is a fact, and it decides what the fix is - the
+                // compiler's own thread and the one running the page call for
+                // opposite remedies.
+                char threadName[64] = "";
+                pthread_t owner = pthread_from_mach_thread_np(busiest);
+                if (owner)
+                    pthread_getname_np(owner, threadName, sizeof(threadName));
                 if (dladdr((void *)state.__pc, &info) && info.dli_sname) {
-                    n = snprintf(line, sizeof(line), "sym %s +%u\n", info.dli_sname,
+                    n = snprintf(line, sizeof(line), "[%s] %p sym %s +%u\n",
+                        threadName[0] ? threadName : "?", (void *)state.__pc, info.dli_sname,
                         (unsigned)((uintptr_t)state.__pc - (uintptr_t)info.dli_saddr));
                 } else {
                     Dl_info caller;
                     if (dladdr((void *)state.__lr, &caller) && caller.dli_sname)
-                        n = snprintf(line, sizeof(line), "sym (unnamed via %s)\n", caller.dli_sname);
+                        n = snprintf(line, sizeof(line), "[%s] %p via %s\n",
+                            threadName[0] ? threadName : "?", (void *)state.__pc, caller.dli_sname);
                     else
-                        n = snprintf(line, sizeof(line), "pc %08x\n", (unsigned)state.__pc);
+                        n = snprintf(line, sizeof(line), "[%s] %p\n",
+                            threadName[0] ? threadName : "?", (void *)state.__pc);
                 }
                 write(profileFileDescriptor, line, n);
             }

@@ -25,6 +25,19 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Fixed
+- **Inline caches, which this architecture had them switched off for.**
+  `forceICFailure` — the option that makes every inline cache refuse to install —
+  defaults to `is32Bit()` upstream, so on armv7 no call ever linked and no
+  property access ever cached. Every call went through the slow path for the life
+  of the process: the compiler saw an empty call profile at every site, declined
+  to inline anything, and emitted a full call frame for `a + 1`. Measured on the
+  device, per operation: a method call 706 ns to 71, a call through a variable
+  676 to 33, `Math.abs` 553 to 53, reading `Function.length` 605 to 31; through
+  the DOM, `node.nodeType` 1235 ns to 60, `element.firstChild` 1310 to 140,
+  `document.getElementById` 3175 to 610, `element.style.top = ...` 17800 to
+  11020. The synthetic route-change workload fell from 6300–8000 ms to 4979.
+  Resident memory is unchanged for the same amount of page: 224 MB against 224
+  over an identical scripted session.
 - **A register clobbered by the regular-expression JIT.** Its prologue computed
   the new stack pointer into `regT0` before saving the callee-saved registers,
   and on ARM_THUMB2 `regT0` is `r4`, which is in that set — so the caller's `r4`
