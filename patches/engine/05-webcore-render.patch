@@ -1492,7 +1492,7 @@ index af64e7f1d3..7e6164d2c2 100644
  
  } // namespace Style
 diff --git a/Source/WebCore/style/RuleFeature.cpp b/Source/WebCore/style/RuleFeature.cpp
-index e2e9de80a7..db21dd7ea9 100644
+index e2e9de80a7..b757a412a3 100644
 --- a/Source/WebCore/style/RuleFeature.cpp
 +++ b/Source/WebCore/style/RuleFeature.cpp
 @@ -350,8 +350,9 @@ void RuleFeatureSet::recursivelyCollectFeaturesFromSelector(SelectorFeatures& se
@@ -1585,8 +1585,83 @@ index e2e9de80a7..db21dd7ea9 100644
          }
      };
  
-@@ -696,16 +717,23 @@ void RuleFeatureSet::clear()
+@@ -694,18 +715,98 @@ void RuleFeatureSet::clear()
+     hasStartingStyleRules = false;
+ }
  
++#if defined(WEBKIT_IOS6)
++void RuleFeatureSet::recordBaseline(RuleFeatureBaseline& baseline) const
++{
++    baseline.idsInRules = idsInRules;
++    baseline.idsMatchingAncestorsInRules = idsMatchingAncestorsInRules;
++    baseline.attributeLowercaseLocalNamesInRules = attributeLowercaseLocalNamesInRules;
++    baseline.attributeLocalNamesInRules = attributeLocalNamesInRules;
++    baseline.substitutionAttributeNamesInRules = substitutionAttributeNamesInRules;
++
++    auto recordSizes = [](const auto& map, auto& sizes) {
++        sizes.clear();
++        if (map.isEmpty())
++            return;
++        sizes.reserveInitialCapacity(map.size());
++        for (auto& keyValuePair : map)
++            sizes.add(keyValuePair.key, keyValuePair.value->size());
++    };
++    recordSizes(idRules, baseline.idRuleSizes);
++    recordSizes(classRules, baseline.classRuleSizes);
++    recordSizes(attributeRules, baseline.attributeRuleSizes);
++    recordSizes(pseudoClassRules, baseline.pseudoClassRuleSizes);
++    recordSizes(hasPseudoClassRules, baseline.hasPseudoClassRuleSizes);
++
++    baseline.classesAffectingHost = classesAffectingHost;
++    baseline.attributesAffectingHost = attributesAffectingHost;
++    baseline.pseudoClassesAffectingHost = pseudoClassesAffectingHost;
++    baseline.pseudoClasses = pseudoClasses;
++
++    baseline.usesFirstLineRules = usesFirstLineRules;
++    baseline.usesFirstLetterRules = usesFirstLetterRules;
++    baseline.hasStartingStyleRules = hasStartingStyleRules;
++
++    baseline.isValid = true;
++}
++
++void RuleFeatureSet::restoreBaseline(const RuleFeatureBaseline& baseline)
++{
++    RELEASE_ASSERT(isMainThread());
++    ASSERT(baseline.isValid);
++
++    idsInRules = baseline.idsInRules;
++    idsMatchingAncestorsInRules = baseline.idsMatchingAncestorsInRules;
++    attributeLowercaseLocalNamesInRules = baseline.attributeLowercaseLocalNamesInRules;
++    attributeLocalNamesInRules = baseline.attributeLocalNamesInRules;
++    substitutionAttributeNamesInRules = baseline.substitutionAttributeNamesInRules;
++
++    auto restoreSizes = [](auto& map, const auto& sizes) {
++        map.removeIf([&](auto& keyValuePair) {
++            auto it = sizes.find(keyValuePair.key);
++            if (it == sizes.end())
++                return true;
++            if (keyValuePair.value->size() > it->value)
++                keyValuePair.value->shrink(it->value);
++            return false;
++        });
++    };
++    restoreSizes(idRules, baseline.idRuleSizes);
++    restoreSizes(classRules, baseline.classRuleSizes);
++    restoreSizes(attributeRules, baseline.attributeRuleSizes);
++    restoreSizes(pseudoClassRules, baseline.pseudoClassRuleSizes);
++    restoreSizes(hasPseudoClassRules, baseline.hasPseudoClassRuleSizes);
++
++    classesAffectingHost = baseline.classesAffectingHost;
++    attributesAffectingHost = baseline.attributesAffectingHost;
++    pseudoClassesAffectingHost = baseline.pseudoClassesAffectingHost;
++    pseudoClasses = baseline.pseudoClasses;
++
++    usesFirstLineRules = baseline.usesFirstLineRules;
++    usesFirstLetterRules = baseline.usesFirstLetterRules;
++    hasStartingStyleRules = baseline.hasStartingStyleRules;
++}
++#endif
++
  void RuleFeatureSet::shrinkToFit()
  {
 -    for (auto& rules : idRules.values())
@@ -1620,7 +1695,7 @@ index e2e9de80a7..db21dd7ea9 100644
  
  } // namespace Style
 diff --git a/Source/WebCore/style/RuleFeature.h b/Source/WebCore/style/RuleFeature.h
-index ee8a2bc7de..8446d8eda7 100644
+index ee8a2bc7de..e811b2b7d8 100644
 --- a/Source/WebCore/style/RuleFeature.h
 +++ b/Source/WebCore/style/RuleFeature.h
 @@ -111,7 +111,9 @@ static_assert(sizeof(RuleFeature) <= 32, "RuleFeature is a frequently allocated
@@ -1634,7 +1709,24 @@ index ee8a2bc7de..8446d8eda7 100644
  
  struct SelectorDeduplicationKey {
      SelectorDeduplicationKey(const CSSSelector&);
-@@ -169,10 +171,12 @@ private:
+@@ -123,10 +125,16 @@ struct SelectorDeduplicationKey {
+     bool operator==(const SelectorDeduplicationKey&) const;
+ };
+ 
++struct RuleFeatureBaseline;
++
+ struct RuleFeatureSet {
+     void add(const RuleFeatureSet&);
+     void clear();
+     void shrinkToFit();
++#if defined(WEBKIT_IOS6)
++    void recordBaseline(RuleFeatureBaseline&) const;
++    void restoreBaseline(const RuleFeatureBaseline&);
++#endif
+ 
+     struct CollectionContext {
+         HashSet<GenericHashKey<SelectorDeduplicationKey>> selectorDeduplicationSet;
+@@ -169,10 +177,12 @@ private:
      struct SelectorFeatures {
          using InvalidationFeature = std::tuple<const CSSSelector*, MatchElement, IsNegation, Vector<const CSSSelector*>>;
  
@@ -1651,6 +1743,43 @@ index ee8a2bc7de..8446d8eda7 100644
          Vector<InvalidationFeature> hasPseudoClasses;
      };
      struct RecursiveCollectionContext;
+@@ -181,6 +191,36 @@ private:
+     void NODELETE collectPseudoElementFeatures(const RuleData&);
+ };
+ 
++#if defined(WEBKIT_IOS6)
++// Snapshot of everything RuleFeatureSet::clear() throws away, taken once the user agent default
++// sheet has been merged in. Restoring it truncates the author contributions back off instead of
++// deep-copying every user agent feature - and its two selector lists - again per stylesheet append.
++struct RuleFeatureBaseline {
++    bool isValid { false };
++
++    HashSet<AtomString> idsInRules;
++    HashSet<AtomString> idsMatchingAncestorsInRules;
++    HashSet<AtomString> attributeLowercaseLocalNamesInRules;
++    HashSet<AtomString> attributeLocalNamesInRules;
++    HashMap<AtomString, RuleFeatureSet::AffectsShadowTree> substitutionAttributeNamesInRules;
++
++    HashMap<AtomString, unsigned> idRuleSizes;
++    HashMap<AtomString, unsigned> classRuleSizes;
++    HashMap<AtomString, unsigned> attributeRuleSizes;
++    HashMap<PseudoClassInvalidationKey, unsigned> pseudoClassRuleSizes;
++    HashMap<PseudoClassInvalidationKey, unsigned> hasPseudoClassRuleSizes;
++
++    HashSet<AtomString> classesAffectingHost;
++    HashSet<AtomString> attributesAffectingHost;
++    HashSet<CSSSelector::PseudoClass, IntHash<CSSSelector::PseudoClass>, WTF::StrongEnumHashTraits<CSSSelector::PseudoClass>> pseudoClassesAffectingHost;
++    HashSet<CSSSelector::PseudoClass, IntHash<CSSSelector::PseudoClass>, WTF::StrongEnumHashTraits<CSSSelector::PseudoClass>> pseudoClasses;
++
++    bool usesFirstLineRules { false };
++    bool usesFirstLetterRules { false };
++    bool hasStartingStyleRules { false };
++};
++#endif
++
+ MatchElement::HasRelation computeHasArgumentRelation(const CSSSelector&);
+ 
+ enum class InvalidationKeyType : uint8_t { Universal = 1, Class, Id, Attribute, Tag };
 diff --git a/Source/WebCore/style/RuleSet.cpp b/Source/WebCore/style/RuleSet.cpp
 index 7d30f4bba2..a2a9177051 100644
 --- a/Source/WebCore/style/RuleSet.cpp
@@ -2395,6 +2524,48 @@ index 8dcefcf638..251e37ad5b 100644
      bool m_usesStyleBasedEditability { false };
      bool m_usesHasPseudoClass { false };
      bool m_isUpdatingStyleResolver { false };
+diff --git a/Source/WebCore/style/StyleScopeRuleSets.cpp b/Source/WebCore/style/StyleScopeRuleSets.cpp
+index 2ccac3eac3..f955f6595d 100644
+--- a/Source/WebCore/style/StyleScopeRuleSets.cpp
++++ b/Source/WebCore/style/StyleScopeRuleSets.cpp
+@@ -269,9 +269,21 @@ void ScopeRuleSets::collectFeatures() const
+     RELEASE_ASSERT(isMainThread());
+     RELEASE_ASSERT(!m_isInvalidatingStyleWithRuleSets);
+ 
++#if defined(WEBKIT_IOS6)
++    if (m_userAgentFeatureBaseline.isValid && m_userAgentFeatureBaselineVersion == UserAgentStyle::defaultStyleVersion)
++        m_features.restoreBaseline(m_userAgentFeatureBaseline);
++    else {
++        m_features.clear();
++        if (UserAgentStyle::defaultStyle)
++            m_features.add(UserAgentStyle::defaultStyle->features());
++        m_features.recordBaseline(m_userAgentFeatureBaseline);
++        m_userAgentFeatureBaselineVersion = UserAgentStyle::defaultStyleVersion;
++    }
++#else
+     m_features.clear();
+     if (UserAgentStyle::defaultStyle)
+         m_features.add(UserAgentStyle::defaultStyle->features());
++#endif
+     m_defaultStyleVersionOnFeatureCollection = UserAgentStyle::defaultStyleVersion;
+ 
+     if (RefPtr userAgentMediaQueryStyle = this->userAgentMediaQueryStyle())
+diff --git a/Source/WebCore/style/StyleScopeRuleSets.h b/Source/WebCore/style/StyleScopeRuleSets.h
+index f9b5143f4e..79aa51696b 100644
+--- a/Source/WebCore/style/StyleScopeRuleSets.h
++++ b/Source/WebCore/style/StyleScopeRuleSets.h
+@@ -154,6 +154,11 @@ private:
+ 
+     mutable std::optional<SelectorsForStyleAttribute> m_cachedSelectorsForStyleAttribute;
+ 
++#if defined(WEBKIT_IOS6)
++    mutable RuleFeatureBaseline m_userAgentFeatureBaseline;
++    mutable unsigned m_userAgentFeatureBaselineVersion { 0 };
++#endif
++
+     mutable unsigned m_defaultStyleVersionOnFeatureCollection { 0 };
+     mutable unsigned m_userAgentMediaQueryRuleCountOnUpdate { 0 };
+ 
 diff --git a/Source/WebCore/style/StyleSheetContentsCache.cpp b/Source/WebCore/style/StyleSheetContentsCache.cpp
 index 02ea7def09..ef44362227 100644
 --- a/Source/WebCore/style/StyleSheetContentsCache.cpp

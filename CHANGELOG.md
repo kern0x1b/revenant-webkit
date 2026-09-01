@@ -25,6 +25,27 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Changed
+- **A second pass, on what the first one named and could not reach.** String
+  hashing on this port no longer runs a mixer built from 64x64 multiplies, which
+  armv7 performs in four instructions plus carries; it is a 32-bit mixer, one
+  `umull` per eight bytes. That hash is reproduced by three build-time generators
+  which emit the static property tables the runtime probes, so all three were
+  ported with it and checked against the C++ over 1280 strings and every key of
+  all 68 generated tables. The interpreter no longer rebuilds the address of the
+  opcode table before each dispatch - it is pinned in a register - which takes
+  the generated interpreter from 74,154 instructions to 61,690, and the baseline
+  JIT stops emitting two memory barriers for every write to a call frame. The
+  collector stops recomputing its heap bounds for every word of the stack it
+  scans, and stops suspending every thread twice per collection to measure before
+  copying.
+- **The compiled form of the site's scripts is now actually written.** The cache
+  commits an entry when the engine drops a script's source provider, and the
+  provider for a bundle the page holds open is dropped only when the process
+  ends - which for this application means never, since it is killed rather than
+  asked to quit. The two largest bundles were therefore recompiled at every
+  launch. They are written now when the page finishes loading: eight entries
+  against four, five hits against two, and the feed arrives in 24.0 s where the
+  same build without the write took 29.5.
 - **The engine rewritten for this processor, area by area.** Twelve passes over
   the source, each one looking for work that costs time on an 800 MHz in-order
   core and buys nothing here. Among what came out of it: a structure-consistency

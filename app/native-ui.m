@@ -1281,6 +1281,25 @@ static unsigned long long bytecodeCacheLimitBytes(void)
     }
     [scriptObject setValue:_bridge forKey:@"appchrome"];
     logLine(@"bridge installed");
+
+    // Write the compiled form of the site's scripts out now.
+    //
+    // The cache commits an entry when the engine drops the script's source
+    // provider, and the provider for a bundle the page keeps alive is dropped
+    // only when the process ends - which for this application means never,
+    // since it is killed rather than asked to quit. So the two largest bundles,
+    // the ones worth caching, were re-compiled on every launch and never
+    // stored. Asking for the write here costs one pass over the entries at a
+    // moment when the page has just finished loading.
+    {
+        Class bytecodeWebView = NSClassFromString(@"WebView");
+        void (*runOnWebThread)(void (^)(void)) = (void (*)(void (^)(void)))dlsym(RTLD_DEFAULT, "WebThreadRun");
+        if (runOnWebThread && [bytecodeWebView respondsToSelector:@selector(_flushJavaScriptBytecodeCache)]) {
+            runOnWebThread(^{
+                [bytecodeWebView performSelector:@selector(_flushJavaScriptBytecodeCache)];
+            });
+        }
+    }
 }
 
 - (BOOL)webView:(UIWebView *)webView shouldStartLoadWithRequest:(NSURLRequest *)request navigationType:(UIWebViewNavigationType)navigationType
