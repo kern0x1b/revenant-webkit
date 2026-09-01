@@ -1517,7 +1517,7 @@ index fff86bd211..c617a4722e 100644
  private:        
      WeakRef<LegacyTileCache> m_tileCache;
 diff --git a/Source/WebCore/platform/ios/LegacyTileGrid.mm b/Source/WebCore/platform/ios/LegacyTileGrid.mm
-index 0c75b3f923..8d16e9fc6a 100644
+index 0c75b3f923..6077c84d78 100644
 --- a/Source/WebCore/platform/ios/LegacyTileGrid.mm
 +++ b/Source/WebCore/platform/ios/LegacyTileGrid.mm
 @@ -41,6 +41,21 @@
@@ -1610,7 +1610,7 @@ index 0c75b3f923..8d16e9fc6a 100644
  }
  
  IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
-@@ -420,13 +468,22 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
+@@ -420,15 +468,40 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
  
  IntRect LegacyTileGrid::calculateCoverRect(const IntRect& visibleRect, bool& centerGrid)
  {
@@ -1631,10 +1631,29 @@ index 0c75b3f923..8d16e9fc6a 100644
 +    // the cut did buy was a flick outrunning its tiles - screenshots taken
 +    // mid-drag show a blank page between two correctly pinned bars. Three screens
 +    // of coverage at this size is about seven megabytes.
++    // Half a screen above and below rather than a whole one.
++    //
++    // Each tile is 640 by 640 at this scale, which is 1.6 MB, and three screens
++    // of them came to eleven or twelve tiles - about nineteen megabytes of
++    // layers rather than the seven this comment used to claim. Soaked eight
++    // rounds at a time, that set of layers took the process down four times in
++    // nine runs, twice inside the GPU driver, where the smaller set has not
++    // fallen over. Two screens still cover the flick.
++    static const int verticalScreens = [] -> int {
++        if (const char* override = getenv("WEBKIT_IOS6_TILE_COVERAGE_HALVES")) {
++            int value = atoi(override);
++            if (value > 0 && value <= 8)
++                return value;
++        }
++        return 1;
++    }();
      coverRect.inflateX(visibleRect.width() / 2);
-     coverRect.inflateY(visibleRect.height());
+-    coverRect.inflateY(visibleRect.height());
++    coverRect.inflateY(visibleRect.height() * verticalScreens / 2);
      return adjustCoverRectForPageBounds(coverRect);
-@@ -484,6 +541,18 @@ double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect&
+ }
+ 
+@@ -484,6 +557,18 @@ double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect&
  
  void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode creationMode)
  {
@@ -1653,7 +1672,7 @@ index 0c75b3f923..8d16e9fc6a 100644
      IntRect visibleRect = this->visibleRect();
      if (visibleRect.isEmpty())
          return;
-@@ -505,6 +574,8 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -505,6 +590,8 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
      Vector<LegacyTileGrid::TileIndex> tilesToCreate;
      unsigned pendingTileCount = 0;
  
@@ -1662,7 +1681,7 @@ index 0c75b3f923..8d16e9fc6a 100644
      LegacyTileGrid::TileIndex topLeftIndex = tileIndexForPoint(topLeft(coverRect));
      LegacyTileGrid::TileIndex bottomRightIndex = tileIndexForPoint(bottomRight(coverRect));
      for (int yIndex = topLeftIndex.y(); yIndex <= bottomRightIndex.y(); ++yIndex) {
-@@ -517,6 +588,11 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -517,6 +604,11 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
              if (tileForIndex(index))
                  continue;
              ++pendingTileCount;
@@ -1674,7 +1693,7 @@ index 0c75b3f923..8d16e9fc6a 100644
              if (distance > shortestDistance)
                  continue;
              if (distance < shortestDistance) {
-@@ -549,6 +625,18 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -549,6 +641,18 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
  
      bool didCreateTiles = !!tilesToCreateCount;
      bool createMoreTiles = pendingTileCount > tilesToCreateCount;

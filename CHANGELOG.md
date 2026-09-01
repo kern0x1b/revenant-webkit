@@ -25,6 +25,16 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Changed
+- Tile coverage is half a screen above and below rather than a whole one. Each
+  tile is 1.6 MB at this scale and three screens came to nineteen megabytes of
+  layers, not the seven the old note claimed; two screens still cover a flick.
+  `WEBKIT_IOS6_TILE_COVERAGE_HALVES` changes it.
+- The crash report says how much memory the process was holding, how long it had
+  been running and which thread took the signal. Twenty soaks of eight rounds
+  produced four deaths with two signatures - a null dereference inside the GPU
+  driver and a fault in the allocator - and they appear with the inline caches
+  on and off, with the tile coverage large and small, so none of this session's
+  changes is behind them.
 - Stylesheet parsing can be timed through `WEBKIT_IOS6_STYLE_LOG`, which is how
   the launch was accounted for: of the twenty six and a half seconds between
   the application starting and the feed appearing, the web thread is busy for

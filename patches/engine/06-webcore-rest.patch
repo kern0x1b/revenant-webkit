@@ -2107,20 +2107,23 @@ index 00b8770ff9..401c75ce8b 100644
      CheckedRef renderView = *this->renderView();
  
 diff --git a/Source/WebCore/page/MemoryRelease.cpp b/Source/WebCore/page/MemoryRelease.cpp
-index 3def801240..3512ae81f2 100644
+index 3def801240..68b19b6e17 100644
 --- a/Source/WebCore/page/MemoryRelease.cpp
 +++ b/Source/WebCore/page/MemoryRelease.cpp
-@@ -24,6 +24,9 @@
-  */
- 
+@@ -26,6 +26,12 @@
  #include "config.h"
-+#include <stdlib.h>
-+#include <mach/mach.h>
-+#include <mach/task.h>
  #include "MemoryRelease.h"
  
++#if defined(WEBKIT_IOS6)
++#include <mach/mach.h>
++#include <mach/task.h>
++#include <stdlib.h>
++#endif
++
  #include "AsyncNodeDeletionQueueInlines.h"
-@@ -82,6 +85,31 @@
+ #include "BackForwardCache.h"
+ #include "CSSFontSelector.h"
+@@ -82,6 +88,30 @@
  
  namespace WebCore {
  
@@ -2148,11 +2151,10 @@ index 3def801240..3512ae81f2 100644
 +}
 +#endif
 +
-+
  static void releaseNoncriticalMemory(MaintainMemoryCache maintainMemoryCache)
  {
      RenderTheme::singleton().purgeCaches();
-@@ -160,10 +188,19 @@ static void releaseCriticalMemory(Synchronous synchronous, MaintainBackForwardCa
+@@ -160,10 +190,19 @@ static void releaseCriticalMemory(Synchronous synchronous, MaintainBackForwardCa
              protect(localFrame->editor())->releaseMemory();
      }
  

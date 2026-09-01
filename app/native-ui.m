@@ -2275,12 +2275,26 @@ int NativeAppMain(int argc, char *argv[]);
 // instruction, and the registers feeding it.
 static void reportSignal(int number);
 
+static CFAbsoluteTime processStartedAt;
+
 static void reportSignalDetailed(int number, siginfo_t *info, void *contextPointer)
 {
     FILE *log = fopen("/tmp/native-death.log", "a");
     if (log) {
         fprintf(log, "signal %d code %d at %p\n", number, info ? info->si_code : 0,
             info ? info->si_addr : NULL);
+        // What the process was carrying when it went. A fault in the graphics
+        // driver and a fault in the allocator look the same in a backtrace and
+        // different in this line.
+        {
+            struct task_basic_info memory;
+            mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+            if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&memory, &count) == KERN_SUCCESS)
+                fprintf(log, "  resident %.1f MB after %.0f s on thread %s\n",
+                    memory.resident_size / 1048576.0,
+                    CFAbsoluteTimeGetCurrent() - processStartedAt,
+                    [NSThread isMainThread] ? "main" : "another");
+        }
         // The thread state, at its documented place in the context.
         //
         // On armv7 Darwin a ucontext_t is: onstack, sigmask, stack (three
@@ -2448,6 +2462,7 @@ static void installDeathTraps(void)
     int signals[] = { SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP, SIGFPE, SIGPIPE, SIGTERM };
     struct sigaction action;
     memset(&action, 0, sizeof(action));
+    processStartedAt = CFAbsoluteTimeGetCurrent();
     action.sa_sigaction = reportSignalDetailed;
     action.sa_flags = SA_SIGINFO;
     sigemptyset(&action.sa_mask);
