@@ -25,12 +25,21 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Changed
+- Stylesheet parsing can be timed through `WEBKIT_IOS6_STYLE_LOG`, which is how
+  the launch was accounted for: of the twenty six and a half seconds between
+  the application starting and the feed appearing, the web thread is busy for
+  ninety eight percent of them. About forty percent is running the site's
+  JavaScript, ten percent compiling it, and three of those seconds are a single
+  stylesheet - one file, parsed once. Compiling later (`thresholdForJITAfterWarmUp`
+  2000, `thresholdForOptimizeAfterWarmUp` 5000) brings the feed up two seconds
+  sooner and costs 43% on the JavaScript benchmark, so the upstream numbers stay.
 - The bytecode cache's ceiling is 192 MB rather than 32, and a number written
   into `/tmp/native-bytecode-cache` sets it. At 32 MB it held four of this
   site's bundles and missed everything else - one hit against forty three. It
-  is still off by default: measured with the larger ceiling and a warm cache,
-  fourteen hits against thirty misses and no change in the stalls, 63 s against
-  62-77 s without it, for 15 MB more resident.
+  is still off by default. Warmed by three launches it reaches twenty one hits
+  against five misses and brings the feed up in 24.9 s instead of 26.5, which
+  costs 31 MB of resident memory - 226 against 195 over the same scripted
+  session. On this device that is the wrong side of the trade.
 
 ### Fixed
 - **Tile layout, which was being skipped almost every frame.** The interface

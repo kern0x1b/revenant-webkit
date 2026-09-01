@@ -1280,6 +1280,50 @@ index ecf474442d..0b12109999 100644
          case FontLoadingBehavior::Block:
              return { 3_s, Seconds::infinity() };
          case FontLoadingBehavior::Swap:
+diff --git a/Source/WebCore/css/StyleSheetContents.cpp b/Source/WebCore/css/StyleSheetContents.cpp
+index 24cef1124d..8d34a3f3d9 100644
+--- a/Source/WebCore/css/StyleSheetContents.cpp
++++ b/Source/WebCore/css/StyleSheetContents.cpp
+@@ -399,6 +399,25 @@ const AtomString& StyleSheetContents::namespaceURIFromPrefix(const AtomString& p
+ 
+ bool StyleSheetContents::parseAuthorStyleSheet(const CachedCSSStyleSheet* cachedStyleSheet, const SecurityOrigin* securityOrigin)
+ {
++#if defined(WEBKIT_IOS6)
++    if (getenv("WEBKIT_IOS6_STYLE_LOG")) [[unlikely]] {
++        static unsigned sheets;
++        static double totalMilliseconds;
++        MonotonicTime started = MonotonicTime::now();
++        bool result = parseAuthorStyleSheetInternal(cachedStyleSheet, securityOrigin);
++        double milliseconds = (MonotonicTime::now() - started).milliseconds();
++        sheets++;
++        totalMilliseconds += milliseconds;
++        WTFLogAlways("[sheet] %u: %.0f ms, %.0f ms in total, ended %.0f, %s", sheets, milliseconds, totalMilliseconds,
++            WallTime::now().secondsSinceEpoch().milliseconds(), originalURL().utf8().data());
++        return result;
++    }
++    return parseAuthorStyleSheetInternal(cachedStyleSheet, securityOrigin);
++}
++
++bool StyleSheetContents::parseAuthorStyleSheetInternal(const CachedCSSStyleSheet* cachedStyleSheet, const SecurityOrigin* securityOrigin)
++{
++#endif
+     bool isSameOriginRequest = securityOrigin && securityOrigin->canRequest(baseURL(), OriginAccessPatternsForWebProcess::singleton());
+     CachedCSSStyleSheet::MIMETypeCheckHint mimeTypeCheckHint = isStrictParserMode(m_parserContext.mode) || !isSameOriginRequest ? CachedCSSStyleSheet::MIMETypeCheckHint::Strict : CachedCSSStyleSheet::MIMETypeCheckHint::Lax;
+     bool hasValidMIMEType = true;
+diff --git a/Source/WebCore/css/StyleSheetContents.h b/Source/WebCore/css/StyleSheetContents.h
+index a335b49971..cf2694b880 100644
+--- a/Source/WebCore/css/StyleSheetContents.h
++++ b/Source/WebCore/css/StyleSheetContents.h
+@@ -70,6 +70,9 @@ public:
+     const CSSNamespacePrefixMap& namespacePrefixMap() const { return m_namespacePrefixMap; }
+ 
+     bool parseAuthorStyleSheet(const CachedCSSStyleSheet*, const SecurityOrigin*);
++#if defined(WEBKIT_IOS6)
++    bool parseAuthorStyleSheetInternal(const CachedCSSStyleSheet*, const SecurityOrigin*);
++#endif
+     WEBCORE_EXPORT bool parseString(const String&);
+ 
+     bool isCacheable() const;
 diff --git a/Source/WebCore/dom/ContentVisibilityDocumentState.cpp b/Source/WebCore/dom/ContentVisibilityDocumentState.cpp
 index 2bd3a4d530..6c4cf652d6 100644
 --- a/Source/WebCore/dom/ContentVisibilityDocumentState.cpp
