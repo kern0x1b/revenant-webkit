@@ -39,7 +39,9 @@ Dates are the day the change was measured on the device, not the day it compiled
   is always here, so every scroll dropped the tiles it had and made two new
   ones. Coverage now follows the system's own pressure reading rather than the
   process's memory policy, and a scroll keeps eleven or twelve tiles - a screen
-  above and below - instead of two.
+  above and below - instead of two. `WEBKIT_IOS6_MINIMAL_TILES` restores the old
+  behaviour; one soak in three ended in a fault inside the GPU driver with the
+  larger set of layers, which two further soaks did not reproduce.
 - **Compiled JavaScript, thrown away on the same schedule.** The memory-release
   path also deletes every code block in the process, and the site's route change
   then spends its time parsing and generating bytecode again - parser, bytecode

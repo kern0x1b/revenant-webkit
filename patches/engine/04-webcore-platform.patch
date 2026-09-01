@@ -1517,7 +1517,7 @@ index fff86bd211..c617a4722e 100644
  private:        
      WeakRef<LegacyTileCache> m_tileCache;
 diff --git a/Source/WebCore/platform/ios/LegacyTileGrid.mm b/Source/WebCore/platform/ios/LegacyTileGrid.mm
-index 0c75b3f923..99c2e1d5ce 100644
+index 0c75b3f923..8d16e9fc6a 100644
 --- a/Source/WebCore/platform/ios/LegacyTileGrid.mm
 +++ b/Source/WebCore/platform/ios/LegacyTileGrid.mm
 @@ -41,6 +41,21 @@
@@ -1572,7 +1572,7 @@ index 0c75b3f923..99c2e1d5ce 100644
      m_tiles.clear();
      m_origin = newOrigin;
  }
-@@ -393,9 +416,31 @@ void LegacyTileGrid::invalidateTiles(const IntRect& dirtyRect)
+@@ -393,9 +416,34 @@ void LegacyTileGrid::invalidateTiles(const IntRect& dirtyRect)
  
  bool LegacyTileGrid::shouldUseMinimalTileCoverage() const
  {
@@ -1590,7 +1590,10 @@ index 0c75b3f923..99c2e1d5ce 100644
 +    // page that was laid out and never painted. Photographed over six flicks,
 +    // the longest unpainted run averaged 263 px of a 480 px screen and five
 +    // frames in six ended blank.
-+    bool underPressure = MemoryPressureHandler::singleton().memoryPressureStatus() == SystemMemoryPressureStatus::Critical;
++    static const bool coverageFollowsPolicy = !!getenv("WEBKIT_IOS6_MINIMAL_TILES");
++    bool underPressure = coverageFollowsPolicy
++        ? MemoryPressureHandler::singleton().isUnderMemoryPressure()
++        : MemoryPressureHandler::singleton().memoryPressureStatus() == SystemMemoryPressureStatus::Critical;
 +#else
 +    bool underPressure = MemoryPressureHandler::singleton().isUnderMemoryPressure();
 +#endif
@@ -1607,7 +1610,7 @@ index 0c75b3f923..99c2e1d5ce 100644
  }
  
  IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
-@@ -420,13 +465,22 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
+@@ -420,13 +468,22 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
  
  IntRect LegacyTileGrid::calculateCoverRect(const IntRect& visibleRect, bool& centerGrid)
  {
@@ -1631,7 +1634,7 @@ index 0c75b3f923..99c2e1d5ce 100644
      coverRect.inflateX(visibleRect.width() / 2);
      coverRect.inflateY(visibleRect.height());
      return adjustCoverRectForPageBounds(coverRect);
-@@ -484,6 +538,18 @@ double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect&
+@@ -484,6 +541,18 @@ double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect&
  
  void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode creationMode)
  {
@@ -1650,7 +1653,7 @@ index 0c75b3f923..99c2e1d5ce 100644
      IntRect visibleRect = this->visibleRect();
      if (visibleRect.isEmpty())
          return;
-@@ -505,6 +571,8 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -505,6 +574,8 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
      Vector<LegacyTileGrid::TileIndex> tilesToCreate;
      unsigned pendingTileCount = 0;
  
@@ -1659,7 +1662,7 @@ index 0c75b3f923..99c2e1d5ce 100644
      LegacyTileGrid::TileIndex topLeftIndex = tileIndexForPoint(topLeft(coverRect));
      LegacyTileGrid::TileIndex bottomRightIndex = tileIndexForPoint(bottomRight(coverRect));
      for (int yIndex = topLeftIndex.y(); yIndex <= bottomRightIndex.y(); ++yIndex) {
-@@ -517,6 +585,11 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -517,6 +588,11 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
              if (tileForIndex(index))
                  continue;
              ++pendingTileCount;
@@ -1671,7 +1674,7 @@ index 0c75b3f923..99c2e1d5ce 100644
              if (distance > shortestDistance)
                  continue;
              if (distance < shortestDistance) {
-@@ -549,6 +622,18 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -549,6 +625,18 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
  
      bool didCreateTiles = !!tilesToCreateCount;
      bool createMoreTiles = pendingTileCount > tilesToCreateCount;
