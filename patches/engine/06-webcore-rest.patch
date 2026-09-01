@@ -1747,36 +1747,15 @@ index 70bd1e3c03..7e3206a07e 100644
                  // No need for continuous corners if we're already going to clip.
                  useContinuousCorners = false;
 diff --git a/Source/WebCore/page/IntersectionObserver.cpp b/Source/WebCore/page/IntersectionObserver.cpp
-index 40909799b3..4b53229a75 100644
+index 40909799b3..0c541ed773 100644
 --- a/Source/WebCore/page/IntersectionObserver.cpp
 +++ b/Source/WebCore/page/IntersectionObserver.cpp
-@@ -744,6 +744,29 @@ auto IntersectionObserver::updateObservations(const Frame& hostFrame) -> NeedNot
+@@ -744,6 +744,8 @@ auto IntersectionObserver::updateObservations(const Frame& hostFrame) -> NeedNot
  
      // Iterate on a copy of m_observationTargets, in case something in the loop mutates it.
      auto observationTargets = m_observationTargets;
 +
-+#if defined(WEBKIT_IOS6)
-+    {
-+        static const bool reportObservations = !!getenv("WEBKIT_IOS6_OBSERVER_LOG");
-+        if (reportObservations) [[unlikely]] {
-+            static unsigned updates;
-+            static unsigned long long targetsSeen;
-+            static MonotonicTime lastReport;
-+            updates++;
-+            unsigned targetCount = 0;
-+            for (auto& observed : observationTargets) {
-+                (void)observed;
-+                ++targetCount;
-+            }
-+            targetsSeen += targetCount;
-+            MonotonicTime now = MonotonicTime::now();
-+            if (now - lastReport > 3_s) {
-+                lastReport = now;
-+                WTFLogAlways("[observer] %u updates, %llu targets in total, %u this time, explicit root %d", updates, targetsSeen, targetCount, !!root());
-+            }
-+        }
-+    }
-+#endif
++
      for (Ref target : observationTargets) {
          // Per HTML spec, "update the rendering" step (which includes "run the update intersection
          // observations") should only occur for fully active documents. Hence skip updating the

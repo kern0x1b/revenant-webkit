@@ -1466,6 +1466,16 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
             id fixedContent = [self engineFixedContent];
             if ([fixedContent respondsToSelector:@selector(didFinishScrollingOrZooming)])
                 [fixedContent performSelector:@selector(didFinishScrollingOrZooming)];
+
+            // Ask for the tiles the flick outran.
+            //
+            // Where the page stops is often page the engine has laid out and
+            // never painted: the layout passes that would have made those tiles
+            // were skipped while the engine held the lock, and nothing invalidates
+            // afterwards, so the reader is left looking at white with the content
+            // behind it. Scrolling by two pixels used to be enough to bring it
+            // back, which is what this asks for without moving anything.
+            [self markTilesAsNeedingLayout];
         }
         return;
     }
@@ -1547,6 +1557,31 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     SEL publish = @selector(_setCustomFixedPositionLayoutRectInWebThread:synchronize:);
     if ([engineWebView respondsToSelector:publish] && !stockFixedBehaviour())
         ((void (*)(id, SEL, CGRect, BOOL))objc_msgSend)(engineWebView, publish, onScreen, NO);
+}
+
+- (void)markTilesAsNeedingLayout
+{
+    static Class tiledViewClass;
+    if (!tiledViewClass)
+        tiledViewClass = objc_getClass("UIWebTiledView");
+    if (!tiledViewClass)
+        return;
+
+    NSMutableArray *pending = [NSMutableArray arrayWithObject:_webView];
+    while (pending.count) {
+        UIView *view = [pending lastObject];
+        [pending removeLastObject];
+        if ([view isKindOfClass:tiledViewClass]) {
+            [view setNeedsLayout];
+            [view setNeedsDisplay];
+            static int announced;
+            if (!announced++)
+                logLine(@"[tiles] asking %@ for a layout pass when the scroll stops", NSStringFromClass([view class]));
+            return;
+        }
+        for (UIView *child in view.subviews)
+            [pending addObject:child];
+    }
 }
 
 - (id)engineFixedContent
@@ -1843,6 +1878,33 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     [self performSelector:@selector(watchForTypeRequest) withObject:nil afterDelay:0.5];
 }
 
+- (void)captureScreenBurst:(NSNumber *)indexObject
+{
+    static CGImageRef (*screenImage)(void);
+    static BOOL looked;
+    if (!looked) {
+        looked = YES;
+        screenImage = (CGImageRef (*)(void))dlsym(RTLD_DEFAULT, "UIGetScreenImage");
+        if (!screenImage)
+            logLine(@"[shot] the system does not offer a screen image");
+    }
+    if (!screenImage)
+        return;
+
+    int index = [indexObject intValue];
+    CGImageRef image = screenImage();
+    if (image) {
+        UIImage *shot = [UIImage imageWithCGImage:image];
+        CGImageRelease(image);
+        NSData *png = UIImagePNGRepresentation(shot);
+        NSString *path = [NSString stringWithFormat:@"/tmp/native-shot-%d.png", index];
+        if ([png writeToFile:path atomically:YES])
+            logLine(@"[shot] %d: %lu bytes", index, (unsigned long)png.length);
+    }
+    if (index < 7)
+        [self performSelector:@selector(captureScreenBurst:) withObject:@(index + 1) afterDelay:0.25];
+}
+
 - (void)watchForScrollRequest
 {
     // Whatever happens in here, the timer must be armed again. One
@@ -1917,6 +1979,12 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
                 logLine(@"loading %@", trimmed);
                 [_webView loadRequest:[NSURLRequest requestWithURL:url]];
             }
+        }
+
+        static double lastShot;
+        static BOOL seeded5;
+        if (triggerFired("/tmp/native-shot", &lastShot, &seeded5)) {
+            [self captureScreenBurst:0];
         }
 
         static BOOL seeded4;
@@ -2265,6 +2333,9 @@ static void reportExit(void)
 // engine's answer is a plain flag read, no lock involved.
 static void (*originalTiledLayoutSubviews)(id, SEL);
 
+static unsigned skippedTileLayouts;
+static unsigned ranTileLayouts;
+
 static void tiledLayoutSubviews(id self, SEL selector)
 {
     // Ask the engine for the lock; do not wait for it.
@@ -2291,8 +2362,43 @@ static void tiledLayoutSubviews(id self, SEL selector)
     // engine needs.
     // The engine-side tile layer already asks the web thread for the pass it is
     // owed; here it is enough never to wait.
-    if (webThreadTryLockForFrame && !webThreadTryLockForFrame())
+    // Skipping is bounded in time, not by the lock alone.
+    //
+    // The engine holds the web lock for most of a second on this device - counted
+    // here, 527 layout passes were skipped against 10 that ran - and this method
+    // is where tiles for newly exposed page are made. Skipping whenever the lock
+    // is busy therefore means almost never painting: the reader flicks and is
+    // left looking at white with the content laid out behind it, and it stays
+    // white until something else moves. So the pass is skipped while a recent one
+    // has succeeded, and after a quarter of a second without one this waits for
+    // the engine however long it takes.
+    static CFAbsoluteTime lastRealPass;
+    CFAbsoluteTime passNow = CFAbsoluteTimeGetCurrent();
+    bool waitedLongEnough = passNow - lastRealPass > 0.25;
+
+    if (!waitedLongEnough && webThreadTryLockForFrame && !webThreadTryLockForFrame()) {
+        // Come back for the pass that was skipped.
+        //
+        // The engine invalidating the tiles is what normally brings UIKit back
+        // here, and it does not always have anything to invalidate: after a
+        // flick the page is laid out for the new position and the tiles for it
+        // were simply never made, so the reader is left looking at white with
+        // the content behind it. Measured over six flicks, one frame in five was
+        // blank for this reason. Asking for another layout pass costs a
+        // try-lock on the next frame and ends the moment one of them succeeds.
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(setNeedsLayout) object:nil];
+        [self performSelector:@selector(setNeedsLayout) withObject:nil afterDelay:1.0 / 60.0];
+        skippedTileLayouts++;
+        static CFAbsoluteTime lastReport;
+        CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        if (now - lastReport > 3.0) {
+            lastReport = now;
+            logLine(@"[tiles] layout passes: %u skipped, %u ran", skippedTileLayouts, ranTileLayouts);
+        }
         return;
+    }
+    ranTileLayouts++;
+    lastRealPass = passNow;
     originalTiledLayoutSubviews(self, selector);
 }
 

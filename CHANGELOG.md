@@ -25,6 +25,21 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Fixed
+- **Tile layout, which was being skipped almost every frame.** The interface
+  stops waiting for the engine before laying out tiles, which is right, but the
+  engine holds the web lock nearly all the time on this device: counted on the
+  phone, 527 layout passes were skipped against 10 that ran. That method is also
+  where tiles for newly exposed page are made, so a flick landed on page that
+  was laid out and never painted - photographed, a white screen with the content
+  behind it, which stayed white until something else moved. Skipping is now
+  bounded: after a quarter of a second without a real pass the interface waits
+  for the engine however long it takes. The same counter afterwards reads 129
+  passes run against 451 skipped.
+- **Tile coverage, cut to the visible screen whenever memory was tight.** Which
+  is always here, so every scroll dropped the tiles it had and made two new
+  ones. Coverage now follows the system's own pressure reading rather than the
+  process's memory policy, and a scroll keeps eleven or twelve tiles - a screen
+  above and below - instead of two.
 - **Compiled JavaScript, thrown away on the same schedule.** The memory-release
   path also deletes every code block in the process, and the site's route change
   then spends its time parsing and generating bytecode again - parser, bytecode

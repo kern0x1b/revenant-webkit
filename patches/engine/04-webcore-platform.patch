@@ -1252,7 +1252,7 @@ index eb4e1ca8b4..511dfdd185 100644
      TilingMode m_tilingMode { Normal };
      TilingDirection m_tilingDirection { TilingDirectionDown };
 diff --git a/Source/WebCore/platform/ios/LegacyTileCache.mm b/Source/WebCore/platform/ios/LegacyTileCache.mm
-index d3fd513118..5974de6460 100644
+index d3fd513118..f6726398de 100644
 --- a/Source/WebCore/platform/ios/LegacyTileCache.mm
 +++ b/Source/WebCore/platform/ios/LegacyTileCache.mm
 @@ -25,6 +25,7 @@
@@ -1303,7 +1303,19 @@ index d3fd513118..5974de6460 100644
  void LegacyTileCache::ref() const
  {
      [m_window retain];
-@@ -433,6 +454,9 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
+@@ -422,7 +443,11 @@ void LegacyTileCache::tileCreationTimerFired()
+ 
+ void LegacyTileCache::createTilesInActiveGrid(SynchronousTileCreationMode mode)
+ {
++#if defined(WEBKIT_IOS6)
++    if (MemoryPressureHandler::singleton().memoryPressureStatus() == SystemMemoryPressureStatus::Critical) {
++#else
+     if (MemoryPressureHandler::singleton().isUnderMemoryPressure()) {
++#endif
+         LOG(MemoryPressure, "Under memory pressure at: %s", __PRETTY_FUNCTION__);
+         removeAllNonVisibleTilesInternal();
+     }
+@@ -433,6 +458,9 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
  {
      static unsigned capacity;
      if (!capacity) {
@@ -1313,7 +1325,7 @@ index d3fd513118..5974de6460 100644
          size_t totalMemory = ramSize() / 1024 / 1024;
          if (totalMemory >= 1024)
              capacity = 128 * 1024 * 1024;
-@@ -440,6 +464,7 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
+@@ -440,6 +468,7 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
              capacity = 64 * 1024 * 1024;
          else
              capacity = 32 * 1024 * 1024;
@@ -1321,7 +1333,7 @@ index d3fd513118..5974de6460 100644
      }
  
      int gridCapacity;
-@@ -454,6 +479,50 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
+@@ -454,6 +483,50 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
      else
          gridCapacity = capacity;
  
@@ -1372,7 +1384,7 @@ index d3fd513118..5974de6460 100644
      if (keepsZoomedOutTiles() && grid == m_zoomedOutTileGrid.get()) {
          if (activeTileGrid() == m_zoomedOutTileGrid.get())
              return gridCapacity;
-@@ -538,6 +607,16 @@ void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef con
+@@ -538,6 +611,16 @@ void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef con
      } else {
          // Simple repaint
          CGRect dirtyRectInSuper = [hostLayer() convertRect:dirtyRect fromLayer:layer];
@@ -1389,7 +1401,7 @@ index d3fd513118..5974de6460 100644
          [m_window displayRect:dirtyRectInSuper];
      }
      
-@@ -555,6 +634,7 @@ void LegacyTileCache::drawLayer(LegacyTileLayer* layer, CGContextRef context, Dr
+@@ -555,6 +638,7 @@ void LegacyTileCache::drawLayer(LegacyTileLayer* layer, CGContextRef context, Dr
  
      WKSetCurrentGraphicsContext(context);
  
@@ -1397,7 +1409,7 @@ index d3fd513118..5974de6460 100644
      CGRect dirtyRect = CGContextGetClipBoundingBox(context);
      CGRect frame = [layer frame];
      CGContextTranslateCTM(context, -frame.origin.x, -frame.origin.y);
-@@ -615,6 +695,7 @@ void LegacyTileCache::scheduleRenderingUpdateForPendingRepaint()
+@@ -615,6 +699,7 @@ void LegacyTileCache::scheduleRenderingUpdateForPendingRepaint()
  
  void LegacyTileCache::setNeedsDisplayInRect(const IntRect& dirtyRect)
  {
@@ -1405,7 +1417,7 @@ index d3fd513118..5974de6460 100644
      Locker locker { m_savedDisplayRectMutex };
      bool addedFirstRect = m_savedDisplayRects.isEmpty();
      m_savedDisplayRects.append(dirtyRect);
-@@ -665,6 +746,11 @@ bool LegacyTileCache::isTileCreationSuspended() const
+@@ -665,6 +750,11 @@ bool LegacyTileCache::isTileCreationSuspended() const
  
  bool LegacyTileCache::isTileInvalidationSuspended() const 
  { 
@@ -1417,7 +1429,7 @@ index d3fd513118..5974de6460 100644
      return m_tilingMode == Zooming || m_tilingMode == Panning || m_tilingMode == ScrollToTop || m_tilingMode == Disabled; 
  }
  
-@@ -766,6 +852,62 @@ void LegacyTileCache::setSpeculativeTileCreationEnabled(bool enabled)
+@@ -766,6 +856,62 @@ void LegacyTileCache::setSpeculativeTileCreationEnabled(bool enabled)
          m_tileCreationTimer.startOneShot(0_s);
  }
  
@@ -1480,7 +1492,7 @@ index d3fd513118..5974de6460 100644
  void LegacyTileCache::prepareToDraw()
  {
      // This will trigger document relayout if needed.
-@@ -775,6 +917,9 @@ void LegacyTileCache::prepareToDraw()
+@@ -775,6 +921,9 @@ void LegacyTileCache::prepareToDraw()
          Locker locker { m_tileMutex };
          flushSavedDisplayRects();
      }
@@ -1505,7 +1517,7 @@ index fff86bd211..c617a4722e 100644
  private:        
      WeakRef<LegacyTileCache> m_tileCache;
 diff --git a/Source/WebCore/platform/ios/LegacyTileGrid.mm b/Source/WebCore/platform/ios/LegacyTileGrid.mm
-index 0c75b3f923..479b4215b7 100644
+index 0c75b3f923..99c2e1d5ce 100644
 --- a/Source/WebCore/platform/ios/LegacyTileGrid.mm
 +++ b/Source/WebCore/platform/ios/LegacyTileGrid.mm
 @@ -41,6 +41,21 @@
@@ -1560,7 +1572,7 @@ index 0c75b3f923..479b4215b7 100644
      m_tiles.clear();
      m_origin = newOrigin;
  }
-@@ -393,9 +416,19 @@ void LegacyTileGrid::invalidateTiles(const IntRect& dirtyRect)
+@@ -393,9 +416,31 @@ void LegacyTileGrid::invalidateTiles(const IntRect& dirtyRect)
  
  bool LegacyTileGrid::shouldUseMinimalTileCoverage() const
  {
@@ -1569,7 +1581,19 @@ index 0c75b3f923..479b4215b7 100644
 -        || MemoryPressureHandler::singleton().isUnderMemoryPressure();
 +    bool minimalMode = m_tileCache->tilingMode() == LegacyTileCache::Minimal;
 +    bool noSpeculative = !m_tileCache->isSpeculativeTileCreationEnabled();
++#if defined(WEBKIT_IOS6)
++    // Only when the process is actually near the kill, not merely warned.
++    //
++    // A warning is the normal state here - the page's own memory keeps the
++    // process above three quarters of its budget for as long as it is open - and
++    // answering it by painting only what is on screen means a flick lands on
++    // page that was laid out and never painted. Photographed over six flicks,
++    // the longest unpainted run averaged 263 px of a 480 px screen and five
++    // frames in six ended blank.
++    bool underPressure = MemoryPressureHandler::singleton().memoryPressureStatus() == SystemMemoryPressureStatus::Critical;
++#else
 +    bool underPressure = MemoryPressureHandler::singleton().isUnderMemoryPressure();
++#endif
 +
 +    static int lastReported = -1;
 +    int state = (minimalMode ? 1 : 0) | (noSpeculative ? 2 : 0) | (underPressure ? 4 : 0);
@@ -1583,7 +1607,7 @@ index 0c75b3f923..479b4215b7 100644
  }
  
  IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
-@@ -420,13 +453,22 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
+@@ -420,13 +465,22 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
  
  IntRect LegacyTileGrid::calculateCoverRect(const IntRect& visibleRect, bool& centerGrid)
  {
@@ -1607,7 +1631,26 @@ index 0c75b3f923..479b4215b7 100644
      coverRect.inflateX(visibleRect.width() / 2);
      coverRect.inflateY(visibleRect.height());
      return adjustCoverRectForPageBounds(coverRect);
-@@ -505,6 +547,8 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -484,6 +538,18 @@ double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect&
+ 
+ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode creationMode)
+ {
++    if (engineChatterEnabled()) {
++        static MonotonicTime lastReport;
++        MonotonicTime now = MonotonicTime::now();
++        if (now - lastReport > 1_s) {
++            lastReport = now;
++            IntRect reportedVisible = visibleRect();
++            WTFLogAlways("[tiles] creating for visible %d,%d %dx%d, %u tiles, mode %d, minimal %d",
++                reportedVisible.x(), reportedVisible.y(), reportedVisible.width(), reportedVisible.height(),
++                (unsigned)m_tiles.size(), (int)creationMode, shouldUseMinimalTileCoverage());
++        }
++    }
++
+     IntRect visibleRect = this->visibleRect();
+     if (visibleRect.isEmpty())
+         return;
+@@ -505,6 +571,8 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
      Vector<LegacyTileGrid::TileIndex> tilesToCreate;
      unsigned pendingTileCount = 0;
  
@@ -1616,7 +1659,7 @@ index 0c75b3f923..479b4215b7 100644
      LegacyTileGrid::TileIndex topLeftIndex = tileIndexForPoint(topLeft(coverRect));
      LegacyTileGrid::TileIndex bottomRightIndex = tileIndexForPoint(bottomRight(coverRect));
      for (int yIndex = topLeftIndex.y(); yIndex <= bottomRightIndex.y(); ++yIndex) {
-@@ -517,6 +561,11 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -517,6 +585,11 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
              if (tileForIndex(index))
                  continue;
              ++pendingTileCount;
@@ -1628,7 +1671,7 @@ index 0c75b3f923..479b4215b7 100644
              if (distance > shortestDistance)
                  continue;
              if (distance < shortestDistance) {
-@@ -549,6 +598,18 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -549,6 +622,18 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
  
      bool didCreateTiles = !!tilesToCreateCount;
      bool createMoreTiles = pendingTileCount > tilesToCreateCount;

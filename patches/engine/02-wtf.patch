@@ -708,7 +708,7 @@ index 86e280b542..7ab9944ebb 100644
  
  }
 diff --git a/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm b/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm
-index 4832d8c363..702923402d 100644
+index 4832d8c363..57f447fcf0 100644
 --- a/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm
 +++ b/Source/WTF/wtf/cocoa/MemoryPressureHandlerCocoa.mm
 @@ -30,7 +30,9 @@
@@ -765,7 +765,7 @@ index 4832d8c363..702923402d 100644
 +{
 +    static size_t budget = 0;
 +    if (!budget) {
-+        budget = 200 * MB;
++        budget = 320 * MB;
 +        if (const char* override = getenv("WEBKIT_IOS6_MEMORY_BUDGET_MB")) {
 +            long value = strtol(override, nullptr, 10);
 +            if (value > 16 && value < 4096)
