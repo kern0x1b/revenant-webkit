@@ -813,7 +813,7 @@ static unsigned long long bytecodeCacheLimitBytes(void)
     // The disk has room; the limit does not need to pretend otherwise. A number
     // written into the switch file overrides this.
     unsigned long long megabytes = 192;
-    FILE *file = fopen("/tmp/native-bytecode-cache", "r");
+    FILE *file = fopen("/tmp/native-bytecode-size", "r");
     if (file) {
         char line[32];
         if (fgets(line, sizeof(line), file)) {
@@ -920,15 +920,15 @@ static unsigned long long bytecodeCacheLimitBytes(void)
     // read it back instead of parsing, and this port already builds that - it
     // was simply never switched on in this application.
     Class bytecodeWebView = NSClassFromString(@"WebView");
-    // Off by default, and measured that way.
+    // On, for the large bundles only.
     //
-    // Caching the compiled form removes the parsing - the parser's arena is the
-    // largest allocator in the process - but the compiled form then lives in
-    // memory, and on this device that costs more than the parsing saves:
-    // resident 229 and 250 MB with it against 214 without, over comparable
-    // feeds. It stays one flag away for a device with room.
+    // Caching every script cost 31 MB of resident memory to save a second and a
+    // half of the launch, which is why this was off. The site's weight is in
+    // four bundles, and caching only those - the engine's floor is now half a
+    // megabyte of source - brings the feed up in 24.0 seconds against 28.3, for
+    // 7 MB. Removing the switch file turns it off.
     if ([bytecodeWebView respondsToSelector:@selector(_setJavaScriptBytecodeCacheDirectory:maximumSize:)]
-        && access("/tmp/native-bytecode-cache", F_OK) == 0) {
+        && access("/tmp/native-no-bytecode-cache", F_OK) != 0) {
         NSArray *caches = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
         NSString *directory = [[caches count] ? [caches objectAtIndex:0] : @"/tmp"
             stringByAppendingPathComponent:@"bytecode"];
@@ -1281,6 +1281,17 @@ static unsigned long long bytecodeCacheLimitBytes(void)
     }
     [scriptObject setValue:_bridge forKey:@"appchrome"];
     logLine(@"bridge installed");
+
+    // Write the compiled form of the site's scripts out now.
+    //
+    // The cache commits an entry when the engine drops the script's source
+    // provider, and the provider for a bundle the page keeps alive is dropped
+    // only when the process ends - which for this application means never,
+    // since it is killed rather than asked to quit. So the two largest bundles,
+    // the ones worth caching, were re-compiled on every launch and never
+    // stored. Asking for the write here costs one pass over the entries at a
+    // moment when the page has just finished loading.
+    [self writeBytecodeCache];
 }
 
 - (BOOL)webView:(UIWebView *)webView shouldStartLoadWithRequest:(NSURLRequest *)request navigationType:(UIWebViewNavigationType)navigationType
@@ -1578,6 +1589,25 @@ static unsigned long long bytecodeCacheLimitBytes(void)
     SEL publish = @selector(_setCustomFixedPositionLayoutRectInWebThread:synchronize:);
     if ([engineWebView respondsToSelector:publish] && !stockFixedBehaviour())
         ((void (*)(id, SEL, CGRect, BOOL))objc_msgSend)(engineWebView, publish, onScreen, NO);
+}
+
+- (void)writeBytecodeCache
+{
+    // Written again as the page keeps compiling.
+    //
+    // The engine compiles a function the first time it is called, so the blob
+    // written when the page finished loading holds only what had run by then -
+    // and the profile of a launch is a third lazy compilation. Writing again
+    // while the page is in use appends what has been compiled since; each write
+    // only appends the new entries, so the cost is a walk of the list.
+    Class bytecodeWebView = NSClassFromString(@"WebView");
+    void (*runOnWebThread)(void (^)(void)) = (void (*)(void (^)(void)))dlsym(RTLD_DEFAULT, "WebThreadRun");
+    if (runOnWebThread && [bytecodeWebView respondsToSelector:@selector(_flushJavaScriptBytecodeCache)]) {
+        runOnWebThread(^{
+            [bytecodeWebView performSelector:@selector(_flushJavaScriptBytecodeCache)];
+        });
+    }
+    [self performSelector:@selector(writeBytecodeCache) withObject:nil afterDelay:30.0];
 }
 
 - (void)markTilesAsNeedingLayout
@@ -2275,12 +2305,26 @@ int NativeAppMain(int argc, char *argv[]);
 // instruction, and the registers feeding it.
 static void reportSignal(int number);
 
+static CFAbsoluteTime processStartedAt;
+
 static void reportSignalDetailed(int number, siginfo_t *info, void *contextPointer)
 {
     FILE *log = fopen("/tmp/native-death.log", "a");
     if (log) {
         fprintf(log, "signal %d code %d at %p\n", number, info ? info->si_code : 0,
             info ? info->si_addr : NULL);
+        // What the process was carrying when it went. A fault in the graphics
+        // driver and a fault in the allocator look the same in a backtrace and
+        // different in this line.
+        {
+            struct task_basic_info memory;
+            mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+            if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&memory, &count) == KERN_SUCCESS)
+                fprintf(log, "  resident %.1f MB after %.0f s on thread %s\n",
+                    memory.resident_size / 1048576.0,
+                    CFAbsoluteTimeGetCurrent() - processStartedAt,
+                    [NSThread isMainThread] ? "main" : "another");
+        }
         // The thread state, at its documented place in the context.
         //
         // On armv7 Darwin a ucontext_t is: onstack, sigmask, stack (three
@@ -2448,6 +2492,7 @@ static void installDeathTraps(void)
     int signals[] = { SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP, SIGFPE, SIGPIPE, SIGTERM };
     struct sigaction action;
     memset(&action, 0, sizeof(action));
+    processStartedAt = CFAbsoluteTimeGetCurrent();
     action.sa_sigaction = reportSignalDetailed;
     action.sa_flags = SA_SIGINFO;
     sigemptyset(&action.sa_mask);

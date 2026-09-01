@@ -1291,15 +1291,7 @@ static unsigned long long bytecodeCacheLimitBytes(void)
     // the ones worth caching, were re-compiled on every launch and never
     // stored. Asking for the write here costs one pass over the entries at a
     // moment when the page has just finished loading.
-    {
-        Class bytecodeWebView = NSClassFromString(@"WebView");
-        void (*runOnWebThread)(void (^)(void)) = (void (*)(void (^)(void)))dlsym(RTLD_DEFAULT, "WebThreadRun");
-        if (runOnWebThread && [bytecodeWebView respondsToSelector:@selector(_flushJavaScriptBytecodeCache)]) {
-            runOnWebThread(^{
-                [bytecodeWebView performSelector:@selector(_flushJavaScriptBytecodeCache)];
-            });
-        }
-    }
+    [self writeBytecodeCache];
 }
 
 - (BOOL)webView:(UIWebView *)webView shouldStartLoadWithRequest:(NSURLRequest *)request navigationType:(UIWebViewNavigationType)navigationType
@@ -1597,6 +1589,25 @@ static unsigned long long bytecodeCacheLimitBytes(void)
     SEL publish = @selector(_setCustomFixedPositionLayoutRectInWebThread:synchronize:);
     if ([engineWebView respondsToSelector:publish] && !stockFixedBehaviour())
         ((void (*)(id, SEL, CGRect, BOOL))objc_msgSend)(engineWebView, publish, onScreen, NO);
+}
+
+- (void)writeBytecodeCache
+{
+    // Written again as the page keeps compiling.
+    //
+    // The engine compiles a function the first time it is called, so the blob
+    // written when the page finished loading holds only what had run by then -
+    // and the profile of a launch is a third lazy compilation. Writing again
+    // while the page is in use appends what has been compiled since; each write
+    // only appends the new entries, so the cost is a walk of the list.
+    Class bytecodeWebView = NSClassFromString(@"WebView");
+    void (*runOnWebThread)(void (^)(void)) = (void (*)(void (^)(void)))dlsym(RTLD_DEFAULT, "WebThreadRun");
+    if (runOnWebThread && [bytecodeWebView respondsToSelector:@selector(_flushJavaScriptBytecodeCache)]) {
+        runOnWebThread(^{
+            [bytecodeWebView performSelector:@selector(_flushJavaScriptBytecodeCache)];
+        });
+    }
+    [self performSelector:@selector(writeBytecodeCache) withObject:nil afterDelay:30.0];
 }
 
 - (void)markTilesAsNeedingLayout

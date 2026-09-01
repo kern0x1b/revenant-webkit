@@ -43,9 +43,12 @@ Dates are the day the change was measured on the device, not the day it compiled
   provider for a bundle the page holds open is dropped only when the process
   ends - which for this application means never, since it is killed rather than
   asked to quit. The two largest bundles were therefore recompiled at every
-  launch. They are written now when the page finishes loading: eight entries
-  against four, five hits against two, and the feed arrives in 24.0 s where the
-  same build without the write took 29.5.
+  launch. They are written now when the page finishes loading, and again every
+  thirty seconds while it is in use - the engine compiles a function the first
+  time it is called, so a blob written at load time holds only what had run by
+  then, and a third of the launch is that lazy compilation. Twelve entries and
+  15 MB after one session of use, against four entries and 3 MB; the feed
+  arrives in 20 to 23 s where the same build without the write took 29.5.
 - **The engine rewritten for this processor, area by area.** Twelve passes over
   the source, each one looking for work that costs time on an 800 MHz in-order
   core and buys nothing here. Among what came out of it: a structure-consistency
