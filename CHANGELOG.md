@@ -25,6 +25,25 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Changed
+- **The engine rewritten for this processor, area by area.** Twelve passes over
+  the source, each one looking for work that costs time on an 800 MHz in-order
+  core and buys nothing here. Among what came out of it: a structure-consistency
+  check that ran in release builds from thirteen call sites on every object shape
+  transition, each one reading thread-local storage through `mrc p15`; the
+  inspector's `timelineAgentTracking()` called on every JavaScript function
+  invocation through the bindings, and 153 other instrumentation points that can
+  never fire here; the HTML tokenizer walking `<script>` and `<style>` bodies one
+  character at a time; a two kilobyte vector allocated and freed for every CSS
+  rule; a namespace map copied for every declaration; `intHash` widening to 64
+  bits to run a mixer built from 64x64 multiplies, which armv7 does in four
+  instructions; the timer heap removing an element by pushing it to the root and
+  then sifting it back down; `Page::updateRendering` walking the frame tree
+  twenty eight times per frame and allocating a `WTF::Function` for each walk;
+  the tile grid asking CoreAnimation for the layer bounds once per tile per pass.
+  Measured after: `element.getAttribute` 810 ns against 930, `document.createElement`
+  5.96 us against 6.9, `element.style.top = x` 10.0 us against 11.2, reading
+  `className` 195 ns against 240. The launch and the JavaScript benchmark did not
+  move.
 - Tile coverage is half a screen above and below rather than a whole one. Each
   tile is 1.6 MB at this scale and three screens came to nineteen megabytes of
   layers, not the seven the old note claimed; two screens still cover a flick.

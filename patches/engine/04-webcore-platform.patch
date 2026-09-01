@@ -232,6 +232,70 @@ index bf0777b939..dd6ab91860 100644
  OS_OBJECT_RETURNS_RETAINED nw_resolver_config_t nw_resolver_config_create(void);
  void nw_resolver_config_set_protocol(nw_resolver_config_t, nw_resolver_protocol_t);
  void nw_resolver_config_set_class(nw_resolver_config_t, nw_resolver_class_t);
+diff --git a/Source/WebCore/PAL/pal/text/TextCodecUTF8.cpp b/Source/WebCore/PAL/pal/text/TextCodecUTF8.cpp
+index 53bca4671d..b9c79dba8c 100644
+--- a/Source/WebCore/PAL/pal/text/TextCodecUTF8.cpp
++++ b/Source/WebCore/PAL/pal/text/TextCodecUTF8.cpp
+@@ -71,6 +71,31 @@ void TextCodecUTF8::registerCodecs(TextCodecRegistrar registrar)
+     });
+ }
+ 
++// The single-machine-word ASCII loop below spends about as much time on its own bookkeeping
++// (bounds test, two pointer bumps, branch) as on the data when a machine word is only four bytes,
++// which is the case on 32-bit ARM. Testing four words at once amortises all of that, and the copy
++// of a whole block turns into a couple of load/store-multiple instructions.
++static constexpr size_t asciiBlockSize = 4 * sizeof(WTF::MachineWord);
++
++static ALWAYS_INLINE bool blockContainsOnlyASCII(std::span<const uint8_t> source)
++{
++    WTF::MachineWord combined = 0;
++    for (size_t offset = 0; offset < asciiBlockSize; offset += sizeof(WTF::MachineWord))
++        combined |= reinterpretCastSpanStartTo<const WTF::MachineWord>(source.subspan(offset));
++    return WTF::containsOnlyASCII<Latin1Character>(combined);
++}
++
++static ALWAYS_INLINE void copyASCIIBlock(std::span<Latin1Character> destination, std::span<const uint8_t> source)
++{
++    memcpySpan(destination.first(asciiBlockSize), source.first(asciiBlockSize));
++}
++
++static ALWAYS_INLINE void copyASCIIBlock(std::span<char16_t> destination, std::span<const uint8_t> source)
++{
++    for (size_t i = 0; i < asciiBlockSize; ++i)
++        destination[i] = source[i];
++}
++
+ static inline uint8_t NODELETE nonASCIISequenceLength(uint8_t firstByte)
+ {
+     static constexpr std::array<uint8_t, 256> lengths {
+@@ -335,6 +360,13 @@ String TextCodecUTF8::decode(std::span<const uint8_t> bytes, bool flush, bool st
+             if (isASCII(source[0])) {
+                 // Fast path for ASCII. Most UTF-8 text will be ASCII.
+                 if (WTF::isAlignedToMachineWord(source.data())) {
++                    while (static_cast<size_t>(alignedEnd - source.data()) >= asciiBlockSize) {
++                        if (!blockContainsOnlyASCII(source))
++                            break;
++                        copyASCIIBlock(destination, source);
++                        skip(source, asciiBlockSize);
++                        skip(destination, asciiBlockSize);
++                    }
+                     while (source.data() < alignedEnd) {
+                         auto chunk = reinterpretCastSpanStartTo<const WTF::MachineWord>(source);
+                         if (!WTF::containsOnlyASCII<Latin1Character>(chunk))
+@@ -420,6 +452,13 @@ upConvertTo16Bit:
+             if (isASCII(source[0])) {
+                 // Fast path for ASCII. Most UTF-8 text will be ASCII.
+                 if (WTF::isAlignedToMachineWord(source.data())) {
++                    while (static_cast<size_t>(alignedEnd - source.data()) >= asciiBlockSize) {
++                        if (!blockContainsOnlyASCII(source))
++                            break;
++                        copyASCIIBlock(destination16, source);
++                        skip(source, asciiBlockSize);
++                        skip(destination16, asciiBlockSize);
++                    }
+                     while (source.data() < alignedEnd) {
+                         auto chunk = reinterpretCastSpanStartTo<const WTF::MachineWord>(source);
+                         if (!WTF::containsOnlyASCII<Latin1Character>(chunk))
 diff --git a/Source/WebCore/platform/LocalizedStrings.cpp b/Source/WebCore/platform/LocalizedStrings.cpp
 index a46b5878ee..8b2befc810 100644
 --- a/Source/WebCore/platform/LocalizedStrings.cpp
@@ -276,8 +340,68 @@ index f9c8c3d3c0..2d8d2b77f6 100644
          return RemoteCommandListenerCocoa::create(client);
  #elif USE(GLIB) && ENABLE(MEDIA_SESSION)
          return RemoteCommandListenerGLib::create(client);
+diff --git a/Source/WebCore/platform/ThreadTimers.cpp b/Source/WebCore/platform/ThreadTimers.cpp
+index 08ef6a3e60..67d57958ad 100644
+--- a/Source/WebCore/platform/ThreadTimers.cpp
++++ b/Source/WebCore/platform/ThreadTimers.cpp
+@@ -62,6 +62,7 @@ void ThreadTimers::setSharedTimer(SharedTimer* sharedTimer)
+         sharedTimer->stop();
+         m_pendingSharedTimerFireTime = MonotonicTime { };
+     }
++    m_sharedTimerIsStopped = true;
+     
+     m_sharedTimer = sharedTimer;
+     
+@@ -83,10 +84,19 @@ void ThreadTimers::updateSharedTimer()
+     ASSERT(m_timerHeap.isEmpty() || m_timerHeap.first()->hasTimer());
+ 
+     if (m_firingTimers || m_timerHeap.isEmpty()) {
++        if (!m_pendingSharedTimerFireTime && m_sharedTimerIsStopped)
++            return;
+         m_pendingSharedTimerFireTime = MonotonicTime { };
++        m_sharedTimerIsStopped = true;
+         protect(m_sharedTimer)->stop();
+     } else {
+         MonotonicTime nextFireTime = m_timerHeap.first()->time;
++        // Every start, stop or retime of any timer lands here, but only a change
++        // to the earliest one changes what the shared timer has to do. Rearming
++        // it for the time it is already armed for costs a MonotonicTime::now(),
++        // a run loop timer teardown and a fresh one for no effect at all.
++        if (m_pendingSharedTimerFireTime == nextFireTime && !m_sharedTimerIsStopped)
++            return;
+         MonotonicTime currentMonotonicTime = MonotonicTime::now();
+         if (m_pendingSharedTimerFireTime) {
+             // No need to restart the timer if both the pending fire time and the new fire time are in the past.
+@@ -94,6 +104,7 @@ void ThreadTimers::updateSharedTimer()
+                 return;
+         }
+         m_pendingSharedTimerFireTime = nextFireTime;
++        m_sharedTimerIsStopped = false;
+         protect(m_sharedTimer)->setFireInterval(std::max(nextFireTime - currentMonotonicTime, 0_s));
+     }
+ }
+@@ -155,6 +166,7 @@ void ThreadTimers::fireTimersInNestedEventLoop()
+     if (CheckedPtr sharedTimer = m_sharedTimer) {
+         sharedTimer->invalidate();
+         m_pendingSharedTimerFireTime = MonotonicTime { };
++        m_sharedTimerIsStopped = true;
+     }
+ 
+     updateSharedTimer();
+diff --git a/Source/WebCore/platform/ThreadTimers.h b/Source/WebCore/platform/ThreadTimers.h
+index 1747dc8c19..11739c0b6e 100644
+--- a/Source/WebCore/platform/ThreadTimers.h
++++ b/Source/WebCore/platform/ThreadTimers.h
+@@ -73,6 +73,7 @@ private:
+     CheckedPtr<SharedTimer> m_sharedTimer; // External object, can be a run loop on a worker thread. Normally set/reset by worker thread.
+     bool m_firingTimers { false };
+     bool m_shouldBreakFireLoopForRenderingUpdate { false };
++    bool m_sharedTimerIsStopped { true };
+     unsigned m_currentHeapInsertionOrder { 0 };
+     MonotonicTime m_pendingSharedTimerFireTime;
+ };
 diff --git a/Source/WebCore/platform/Timer.cpp b/Source/WebCore/platform/Timer.cpp
-index bd18b47595..7688be1f83 100644
+index bd18b47595..717e046117 100644
 --- a/Source/WebCore/platform/Timer.cpp
 +++ b/Source/WebCore/platform/Timer.cpp
 @@ -25,6 +25,7 @@
@@ -325,7 +449,152 @@ index bd18b47595..7688be1f83 100644
  #endif
  }
  
-@@ -502,7 +528,7 @@ void TimerBase::updateHeapIfNeeded(MonotonicTime oldTime)
+@@ -350,42 +376,105 @@ inline void TimerBase::checkConsistency() const
+         checkHeapIndex();
+ }
+ 
++// The heap is a plain binary heap over TimerHeapLessThanFunction, which orders
++// by (fire time, insertion order) and so has a single well-defined minimum
++// whatever permutation the rest of the array is in. Sifting one element by hand
++// costs one pass; the standard-library formulation had to reach every removal
++// and every key increase through push_heap plus pop_heap, which is two or three
++// passes and, on a page holding hundreds of timers, two or three times the
++// element moves - each of which writes back a heap index.
++static inline void swapHeapItems(ThreadTimerHeap& heap, unsigned a, unsigned b)
++{
++    heap[a].swap(heap[b]);
++    heap[a]->setHeapIndex(a);
++    heap[b]->setHeapIndex(b);
++}
++
++static unsigned heapSiftUp(ThreadTimerHeap& heap, unsigned index)
++{
++    TimerHeapLessThanFunction lessThan;
++    while (index) {
++        unsigned parentIndex = (index - 1) / 2;
++        if (!lessThan(heap[parentIndex], heap[index]))
++            break;
++        swapHeapItems(heap, parentIndex, index);
++        index = parentIndex;
++    }
++    return index;
++}
++
++static unsigned heapSiftDown(ThreadTimerHeap& heap, unsigned index)
++{
++    TimerHeapLessThanFunction lessThan;
++    unsigned size = static_cast<unsigned>(heap.size());
++    for (;;) {
++        unsigned childIndex = 2 * index + 1;
++        if (childIndex >= size)
++            break;
++        if (childIndex + 1 < size && lessThan(heap[childIndex], heap[childIndex + 1]))
++            ++childIndex;
++        if (!lessThan(heap[index], heap[childIndex]))
++            break;
++        swapHeapItems(heap, index, childIndex);
++        index = childIndex;
++    }
++    return index;
++}
++
++// Leaves the heap valid and one element shorter. The removed item keeps whatever
++// heap index it had; every caller either drops it or marks it as not in the heap.
++static void heapRemoveAtIndex(ThreadTimerHeap& heap, unsigned index)
++{
++    unsigned lastIndex = static_cast<unsigned>(heap.size()) - 1;
++    if (index != lastIndex) {
++        swapHeapItems(heap, index, lastIndex);
++        heap.removeLast();
++        // The element that filled the hole came from the bottom of the heap, so
++        // it can belong either above or below its new place, but never both.
++        if (heapSiftUp(heap, index) == index)
++            heapSiftDown(heap, index);
++    } else
++        heap.removeLast();
++}
++
+ void TimerBase::heapDecreaseKey()
+ {
+     ASSERT(static_cast<bool>(nextFireTime()));
+     RefPtr item = m_heapItemWithBitfields.pointer();
+     ASSERT(item);
+     checkHeapIndex();
+-    auto heapData = item->timerHeap().mutableSpan();
+-    std::push_heap(TimerHeapIterator(heapData, 0), TimerHeapIterator(heapData, item->heapIndex() + 1), TimerHeapLessThanFunction());
++    heapSiftUp(item->timerHeap(), item->heapIndex());
+     checkHeapIndex();
+ }
+ 
+ inline void TimerBase::heapDelete()
+ {
+     ASSERT(!static_cast<bool>(nextFireTime()));
+-    heapPop();
+     RefPtr item = m_heapItemWithBitfields.pointer();
+     ASSERT(item);
+-    item->timerHeap().removeLast();
++    heapRemoveAtIndex(item->timerHeap(), item->heapIndex());
+     item->setNotInHeap();
+ }
+ 
+ void TimerBase::heapDeleteMin()
+ {
+     ASSERT(!static_cast<bool>(nextFireTime()));
+-    heapPopMin();
+     RefPtr item = m_heapItemWithBitfields.pointer();
+     ASSERT(item);
+-    item->timerHeap().removeLast();
++    ASSERT(item->isFirstInHeap());
++    heapRemoveAtIndex(item->timerHeap(), 0);
+     item->setNotInHeap();
+ }
+ 
+ inline void TimerBase::heapIncreaseKey()
+ {
+     ASSERT(static_cast<bool>(nextFireTime()));
+-    heapPop();
+-    heapDecreaseKey();
++    RefPtr item = m_heapItemWithBitfields.pointer();
++    ASSERT(item);
++    checkHeapIndex();
++    // A later fire time can only move an item away from the front of the heap.
++    heapSiftDown(item->timerHeap(), item->heapIndex());
++    checkHeapIndex();
+ }
+ 
+ inline void TimerBase::heapInsert()
+@@ -399,18 +488,6 @@ inline void TimerBase::heapInsert()
+     heapDecreaseKey();
+ }
+ 
+-inline void TimerBase::heapPop()
+-{
+-    RefPtr item = m_heapItemWithBitfields.pointer();
+-    ASSERT(item);
+-    // Temporarily force this timer to have the minimum key so we can pop it.
+-    MonotonicTime fireTime = item->time;
+-    item->time = -MonotonicTime::infinity();
+-    heapDecreaseKey();
+-    heapPopMin();
+-    item->time = fireTime;
+-}
+-
+ void TimerBase::heapPopMin()
+ {
+     RefPtr item = m_heapItemWithBitfields.pointer();
+@@ -427,10 +504,7 @@ void TimerBase::heapPopMin()
+ void TimerBase::heapDeleteNullMin(ThreadTimerHeap& heap)
+ {
+     RELEASE_ASSERT(!heap.first()->hasTimer());
+-    heap.first()->time = -MonotonicTime::infinity();
+-    auto heapData = heap.mutableSpan();
+-    std::pop_heap(TimerHeapIterator(heapData, 0), TimerHeapIterator(heapData, heap.size()), TimerHeapLessThanFunction());
+-    heap.removeLast();
++    heapRemoveAtIndex(heap, 0);
+ }
+ 
+ static inline bool NODELETE parentHeapPropertyHolds(const TimerBase* current, const ThreadTimerHeap& heap, unsigned currentIndex)
+@@ -502,7 +576,7 @@ void TimerBase::updateHeapIfNeeded(MonotonicTime oldTime)
  void TimerBase::setNextFireTime(MonotonicTime newTime)
  {
  #if USE(WEB_THREAD)
@@ -334,6 +603,59 @@ index bd18b47595..7688be1f83 100644
  #endif
      ASSERT(canCurrentThreadIDAccessThreadLocalData(m_creationThreadID));
      bool timerHasBeenDeleted = m_unalignedNextFireTime.isNaN();
+@@ -520,7 +594,10 @@ void TimerBase::setNextFireTime(MonotonicTime newTime)
+         newTime = alignment->alignedFireTime(hasReachedMaxNestingLevel(), newTime);
+ 
+     if (oldTime != newTime) {
+-        auto newOrder = threadGlobalDataSingleton().threadTimers().nextHeapInsertionCount();
++        // One thread-local lookup, not two: this runs on every setTimeout,
++        // clearTimeout, timer fire and internal timer restart.
++        auto& threadTimers = threadGlobalDataSingleton().threadTimers();
++        auto newOrder = threadTimers.nextHeapInsertionCount();
+ 
+         RefPtr item = m_heapItemWithBitfields.pointer();
+         if (!item) {
+@@ -537,7 +614,7 @@ void TimerBase::setNextFireTime(MonotonicTime newTime)
+         bool isFirstTimerInHeap = item->isFirstInHeap();
+ 
+         if (wasFirstTimerInHeap || isFirstTimerInHeap)
+-            threadGlobalDataSingleton().threadTimers().updateSharedTimer();
++            threadTimers.updateSharedTimer();
+     }
+ 
+     checkConsistency();
+diff --git a/Source/WebCore/platform/Timer.h b/Source/WebCore/platform/Timer.h
+index 5aa864da61..97de787d2c 100644
+--- a/Source/WebCore/platform/Timer.h
++++ b/Source/WebCore/platform/Timer.h
+@@ -115,7 +115,6 @@ private:
+     void heapDeleteMin();
+     void heapIncreaseKey();
+     void heapInsert();
+-    void heapPop();
+     void heapPopMin();
+     static void heapDeleteNullMin(ThreadTimerHeap&);
+ 
+@@ -191,8 +190,17 @@ private:
+ 
+ inline void TimerBase::stop()
+ {
+-    if (m_heapItemWithBitfields.pointer())
+-        stopSlowCase();
++    // A timer that has run once keeps its heap item for reuse, so testing the
++    // item alone sent every stop() of an already-stopped timer through
++    // setNextFireTime(). An inactive timer has a zero fire time and a zero
++    // unaligned fire time, so the only thing the slow case would still do to it
++    // is clear the repeat interval.
++    if (auto* item = m_heapItemWithBitfields.pointer()) {
++        if (item->time)
++            stopSlowCase();
++        else
++            m_repeatInterval = 0_s;
++    }
+ }
+ 
+ inline bool TimerBase::isActive() const
 diff --git a/Source/WebCore/platform/audio/ios/AudioSessionIOS.mm b/Source/WebCore/platform/audio/ios/AudioSessionIOS.mm
 index 9b8897c810..b621e0cc53 100644
 --- a/Source/WebCore/platform/audio/ios/AudioSessionIOS.mm
@@ -565,6 +887,65 @@ index 7b73c38ad2..009b4e48b9 100644
      return static_cast<SubsamplingLevel>(std::min(result, static_cast<int>(maximumSubsamplingLevel())));
  #else
      UNUSED_PARAM(context);
+diff --git a/Source/WebCore/platform/graphics/ComplexTextController.cpp b/Source/WebCore/platform/graphics/ComplexTextController.cpp
+index 7e4690df77..d045352b33 100644
+--- a/Source/WebCore/platform/graphics/ComplexTextController.cpp
++++ b/Source/WebCore/platform/graphics/ComplexTextController.cpp
+@@ -403,7 +403,13 @@ void ComplexTextController::collectComplexTextRuns()
+     bool isSmallCaps = false;
+     bool nextIsSmallCaps = false;
+ 
+-    auto capitalizedBase = capitalized(baseCharacter);
++    // capitalized() is two ICU property lookups per cluster and shouldSynthesizeSmallCaps()
++    // discards it outright unless small caps are in play.
++    bool mayNeedCapitalization = fontVariantCaps != FontVariantCaps::Normal;
++
++    std::optional<char32_t> capitalizedBase;
++    if (mayNeedCapitalization)
++        capitalizedBase = capitalized(baseCharacter);
+     if (shouldSynthesizeSmallCaps(dontSynthesizeSmallCaps, nextFont.get(), baseCharacter, capitalizedBase, fontVariantCaps, engageAllSmallCapsProcessing)) {
+         synthesizedFont = nextFont->noSynthesizableFeaturesFont();
+         smallSynthesizedFont = synthesizedFont->smallCapsFont(m_fontCascade->fontDescription());
+@@ -447,7 +453,7 @@ void ComplexTextController::collectComplexTextRuns()
+             nextFont = halfWidthFont ? halfWidthFont : nextFont;
+         }
+ 
+-        capitalizedBase = capitalized(baseCharacter);
++        capitalizedBase = mayNeedCapitalization ? capitalized(baseCharacter) : std::optional<char32_t> { };
+         if (!synthesizedFont && shouldSynthesizeSmallCaps(dontSynthesizeSmallCaps, nextFont.get(), baseCharacter, capitalizedBase, fontVariantCaps, engageAllSmallCapsProcessing)) {
+             // Rather than synthesize each character individually, we should synthesize the entire "run" if any character requires synthesis.
+             synthesizedFont = nextFont->noSynthesizableFeaturesFont();
+@@ -706,6 +712,8 @@ void ComplexTextController::adjustGlyphsAndAdvances()
+     bool runForbidsRightExpansion = m_run->expansionBehavior().right == ExpansionBehavior::Behavior::Forbid;
+ 
+     TextSpacing::CharacterClass previousCharacterClass = m_textSpacingState.lastCharacterClassFromPreviousRun;
++    const auto& textAutoSpace = m_fontCascade->textAutospace();
++    bool hasAutospace = !textAutoSpace.isNoAutospace();
+     // We are iterating in glyph order, not string order. Compare this to WidthIterator::advanceInternal()
+     for (size_t runIndex = 0; runIndex < runCount; ++runIndex) {
+         Ref complexTextRun = *m_complexTextRuns[runIndex];
+@@ -844,11 +852,10 @@ void ComplexTextController::adjustGlyphsAndAdvances()
+                     afterExpansion = false;
+             }
+ 
+-            const auto& textAutoSpace =  m_fontCascade->textAutospace();
+             float textAutoSpaceSpacing = 0;
+             auto characterClass = TextSpacing::CharacterClass::Undefined;
+             // Since we are iterating through glyphs here we skip combining marks, since we just care about the grapheme cluster base for text-autospace.
+-            if (!textAutoSpace.isNoAutospace() && !isCombiningMark(character)) {
++            if (hasAutospace && !isCombiningMark(character)) {
+                 characterClass = TextSpacing::characterClass(character);
+                 if (textAutoSpace.shouldApplySpacing(previousCharacterClass, characterClass)) {
+                     textAutoSpaceSpacing = complexTextRun->textAutospaceSize();
+@@ -858,7 +865,7 @@ void ComplexTextController::adjustGlyphsAndAdvances()
+                 previousCharacterClass = characterClass;
+             }
+ 
+-            if (!textAutoSpace.isNoAutospace())
++            if (hasAutospace)
+                 m_textAutoSpaceSpacings.append(textAutoSpaceSpacing);
+ 
+             m_totalAdvance += advance;
 diff --git a/Source/WebCore/platform/graphics/DestinationColorSpace.cpp b/Source/WebCore/platform/graphics/DestinationColorSpace.cpp
 index f99b66ec41..ece67eb41f 100644
 --- a/Source/WebCore/platform/graphics/DestinationColorSpace.cpp
@@ -618,7 +999,7 @@ index ab88353fed..43739b6e0e 100644
  RefPtr<Font> FontCache::fontForFamily(const FontDescription& fontDescription, const String& family, const FontCreationContext& fontCreationContext, OptionSet<FontLookupOptions> options)
  {
 diff --git a/Source/WebCore/platform/graphics/FontCascade.cpp b/Source/WebCore/platform/graphics/FontCascade.cpp
-index 346c71d7f0..269bfcd5bd 100644
+index 346c71d7f0..af48d5aeea 100644
 --- a/Source/WebCore/platform/graphics/FontCascade.cpp
 +++ b/Source/WebCore/platform/graphics/FontCascade.cpp
 @@ -243,6 +243,20 @@ RefPtr<const DisplayList::DisplayList> FontCascade::displayListForGlyphBuffer(Gr
@@ -642,6 +1023,179 @@ index 346c71d7f0..269bfcd5bd 100644
  #else
      constexpr auto drawGlyphsMode = DisplayList::Recorder::DrawGlyphsMode::Deconstruct;
  #endif
+@@ -737,9 +751,23 @@ FontCascade::CodePath FontCascade::characterRangeCodePath(std::span<const char16
+     // are not 'combining', but still need to go to the complex path.
+     // Alternatively, we may as well consider binary search over a sorted
+     // list of ranges.
++    size_t size = span.size();
++
++    // Every early exit below needs a code point >= U+02E5, and so does the zero-width
++    // joiner. A max-reduction, which vectorizes, settles the whole run in one pass for
++    // Latin text - the reason this path is reached at all is usually a stray non-Latin1
++    // character elsewhere in the string - instead of walking the ladder of range
++    // comparisons per character.
++    char16_t highest = 0;
++    for (size_t i = 0; i < size; ++i) {
++        if (span[i] > highest)
++            highest = span[i];
++    }
++    if (highest < 0x2E5)
++        return CodePath::Simple;
++
+     CodePath result = CodePath::Simple;
+     bool previousCharacterIsEmojiGroupCandidate = false;
+-    size_t size = span.size();
+     for (size_t i = 0; i < size; ++i) {
+         auto c = span[i];
+         if (c == zeroWidthJoiner && previousCharacterIsEmojiGroupCandidate)
+@@ -1560,22 +1588,32 @@ inline bool NODELETE shouldDrawIfLoading(const Font& font, FontCascade::CustomFo
+ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& glyphBuffer, FloatPoint& point, CustomFontNotReadyAction customFontNotReadyAction) const
+ {
+     ASSERT(glyphBuffer.isFlattened());
+-    Ref fontData = glyphBuffer.fontAt(0);
++
++    // The font is compared per glyph but only referenced per run: taking a Ref for every
++    // glyph just to find out it is the same font as the previous one costs a weak-pointer
++    // dereference plus a refcount round trip on each character painted.
++    const Font* fontData = &glyphBuffer.fontAt(0);
++    auto smoothing = m_fontDescription.usedFontSmoothing();
++    auto flush = [&](unsigned lastFrom, unsigned glyphCount, const FloatPoint& origin) {
++        if (!shouldDrawIfLoading(*fontData, customFontNotReadyAction))
++            return;
++        Ref protectedFont { *fontData };
++        context.drawGlyphs(protectedFont.get(), glyphBuffer.glyphs(lastFrom, glyphCount), glyphBuffer.advances(lastFrom, glyphCount), origin, smoothing);
++    };
++
+     FloatPoint startPoint = point;
+     float nextX = startPoint.x() + WebCore::width(glyphBuffer.advanceAt(0));
+     float nextY = startPoint.y() + height(glyphBuffer.advanceAt(0));
+     unsigned lastFrom = 0;
+     unsigned nextGlyph = 1;
+-    while (nextGlyph < glyphBuffer.size()) {
+-        Ref nextFontData = glyphBuffer.fontAt(nextGlyph);
++    unsigned size = glyphBuffer.size();
++    while (nextGlyph < size) {
++        const Font* nextFontData = &glyphBuffer.fontAt(nextGlyph);
+ 
+         if (nextFontData != fontData) {
+-            if (shouldDrawIfLoading(fontData.get(), customFontNotReadyAction)) {
+-                size_t glyphCount = nextGlyph - lastFrom;
+-                context.drawGlyphs(fontData.get(), glyphBuffer.glyphs(lastFrom, glyphCount), glyphBuffer.advances(lastFrom, glyphCount), startPoint, m_fontDescription.usedFontSmoothing());
+-            }
++            flush(lastFrom, nextGlyph - lastFrom, startPoint);
+             lastFrom = nextGlyph;
+-            fontData = WTF::move(nextFontData);
++            fontData = nextFontData;
+             startPoint.setX(nextX);
+             startPoint.setY(nextY);
+         }
+@@ -1584,10 +1622,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
+         nextGlyph++;
+     }
+ 
+-    if (shouldDrawIfLoading(fontData.get(), customFontNotReadyAction)) {
+-        size_t glyphCount = nextGlyph - lastFrom;
+-        context.drawGlyphs(fontData.get(), glyphBuffer.glyphs(lastFrom, glyphCount), glyphBuffer.advances(lastFrom, glyphCount), startPoint, m_fontDescription.usedFontSmoothing());
+-    }
++    flush(lastFrom, nextGlyph - lastFrom, startPoint);
+     point.setX(nextX);
+ }
+ 
+diff --git a/Source/WebCore/platform/graphics/FontPlatformData.h b/Source/WebCore/platform/graphics/FontPlatformData.h
+index 6d7a74b15a..2a0ce9705c 100644
+--- a/Source/WebCore/platform/graphics/FontPlatformData.h
++++ b/Source/WebCore/platform/graphics/FontPlatformData.h
+@@ -506,18 +506,24 @@ WEBCORE_EXPORT RetainPtr<CTFontRef> createCTFont(CFDictionaryRef attributes, flo
+ 
+ #if USE(CG)
+ 
++// Purely stack-scoped inside a call that already holds the context, so it neither retains
++// it nor writes the matrix back when consecutive glyph runs ask for the one already in
++// place - which is every run of a paragraph that has no synthetic oblique.
+ class ScopedTextMatrix {
+ public:
+     ScopedTextMatrix(CGAffineTransform newMatrix, CGContextRef context)
+         : m_context(context)
+         , m_textMatrix(CGContextGetTextMatrix(context))
++        , m_changed(!CGAffineTransformEqualToTransform(newMatrix, m_textMatrix))
+     {
+-        CGContextSetTextMatrix(m_context.get(), newMatrix);
++        if (m_changed)
++            CGContextSetTextMatrix(m_context, newMatrix);
+     }
+ 
+     ~ScopedTextMatrix()
+     {
+-        CGContextSetTextMatrix(m_context.get(), m_textMatrix);
++        if (m_changed)
++            CGContextSetTextMatrix(m_context, m_textMatrix);
+     }
+ 
+     CGAffineTransform savedMatrix() const
+@@ -526,8 +532,9 @@ public:
+     }
+ 
+ private:
+-    RetainPtr<CGContextRef> m_context;
++    CGContextRef m_context;
+     CGAffineTransform m_textMatrix;
++    bool m_changed;
+ };
+ 
+ #endif
+diff --git a/Source/WebCore/platform/graphics/GlyphMetricsMap.h b/Source/WebCore/platform/graphics/GlyphMetricsMap.h
+index 739cf988d7..371d2038ef 100644
+--- a/Source/WebCore/platform/graphics/GlyphMetricsMap.h
++++ b/Source/WebCore/platform/graphics/GlyphMetricsMap.h
+@@ -89,19 +89,31 @@ private:
+         std::array<T, size> m_metrics;
+     };
+     
++    // A page holds 16 glyphs, so only glyphs 0-15 reach m_primaryPage; every other Latin
++    // glyph used to cost a HashMap probe on each width or bounds query, i.e. once per
++    // character measured or painted. Pages 1-15 (glyph indices 16-255, which is where the
++    // Latin repertoire of the system fonts lives) get a direct-mapped slot instead.
++    static constexpr unsigned directMappedPageCount = 16;
++
+     GlyphMetricsPage& locatePage(unsigned pageNumber)
+     {
+-        if (!pageNumber && m_filledPrimaryPage)
+-            return m_primaryPage;
++        if (!pageNumber) {
++            if (m_filledPrimaryPage)
++                return m_primaryPage;
++        } else if (pageNumber < directMappedPageCount) {
++            if (auto* page = m_directMappedPages[pageNumber - 1].get())
++                return *page;
++        }
+         return locatePageSlowCase(pageNumber);
+     }
+ 
+     GlyphMetricsPage& locatePageSlowCase(unsigned pageNumber);
+-    
++
+     static T unknownMetrics();
+ 
+     bool m_filledPrimaryPage { false };
+     GlyphMetricsPage m_primaryPage; // We optimize for the page that contains glyph indices 0-255.
++    std::array<std::unique_ptr<GlyphMetricsPage>, directMappedPageCount - 1> m_directMappedPages;
+     HashMap<int, std::unique_ptr<GlyphMetricsPage>> m_pages;
+ };
+ 
+@@ -132,6 +144,13 @@ template<class T> typename GlyphMetricsMap<T>::GlyphMetricsPage& GlyphMetricsMap
+         return m_primaryPage;
+     }
+ 
++    if (pageNumber < directMappedPageCount) {
++        auto& page = m_directMappedPages[pageNumber - 1];
++        ASSERT(!page);
++        page = makeUnique<GlyphMetricsPage>(unknownMetrics());
++        return *page;
++    }
++
+     return *m_pages.ensure(pageNumber, [] {
+         return makeUnique<GlyphMetricsPage>(unknownMetrics());
+     }).iterator->value;
 diff --git a/Source/WebCore/platform/graphics/GraphicsLayer.cpp b/Source/WebCore/platform/graphics/GraphicsLayer.cpp
 index cb43407093..aad535dd50 100644
 --- a/Source/WebCore/platform/graphics/GraphicsLayer.cpp
@@ -672,6 +1226,145 @@ index af9e6e1eb1..8381df52b2 100644
  
      Ref source = m_source.get();
      if (source->decodedSize() < LargeAnimationCutoff)
+diff --git a/Source/WebCore/platform/graphics/WidthIterator.cpp b/Source/WebCore/platform/graphics/WidthIterator.cpp
+index 7c3d84250f..40256ebd2d 100644
+--- a/Source/WebCore/platform/graphics/WidthIterator.cpp
++++ b/Source/WebCore/platform/graphics/WidthIterator.cpp
+@@ -88,10 +88,22 @@ inline auto WidthIterator::applyFontTransforms(GlyphBuffer& glyphBuffer, unsigne
+     if (lastGlyphCount >= glyphBufferSize)
+         return { 0, makeGlyphBufferAdvance() };
+ 
++#if defined(WEBKIT_IOS6)
++    // Font::applyTransforms on this port only reverses RTL runs; it never rewrites an
++    // advance. The only thing that can move a width between the two sums below is the
++    // treated-as-space fixup, so with nothing to fix up the two passes are provably equal
++    // and both can be skipped.
++    const bool measureWidthChange = !charactersTreatedAsSpace.isEmpty();
++#else
++    constexpr bool measureWidthChange = true;
++#endif
++
+     auto advances = glyphBuffer.advances();
+     float beforeWidth = 0;
+-    for (unsigned i = lastGlyphCount; i < glyphBufferSize; ++i)
+-        beforeWidth += width(advances[i]);
++    if (measureWidthChange) {
++        for (unsigned i = lastGlyphCount; i < glyphBufferSize; ++i)
++            beforeWidth += width(advances[i]);
++    }
+ 
+     auto initialAdvance = font.applyTransforms(glyphBuffer, lastGlyphCount, m_currentCharacterIndex, m_enableKerning, m_requiresShaping, m_fontCascade->fontDescription().computedLocale(), m_run->text(), direction());
+ 
+@@ -104,17 +116,22 @@ inline auto WidthIterator::applyFontTransforms(GlyphBuffer& glyphBuffer, unsigne
+         setY(origins[i], -y(origins[i]));
+     }
+ 
+-    for (unsigned i = lastGlyphCount; i < glyphBufferSize; ++i) {
+-        auto characterIndex = glyphBuffer.uncheckedStringOffsetAt(i);
+-        auto iterator = std::lower_bound(charactersTreatedAsSpace.begin(), charactersTreatedAsSpace.end(), characterIndex, [](const OriginalAdvancesForCharacterTreatedAsSpace& l, GlyphBufferStringOffset r) -> bool {
+-            return l.stringOffset < r;
+-        });
+-        if (iterator == charactersTreatedAsSpace.end() || iterator->stringOffset != characterIndex)
+-            continue;
+-        auto& originalAdvances = *iterator;
+-        setWidth(glyphBuffer.advanceAt(i), originalAdvances.advance);
++    if (!charactersTreatedAsSpace.isEmpty()) {
++        for (unsigned i = lastGlyphCount; i < glyphBufferSize; ++i) {
++            auto characterIndex = glyphBuffer.uncheckedStringOffsetAt(i);
++            auto iterator = std::lower_bound(charactersTreatedAsSpace.begin(), charactersTreatedAsSpace.end(), characterIndex, [](const OriginalAdvancesForCharacterTreatedAsSpace& l, GlyphBufferStringOffset r) -> bool {
++                return l.stringOffset < r;
++            });
++            if (iterator == charactersTreatedAsSpace.end() || iterator->stringOffset != characterIndex)
++                continue;
++            auto& originalAdvances = *iterator;
++            setWidth(glyphBuffer.advanceAt(i), originalAdvances.advance);
++        }
++        charactersTreatedAsSpace.clear();
+     }
+-    charactersTreatedAsSpace.clear();
++
++    if (!measureWidthChange)
++        return { 0, initialAdvance };
+ 
+     float afterWidth = 0;
+     for (unsigned i = lastGlyphCount; i < glyphBufferSize; ++i)
+@@ -287,6 +304,11 @@ struct AdvanceInternalState {
+ 
+     void updateFont(const Font* newFont)
+     {
++        // Text almost never changes font mid-run, so once font and lastFont have both
++        // settled on the same Font there is nothing to write. Assigning anyway costs two
++        // refcount round trips per character.
++        if (font.get() == newFont && lastFont.get() == newFont)
++            return;
+         lastFont = std::exchange(font, newFont);
+     }
+ };
+@@ -424,7 +446,12 @@ inline void WidthIterator::advanceInternal(TextIterator& textIterator, GlyphBuff
+             m_lastCharacterIndex = advanceInternalState.currentCharacterIndex;
+         bool isDefaultIgnorable = isDefaultIgnorableCodePoint(character);
+ 
+-        auto capitalizedCharacter = capitalized(character);
++        // capitalized() is two ICU property lookups. With font-variant-caps: normal its
++        // result is dead: shouldSynthesizeSmallCaps() and updateCharacterAndSmallCapsIfNeeded()
++        // both return before reading it.
++        std::optional<char32_t> capitalizedCharacter;
++        if (!smallCapsState.skipSmallCapsProcessing())
++            capitalizedCharacter = capitalized(character);
+         char32_t characterToWrite = character;
+ 
+         auto advanceToNextCharacter = [&] {
+@@ -444,11 +471,16 @@ inline void WidthIterator::advanceInternal(TextIterator& textIterator, GlyphBuff
+ 
+         RefPtr halfWidthFont = applyTextSpacingTrimIfNeeded(glyphData, character, fontDescription.textSpacingTrim());
+ 
+-        advanceInternalState.updateFont(glyphData.font ? protect(glyphData.font).get() : primaryFont.ptr());
++        // updateFont() stores into a RefPtr, so the raw pointer only has to survive the
++        // call; protect() would ref and immediately deref once per character.
++        advanceInternalState.updateFont(glyphData.font ? glyphData.font.get() : primaryFont.ptr());
+         smallCapsState.shouldSynthesizeCharacter = shouldSynthesizeSmallCaps(smallCapsState.dontSynthesizeSmallCaps, advanceInternalState.font.get(), character, capitalizedCharacter, smallCapsState.fontVariantCaps, smallCapsState.engageAllSmallCapsProcessing);
+         updateCharacterAndSmallCapsIfNeeded(smallCapsState, capitalizedCharacter, characterToWrite);
+ 
+-        advanceInternalState.rangeFont = fontForRange(advanceInternalState.lastFont.get(), smallCapsState, smallCapsState.isLastSmallCaps);
++        // Same reason as updateFont(): within a run this is the same Font every character,
++        // and assigning it to the RefPtr anyway is a refcount round trip each time.
++        if (const auto* rangeFont = fontForRange(advanceInternalState.lastFont.get(), smallCapsState, smallCapsState.isLastSmallCaps); rangeFont != advanceInternalState.rangeFont.get())
++            advanceInternalState.rangeFont = rangeFont;
+         startNewFontRangeIfNeeded(advanceInternalState, smallCapsState, fontDescription);
+         if (resetFontRangeIfNeeded(advanceInternalState, smallCapsState, fontDescription, textIterator))
+             continue;
+@@ -467,13 +499,15 @@ inline void WidthIterator::advanceInternal(TextIterator& textIterator, GlyphBuff
+             continue;
+         }
+ 
+-        Ref currentRangeFont = *advanceInternalState.nextRangeFont;
++        // nextRangeFont owns the reference for the whole iteration; taking another Ref here
++        // is a refcount round trip per character.
++        const Font& currentRangeFont = *advanceInternalState.nextRangeFont;
+ 
+-        width = currentRangeFont->widthForGlyph(glyph, Font::SyntheticBoldInclusion::Exclude); // We apply synthetic bold after shaping, in applyCSSVisibilityRules().
++        width = currentRangeFont.widthForGlyph(glyph, Font::SyntheticBoldInclusion::Exclude); // We apply synthetic bold after shaping, in applyCSSVisibilityRules().
+         advanceInternalState.widthOfCurrentFontRange += width;
+ 
+         if (FontCascade::treatAsSpace(characterToWrite))
+-            advanceInternalState.charactersTreatedAsSpace.constructAndAppend(advanceInternalState.currentCharacterIndex, characterToWrite == space, characterToWrite == tabCharacter ? width : currentRangeFont->spaceWidth(Font::SyntheticBoldInclusion::Exclude));
++            advanceInternalState.charactersTreatedAsSpace.constructAndAppend(advanceInternalState.currentCharacterIndex, characterToWrite == space, characterToWrite == tabCharacter ? width : currentRangeFont.spaceWidth(Font::SyntheticBoldInclusion::Exclude));
+ 
+         m_glyphBounds.computeIfNeeded(glyph, currentRangeFont, advanceInternalState.currentCharacterIndex, width);
+ 
+@@ -784,8 +818,10 @@ void WidthIterator::applyCSSVisibilityRules(GlyphBuffer& glyphBuffer, unsigned g
+         glyphBuffer.makeGlyphInvisible(index);
+     };
+ 
+-    for (unsigned i = glyphBufferStartIndex; i < glyphBuffer.size(); yPosition += height(glyphBuffer.advanceAt(i)), ++i) {
+-        auto stringOffset = glyphBuffer.checkedStringOffsetAt(i, m_run->length());
++    unsigned runLength = m_run->length();
++    unsigned glyphBufferSize = glyphBuffer.size();
++    for (unsigned i = glyphBufferStartIndex; i < glyphBufferSize; yPosition += height(glyphBuffer.advanceAt(i)), ++i) {
++        auto stringOffset = glyphBuffer.checkedStringOffsetAt(i, runLength);
+         if (!stringOffset)
+             continue;
+         auto characterResponsibleForThisGlyph = m_run.get()[stringOffset.value()];
 diff --git a/Source/WebCore/platform/graphics/avfoundation/objc/CDMSessionAVContentKeySession.mm b/Source/WebCore/platform/graphics/avfoundation/objc/CDMSessionAVContentKeySession.mm
 index 85b979dcfb..fb7ca745f0 100644
 --- a/Source/WebCore/platform/graphics/avfoundation/objc/CDMSessionAVContentKeySession.mm
@@ -1016,6 +1709,124 @@ index 789b7bcde7..1c2fb1639e 100644
      return kCTFontContentSizeCategoryL;
  #endif
  }
+diff --git a/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp b/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp
+index 990931f383..6affb8867a 100644
+--- a/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp
++++ b/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp
+@@ -42,6 +42,7 @@
+ #include "UnrealizedCoreTextFont.h"
+ #include <CoreText/SFNTLayoutTypes.h>
+ #include <array>
++#include <atomic>
+ #include <pal/spi/cf/CoreTextSPI.h>
+ #include <pal/spi/cocoa/AccessibilitySupportSPI.h>
+ #include <wtf/HashSet.h>
+@@ -284,8 +285,13 @@ public:
+         m_families.clear();
+         for (auto& item : inputAllowlist)
+             m_families.add(item);
++        s_isEmpty.store(m_families.isEmpty(), std::memory_order_relaxed);
+     }
+ 
++    // An empty allowlist allows everything, which is the state every normal load runs in.
++    // Publishing that as a flag keeps the per-family-lookup lock off the hot path.
++    static bool isEmpty() { return s_isEmpty.load(std::memory_order_relaxed); }
++
+     bool allows(const AtomString& family) const WTF_REQUIRES_LOCK(lock)
+     {
+         return m_families.isEmpty() || m_families.contains(family);
+@@ -294,10 +300,12 @@ public:
+     static Lock lock;
+ 
+ private:
++    static std::atomic<bool> s_isEmpty;
+     HashSet<String, ASCIICaseInsensitiveHash> m_families;
+ };
+ 
+ Lock FontCacheAllowlist::lock;
++std::atomic<bool> FontCacheAllowlist::s_isEmpty { true };
+ 
+ void FontCache::setFontAllowlist(const Vector<String>& inputAllowlist)
+ {
+@@ -444,6 +452,11 @@ FontSelectionCapabilities capabilitiesForFontDescriptor(CTFontDescriptorRef font
+ 
+ static const FontDatabase::InstalledFont* findClosestFont(const FontDatabase::InstalledFontFamily& familyFonts, FontSelectionRequest fontSelectionRequest)
+ {
++    // With one candidate the selection algorithm can only pick it. Short-circuiting skips a
++    // heap-allocated capabilities vector and the whole three-stage matching pass per lookup.
++    if (familyFonts.installedFonts.size() == 1)
++        return &familyFonts.installedFonts[0];
++
+     auto capabilities = familyFonts.installedFonts.map([](auto& font) {
+         return font.capabilities;
+     });
+@@ -476,8 +489,13 @@ struct FontLookup {
+ 
+ static bool isDotPrefixedForbiddenFont(const AtomString& family)
+ {
++    // Everything this can forbid is dot-prefixed, so for an ordinary family neither the
++    // SDK query nor the name comparisons below can change the answer.
++    if (!family.startsWith('.'))
++        return false;
++
+     if (linkedOnOrAfterSDKWithBehavior(SDKAlignedBehavior::ForbidsDotPrefixedFonts))
+-        return family.startsWith('.');
++        return true;
+     return equalLettersIgnoringASCIICase(family, ".applesystemuifontserif"_s)
+         || equalLettersIgnoringASCIICase(family, ".sf ns mono"_s)
+         || equalLettersIgnoringASCIICase(family, ".sf ui mono"_s)
+@@ -487,6 +505,9 @@ static bool isDotPrefixedForbiddenFont(const AtomString& family)
+ 
+ static bool isAllowlistedFamily(const AtomString& family)
+ {
++    if (FontCacheAllowlist::isEmpty())
++        return true;
++
+     if (isSystemFont(family.string()))
+         return true;
+ 
+diff --git a/Source/WebCore/platform/graphics/cocoa/FontDatabase.cpp b/Source/WebCore/platform/graphics/cocoa/FontDatabase.cpp
+index 5683c4cc68..44fccbb248 100644
+--- a/Source/WebCore/platform/graphics/cocoa/FontDatabase.cpp
++++ b/Source/WebCore/platform/graphics/cocoa/FontDatabase.cpp
+@@ -29,6 +29,7 @@
+ #include "FontCacheCoreText.h"
+ #include "FontCascadeDescription.h"
+ #include <pal/spi/cf/CoreTextSPI.h>
++#include <wtf/text/StringHash.h>
+ 
+ namespace WebCore {
+ 
+@@ -50,10 +51,28 @@ void FontDatabase::InstalledFontFamily::expand(const InstalledFont& installedFon
+     capabilities.expand(installedFont.capabilities);
+ }
+ 
++// The keys in m_familyNameToFontDescriptors are already ASCII-lowercased, so hashing the
++// query case-insensitively lands on the same bucket as hashing its lowercased copy would.
++// This lets a hit avoid allocating that copy, which is what every text run was paying for.
++struct FoldedFamilyNameTranslator {
++    static unsigned hash(const String& familyName) { return ASCIICaseInsensitiveHash::hash(familyName); }
++    static bool equal(const String& foldedKey, const String& familyName) { return equalIgnoringASCIICase(foldedKey, familyName); }
++};
++
+ const FontDatabase::InstalledFontFamily& FontDatabase::collectionForFamily(const String& familyName)
+ {
++    // Dot-prefixed names are not folded (see FontCascadeDescription::foldedFamilyName), so
++    // their stored keys can differ only by case and must be matched exactly.
++    bool canMatchWithoutFolding = !familyName.isEmpty() && familyName[0] != '.';
++    if (canMatchWithoutFolding) {
++        Locker locker { m_familyNameToFontDescriptorsLock };
++        auto it = m_familyNameToFontDescriptors.find<FoldedFamilyNameTranslator>(familyName);
++        if (it != m_familyNameToFontDescriptors.end())
++            return *it->value;
++    }
++
+     auto folded = FontCascadeDescription::foldedFamilyName(familyName);
+-    {
++    if (!canMatchWithoutFolding) {
+         Locker locker { m_familyNameToFontDescriptorsLock };
+         auto it = m_familyNameToFontDescriptors.find(folded);
+         if (it != m_familyNameToFontDescriptors.end())
 diff --git a/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm b/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm
 index 0b412f591c..925061919f 100644
 --- a/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm
@@ -1132,11 +1943,199 @@ index ccda60f194..eb77090df8 100644
      auto font = WTF::switchOn(m_baseFont, [this](const RetainPtr<CTFontRef>& font) -> RetainPtr<CTFontRef> {
          if (!font)
              return nullptr;
+diff --git a/Source/WebCore/platform/graphics/coretext/FontCascadeCoreText.cpp b/Source/WebCore/platform/graphics/coretext/FontCascadeCoreText.cpp
+index 5355400f46..6849054722 100644
+--- a/Source/WebCore/platform/graphics/coretext/FontCascadeCoreText.cpp
++++ b/Source/WebCore/platform/graphics/coretext/FontCascadeCoreText.cpp
+@@ -112,7 +112,7 @@ AffineTransform NODELETE computeVerticalTextMatrix(const Font& font, const Affin
+     return computeBaseVerticalTextMatrix(previousTextMatrix);
+ }
+ 
+-static void fillVectorWithHorizontalGlyphPositions(Vector<CGPoint, 256>& positions, CGContextRef context, std::span<const CGSize> advances, const FloatPoint& point)
++static void fillVectorWithHorizontalGlyphPositions(Vector<CGPoint, 256>& positions, const AffineTransform& contextTextMatrix, std::span<const CGSize> advances, const FloatPoint& point)
+ {
+     // Keep this in sync as the inverse of `DrawGlyphsRecorder::recordDrawGlyphs`.
+     // The input positions are in the context's coordinate system, without the text matrix.
+@@ -123,8 +123,23 @@ static void fillVectorWithHorizontalGlyphPositions(Vector<CGPoint, 256>& positio
+     // CTM * text matrix * positions we need to deliver to CT = CTM * input positions
+     // Solving for the positions we need to deliver to CT, we get
+     // positions we need to deliver to CT = inverse(text matrix) * input positions
+-    CGAffineTransform matrix = CGAffineTransformInvert(CGContextGetTextMatrix(context));
++    // The caller has just installed contextTextMatrix on the context, so asking CG to read
++    // it back would be a round trip for a value we already have.
++    CGAffineTransform matrix = CGAffineTransformInvert(contextTextMatrix);
+     positions[0] = CGPointApplyAffineTransform(point, matrix);
++
++    if (!matrix.b && !matrix.c) {
++        // Horizontal text without synthetic oblique: the matrix is a scale/flip, so the
++        // per-glyph 2x3 apply collapses to one multiply per axis.
++        CGFloat a = matrix.a;
++        CGFloat d = matrix.d;
++        for (size_t i = 1; i < advances.size(); ++i) {
++            positions[i].x = positions[i - 1].x + advances[i - 1].width * a;
++            positions[i].y = positions[i - 1].y + advances[i - 1].height * d;
++        }
++        return;
++    }
++
+     for (size_t i = 1; i < advances.size(); ++i) {
+         CGSize advance = CGSizeApplyAffineTransform(advances[i - 1], matrix);
+         positions[i].x = positions[i - 1].x + advance.width;
+@@ -283,23 +298,26 @@ static void showGlyphsWithAdvances(const FloatPoint& point, const Font& font, CG
+         fillVectorWithVerticalGlyphPositions(positions, translations, advances, point, ascentDelta, CGContextGetTextMatrix(context));
+         CTFontDrawGlyphs(ctFont.get(), glyphs.data(), positions.span().data(), glyphs.size(), context);
+     } else {
+-        fillVectorWithHorizontalGlyphPositions(positions, context, advances, point);
+-        CTFontDrawGlyphs(RetainPtr { platformData.ctFont() }.get(), glyphs.data(), positions.span().data(), glyphs.size(), context);
++        fillVectorWithHorizontalGlyphPositions(positions, textMatrix, advances, point);
++        // The FontPlatformData owns the CTFont for the whole call; retaining it here would
++        // be a CFRetain/CFRelease pair per glyph run.
++        CTFontDrawGlyphs(platformData.ctFont(), glyphs.data(), positions.span().data(), glyphs.size(), context);
+     }
+ }
+ 
+-static void setCGFontRenderingMode(GraphicsContext& context)
++// Takes the context the caller already holds: wrapping it in a RetainPtr again is a
++// CFRetain/CFRelease pair per glyph run for a context that cannot go away underneath us.
++static void setCGFontRenderingMode(GraphicsContext& context, CGContextRef cgContext)
+ {
+-    RetainPtr<CGContextRef> cgContext = context.platformContext();
+-    CGContextSetShouldAntialiasFonts(cgContext.get(), true);
++    CGContextSetShouldAntialiasFonts(cgContext, true);
+ 
+-    CGAffineTransform contextTransform = CGContextGetCTM(cgContext.get());
++    CGAffineTransform contextTransform = CGContextGetCTM(cgContext);
+     bool isTranslationOrIntegralScale = WTF::isIntegral(contextTransform.a) && WTF::isIntegral(contextTransform.d) && contextTransform.b == 0.f && contextTransform.c == 0.f;
+     bool isRotated = ((contextTransform.b || contextTransform.c) && (contextTransform.a || contextTransform.d));
+     bool doSubpixelQuantization = isTranslationOrIntegralScale || (!isRotated && context.shouldSubpixelQuantizeFonts());
+ 
+-    CGContextSetShouldSubpixelPositionFonts(cgContext.get(), true);
+-    CGContextSetShouldSubpixelQuantizeFonts(cgContext.get(), doSubpixelQuantization);
++    CGContextSetShouldSubpixelPositionFonts(cgContext, true);
++    CGContextSetShouldSubpixelQuantizeFonts(cgContext, doSubpixelQuantization);
+ }
+ 
+ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::span<const GlyphBufferGlyph> glyphs, std::span<const GlyphBufferAdvance> advances, const FloatPoint& anchorPoint, FontSmoothingMode smoothingMode)
+@@ -313,7 +331,9 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
+         return;
+     }
+ 
+-    RetainPtr<CGContextRef> cgContext = context.platformContext();
++    // The GraphicsContext owns this context for the whole call; a RetainPtr here would only
++    // add a CFRetain/CFRelease pair per glyph run.
++    CGContextRef cgContext = context.platformContext();
+ 
+     if (!font.allowsAntialiasing())
+         smoothingMode = FontSmoothingMode::None;
+@@ -337,29 +357,37 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
+ #if PLATFORM(IOS_FAMILY)
+     UNUSED_VARIABLE(shouldSmoothFonts);
+ #else
+-    bool originalShouldUseFontSmoothing = CGContextGetShouldSmoothFonts(cgContext.get());
++    bool originalShouldUseFontSmoothing = CGContextGetShouldSmoothFonts(cgContext);
+     if (shouldSmoothFonts != originalShouldUseFontSmoothing)
+-        CGContextSetShouldSmoothFonts(cgContext.get(), shouldSmoothFonts);
++        CGContextSetShouldSmoothFonts(cgContext, shouldSmoothFonts);
+ #endif
+ 
+-    bool originalShouldAntialias = CGContextGetShouldAntialias(cgContext.get());
++    bool originalShouldAntialias = CGContextGetShouldAntialias(cgContext);
+     if (shouldAntialias != originalShouldAntialias)
+-        CGContextSetShouldAntialias(cgContext.get(), shouldAntialias);
++        CGContextSetShouldAntialias(cgContext, shouldAntialias);
+ 
+     FloatPoint point = anchorPoint;
+ 
+     auto textMatrix = computeOverallTextMatrix(font);
+-    ScopedTextMatrix restorer(textMatrix, cgContext.get());
++    ScopedTextMatrix restorer(textMatrix, cgContext);
+ 
+-    setCGFontRenderingMode(context);
+-    CGContextSetFontSize(cgContext.get(), platformData.size());
++    setCGFontRenderingMode(context, cgContext);
++    CGContextSetFontSize(cgContext, platformData.size());
+ 
+     auto shadow = context.dropShadow();
+ 
+-    AffineTransform contextCTM = context.getCTM();
++    // Reading the CTM back out of CoreGraphics is only needed for synthetic bold and for
++    // the simple-shadow test, neither of which body text hits.
++    std::optional<AffineTransform> contextCTM;
++    auto ctm = [&]() -> const AffineTransform& {
++        if (!contextCTM)
++            contextCTM = context.getCTM();
++        return *contextCTM;
++    };
++
+     float syntheticBoldOffset = font.syntheticBoldOffset();
+-    if (syntheticBoldOffset && !contextCTM.isIdentityOrTranslationOrFlipped()) {
+-        FloatSize horizontalUnitSizeInDevicePixels = contextCTM.mapSize(FloatSize(1, 0));
++    if (syntheticBoldOffset && !ctm().isIdentityOrTranslationOrFlipped()) {
++        FloatSize horizontalUnitSizeInDevicePixels = ctm().mapSize(FloatSize(1, 0));
+         float horizontalUnitLengthInDevicePixels = sqrtf(horizontalUnitSizeInDevicePixels.width() * horizontalUnitSizeInDevicePixels.width() + horizontalUnitSizeInDevicePixels.height() * horizontalUnitSizeInDevicePixels.height());
+         if (horizontalUnitLengthInDevicePixels) {
+             // Make sure that a scaled down context won't blow up the gap between the glyphs.
+@@ -367,7 +395,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
+         }
+     };
+ 
+-    bool hasSimpleShadow = context.textDrawingMode() == TextDrawingMode::Fill && shadow && shadow->color.isValid() && !shadow->radius && !platformData.isColorBitmapFont() && (!context.shadowsIgnoreTransforms() || contextCTM.isIdentityOrTranslationOrFlipped()) && !context.isInTransparencyLayer();
++    bool hasSimpleShadow = context.textDrawingMode() == TextDrawingMode::Fill && shadow && shadow->color.isValid() && !shadow->radius && !platformData.isColorBitmapFont() && (!context.shadowsIgnoreTransforms() || ctm().isIdentityOrTranslationOrFlipped()) && !context.isInTransparencyLayer();
+     if (hasSimpleShadow) {
+         // Paint simple shadows ourselves instead of relying on CG shadows, to avoid losing subpixel antialiasing.
+         context.clearDropShadow();
+@@ -375,29 +403,29 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
+         Color shadowFillColor = shadow->color.colorWithAlphaMultipliedBy(fillColor.alphaAsFloat());
+         context.setFillColor(shadowFillColor);
+         auto shadowTextOffset = point + context.platformShadowOffset(shadow->offset);
+-        showGlyphsWithAdvances(shadowTextOffset, font, cgContext.get(), glyphs, advances, textMatrix);
++        showGlyphsWithAdvances(shadowTextOffset, font, cgContext, glyphs, advances, textMatrix);
+         if (syntheticBoldOffset) {
+             shadowTextOffset.move(syntheticBoldOffset, 0);
+-            showGlyphsWithAdvances(shadowTextOffset, font, cgContext.get(), glyphs, advances, textMatrix);
++            showGlyphsWithAdvances(shadowTextOffset, font, cgContext, glyphs, advances, textMatrix);
+         }
+         context.setFillColor(fillColor);
+     }
+ 
+-    showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
++    showGlyphsWithAdvances(point, font, cgContext, glyphs, advances, textMatrix);
+ 
+     if (syntheticBoldOffset)
+-        showGlyphsWithAdvances(FloatPoint(point.x() + syntheticBoldOffset, point.y()), font, cgContext.get(), glyphs, advances, textMatrix);
++        showGlyphsWithAdvances(FloatPoint(point.x() + syntheticBoldOffset, point.y()), font, cgContext, glyphs, advances, textMatrix);
+ 
+     if (hasSimpleShadow)
+         context.setDropShadow(*shadow);
+ 
+ #if !PLATFORM(IOS_FAMILY)
+     if (shouldSmoothFonts != originalShouldUseFontSmoothing)
+-        CGContextSetShouldSmoothFonts(cgContext.get(), originalShouldUseFontSmoothing);
++        CGContextSetShouldSmoothFonts(cgContext, originalShouldUseFontSmoothing);
+ #endif
+ 
+     if (shouldAntialias != originalShouldAntialias)
+-        CGContextSetShouldAntialias(cgContext.get(), originalShouldAntialias);
++        CGContextSetShouldAntialias(cgContext, originalShouldAntialias);
+ }
+ 
+ bool FontCascade::primaryFontIsSystemFont() const
 diff --git a/Source/WebCore/platform/graphics/coretext/FontCoreText.cpp b/Source/WebCore/platform/graphics/coretext/FontCoreText.cpp
-index e2c9722db6..962de356f9 100644
+index e2c9722db6..94da2dd578 100644
 --- a/Source/WebCore/platform/graphics/coretext/FontCoreText.cpp
 +++ b/Source/WebCore/platform/graphics/coretext/FontCoreText.cpp
-@@ -621,6 +621,40 @@ GlyphBufferAdvance Font::applyTransforms(GlyphBuffer& glyphBuffer, unsigned begi
+@@ -609,7 +609,9 @@ float Font::platformWidthForGlyph(Glyph glyph) const
+     if (platformData().size()) {
+         bool horizontal = platformData().orientation() == FontOrientation::Horizontal;
+         CTFontOrientation orientation = horizontal || m_isBrokenIdeographFallback ? kCTFontOrientationHorizontal : kCTFontOrientationVertical;
+-        CTFontGetAdvancesForGlyphs(protect(ctFont()).get(), orientation, &glyph, &advance, 1);
++        // m_platformData owns this CTFont; protect() would be a CFRetain/CFRelease pair for
++        // every glyph whose advance is not cached yet.
++        CTFontGetAdvancesForGlyphs(ctFont(), orientation, &glyph, &advance, 1);
+     }
+     return advance.width;
+ }
+@@ -621,6 +623,40 @@ GlyphBufferAdvance Font::applyTransforms(GlyphBuffer& glyphBuffer, unsigned begi
      if (!platformData().size())
          return makeGlyphBufferAdvance();
  
@@ -1177,6 +2176,25 @@ index e2c9722db6..962de356f9 100644
      auto handler = ^(CFRange range, CGGlyph** newGlyphsPointer, CGSize** newAdvancesPointer, CGPoint** newOffsetsPointer, CFIndex** newIndicesPointer)
      {
          range.location = std::min(std::max(range.location, static_cast<CFIndex>(0)), static_cast<CFIndex>(glyphBuffer.size()));
+@@ -788,7 +824,8 @@ FloatRect Font::platformBoundsForGlyph(Glyph glyph) const
+ {
+     FloatRect boundingBox;
+     CGRect ignoredRect = { };
+-    boundingBox = CTFontGetBoundingRectsForGlyphs(protect(ctFont()).get(), platformData().orientation() == FontOrientation::Vertical ? kCTFontOrientationVertical : kCTFontOrientationHorizontal, &glyph, &ignoredRect, 1);
++    // m_platformData owns this CTFont for the duration of the call.
++    boundingBox = CTFontGetBoundingRectsForGlyphs(ctFont(), platformData().orientation() == FontOrientation::Vertical ? kCTFontOrientationVertical : kCTFontOrientationHorizontal, &glyph, &ignoredRect, 1);
+     boundingBox.setY(-boundingBox.maxY());
+     boundingBox.setWidth(boundingBox.width() + m_syntheticBoldOffset);
+ 
+@@ -798,7 +835,7 @@ FloatRect Font::platformBoundsForGlyph(Glyph glyph) const
+ Vector<FloatRect, Font::inlineGlyphRunCapacity> Font::platformBoundsForGlyphs(const Vector<Glyph, inlineGlyphRunCapacity>& glyphs) const
+ {
+     Vector<CGRect, inlineGlyphRunCapacity> rectsForGlyphs(glyphs.size());
+-    CTFontGetBoundingRectsForGlyphs(protect(ctFont()).get(), platformData().orientation() == FontOrientation::Vertical ? kCTFontOrientationVertical : kCTFontOrientationHorizontal, glyphs.span().data(), rectsForGlyphs.mutableSpan().data(), rectsForGlyphs.size());
++    CTFontGetBoundingRectsForGlyphs(ctFont(), platformData().orientation() == FontOrientation::Vertical ? kCTFontOrientationVertical : kCTFontOrientationHorizontal, glyphs.span().data(), rectsForGlyphs.mutableSpan().data(), rectsForGlyphs.size());
+ 
+     return rectsForGlyphs.map<Vector<FloatRect, inlineGlyphRunCapacity>>([&](const auto& rect) -> auto {
+         FloatRect boundingBox(rect);
 diff --git a/Source/WebCore/platform/graphics/cv/CVUtilities.mm b/Source/WebCore/platform/graphics/cv/CVUtilities.mm
 index 2e511734f7..17b1da2ca7 100644
 --- a/Source/WebCore/platform/graphics/cv/CVUtilities.mm
@@ -1197,7 +2215,7 @@ index 2e511734f7..17b1da2ca7 100644
  
  RetainPtr<CVPixelBufferRef> createBlackPixelBuffer(size_t width, size_t height, bool shouldUseIOSurface)
 diff --git a/Source/WebCore/platform/ios/LegacyTileCache.h b/Source/WebCore/platform/ios/LegacyTileCache.h
-index eb4e1ca8b4..511dfdd185 100644
+index eb4e1ca8b4..d93ed43c58 100644
 --- a/Source/WebCore/platform/ios/LegacyTileCache.h
 +++ b/Source/WebCore/platform/ios/LegacyTileCache.h
 @@ -129,6 +129,11 @@ public:
@@ -1212,6 +2230,15 @@ index eb4e1ca8b4..511dfdd185 100644
      void finishedCreatingTiles(bool didCreateTiles, bool createMore);
      FloatRect visibleRectInLayer(CALayer *) const;
      CALayer* hostLayer() const;
+@@ -167,7 +172,7 @@ private:
+     void tileCreationTimerFired();
+ 
+     void drawReplacementImage(LegacyTileLayer *, CGContextRef, CGImageRef);
+-    void drawWindowContent(LegacyTileLayer *, CGContextRef, CGRect dirtyRect, DrawingFlags);
++    void drawWindowContent(LegacyTileLayer *, CGContextRef, CGRect dirtyRect, DrawingFlags, CGRect layerFrame);
+ 
+     WAKWindow *m_window { nullptr };
+ 
 @@ -178,7 +183,37 @@ private:
  
      std::optional<FloatRect> m_overrideVisibleRect;
@@ -1252,7 +2279,7 @@ index eb4e1ca8b4..511dfdd185 100644
      TilingMode m_tilingMode { Normal };
      TilingDirection m_tilingDirection { TilingDirectionDown };
 diff --git a/Source/WebCore/platform/ios/LegacyTileCache.mm b/Source/WebCore/platform/ios/LegacyTileCache.mm
-index d3fd513118..f6726398de 100644
+index d3fd513118..27d05265dc 100644
 --- a/Source/WebCore/platform/ios/LegacyTileCache.mm
 +++ b/Source/WebCore/platform/ios/LegacyTileCache.mm
 @@ -25,6 +25,7 @@
@@ -1292,18 +2319,46 @@ index d3fd513118..f6726398de 100644
  // FIXME: This should go into a WAKViewInternals.h header.
  @interface WAKView (WebViewExtras)
  - (void)_dispatchTileDidDraw:(CALayer *)tile;
-@@ -64,6 +81,10 @@
+@@ -64,6 +81,13 @@
  
  namespace WebCore {
  
 +#if defined(WEBKIT_IOS6)
 +extern "C" int g_webkitIOS6PendingDrawWork;
++// Raised when a _dispatchTileDidDraw: perform is in flight, lowered by
++// -[WebView _dispatchTileDidDraw:] when it runs. See drawLayer().
++extern "C" { int g_webkitIOS6TileDidDrawPending = 0; }
 +#endif
 +
  void LegacyTileCache::ref() const
  {
      [m_window retain];
-@@ -422,7 +443,11 @@ void LegacyTileCache::tileCreationTimerFired()
+@@ -101,10 +125,11 @@ CALayer* LegacyTileCache::hostLayer() const
+ 
+ FloatRect LegacyTileCache::visibleRectInLayer(CALayer *layer) const
+ {
+-    if (m_overrideVisibleRect)
+-        return [layer convertRect:m_overrideVisibleRect.value() fromLayer:hostLayer()];
+-
+-    return [layer convertRect:[m_window extendedVisibleRect] fromLayer:hostLayer()];
++    CALayer *host = [m_window hostLayer];
++    CGRect rect = m_overrideVisibleRect ? CGRect(m_overrideVisibleRect.value()) : [m_window extendedVisibleRect];
++    if (layer == host)
++        return rect;
++    return [layer convertRect:rect fromLayer:host];
+ }
+ 
+ bool LegacyTileCache::setOverrideVisibleRect(const FloatRect& rect)
+@@ -403,7 +428,7 @@ void LegacyTileCache::finishedCreatingTiles(bool didCreateTiles, bool createMore
+             m_zoomedInTileGrid->dropAllTiles();
+         } else if (activeTileGrid() == m_zoomedInTileGrid.get()) {
+             // Pass the minimum possible distance to consider all tiles, even visible ones.
+-            m_zoomedOutTileGrid->dropDistantTiles(0, std::numeric_limits<double>::min());
++            m_zoomedOutTileGrid->dropDistantTiles(0, std::numeric_limits<double>::min(), m_zoomedOutTileGrid->visibleRect());
+         }
+     }
+ 
+@@ -422,7 +447,11 @@ void LegacyTileCache::tileCreationTimerFired()
  
  void LegacyTileCache::createTilesInActiveGrid(SynchronousTileCreationMode mode)
  {
@@ -1315,7 +2370,7 @@ index d3fd513118..f6726398de 100644
          LOG(MemoryPressure, "Under memory pressure at: %s", __PRETTY_FUNCTION__);
          removeAllNonVisibleTilesInternal();
      }
-@@ -433,6 +458,9 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
+@@ -433,6 +462,9 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
  {
      static unsigned capacity;
      if (!capacity) {
@@ -1325,7 +2380,7 @@ index d3fd513118..f6726398de 100644
          size_t totalMemory = ramSize() / 1024 / 1024;
          if (totalMemory >= 1024)
              capacity = 128 * 1024 * 1024;
-@@ -440,6 +468,7 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
+@@ -440,6 +472,7 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
              capacity = 64 * 1024 * 1024;
          else
              capacity = 32 * 1024 * 1024;
@@ -1333,7 +2388,7 @@ index d3fd513118..f6726398de 100644
      }
  
      int gridCapacity;
-@@ -454,6 +483,50 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
+@@ -454,6 +487,50 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
      else
          gridCapacity = capacity;
  
@@ -1384,7 +2439,42 @@ index d3fd513118..f6726398de 100644
      if (keepsZoomedOutTiles() && grid == m_zoomedOutTileGrid.get()) {
          if (activeTileGrid() == m_zoomedOutTileGrid.get())
              return gridCapacity;
-@@ -538,6 +611,16 @@ void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef con
+@@ -508,11 +585,14 @@ void LegacyTileCache::drawReplacementImage(LegacyTileLayer* layer, CGContextRef
+     CGContextDrawImage(context, imageRect, image);
+ }
+ 
+-void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef context, CGRect dirtyRect, DrawingFlags drawingFlags)
++void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef context, CGRect dirtyRect, DrawingFlags drawingFlags, CGRect frame)
+ {
+-    CGRect frame = [layer frame];
+-    FontAntialiasingStateSaver fontAntialiasingState(context, [m_window useOrientationDependentFontAntialiasing] && [layer isOpaque]);
+-    fontAntialiasingState.setup([WAKWindow hasLandscapeOrientation]);
++    // +[WAKWindow hasLandscapeOrientation] calls out to the application's
++    // orientation provider; the saver only looks at it when the style is being
++    // overridden, so it is not asked for otherwise.
++    bool useOrientationDependentFontAntialiasing = [m_window useOrientationDependentFontAntialiasing] && [layer isOpaque];
++    FontAntialiasingStateSaver fontAntialiasingState(context, useOrientationDependentFontAntialiasing);
++    fontAntialiasingState.setup(useOrientationDependentFontAntialiasing && [WAKWindow hasLandscapeOrientation]);
+ 
+     if (drawingFlags == DrawingFlags::Snapshotting)
+         [m_window setIsInSnapshottingPaint:YES];
+@@ -522,6 +602,7 @@ void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef con
+     
+     if (drawRegion && shouldRepaintInPieces(dirtyRect, drawRegion, contentsScale)) {
+         // Use fine grained repaint rectangles to minimize the amount of painted pixels.
++        CALayer *host = hostLayer();
+         CGSRegionEnumeratorObj enumerator = CGSRegionEnumerator(drawRegion);
+         CGRect *subRect;
+         while ((subRect = CGSNextRect(enumerator))) {
+@@ -531,13 +612,23 @@ void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef con
+             adjustedSubRect.size.width /= contentsScale;
+             adjustedSubRect.size.height /= contentsScale;
+ 
+-            CGRect subRectInSuper = [hostLayer() convertRect:adjustedSubRect fromLayer:layer];
++            CGRect subRectInSuper = [host convertRect:adjustedSubRect fromLayer:layer];
+             [m_window displayRect:subRectInSuper];
+         }
+         CGSReleaseRegionEnumerator(enumerator);
      } else {
          // Simple repaint
          CGRect dirtyRectInSuper = [hostLayer() convertRect:dirtyRect fromLayer:layer];
@@ -1401,7 +2491,7 @@ index d3fd513118..f6726398de 100644
          [m_window displayRect:dirtyRectInSuper];
      }
      
-@@ -555,6 +638,7 @@ void LegacyTileCache::drawLayer(LegacyTileLayer* layer, CGContextRef context, Dr
+@@ -555,6 +646,7 @@ void LegacyTileCache::drawLayer(LegacyTileLayer* layer, CGContextRef context, Dr
  
      WKSetCurrentGraphicsContext(context);
  
@@ -1409,15 +2499,59 @@ index d3fd513118..f6726398de 100644
      CGRect dirtyRect = CGContextGetClipBoundingBox(context);
      CGRect frame = [layer frame];
      CGContextTranslateCTM(context, -frame.origin.x, -frame.origin.y);
-@@ -615,6 +699,7 @@ void LegacyTileCache::scheduleRenderingUpdateForPendingRepaint()
+@@ -564,7 +656,7 @@ void LegacyTileCache::drawLayer(LegacyTileLayer* layer, CGContextRef context, Dr
+     if (RetainPtr<CGImage> contentReplacementImage = this->contentReplacementImage())
+         drawReplacementImage(layer, context, contentReplacementImage.get());
+     else
+-        drawWindowContent(layer, context, dirtyRect, drawingFlags);
++        drawWindowContent(layer, context, dirtyRect, drawingFlags, frame);
+ 
+     ++layer.paintCount;
+     if (m_tilePaintCountersVisible) {
+@@ -599,7 +691,24 @@ void LegacyTileCache::drawLayer(LegacyTileLayer* layer, CGContextRef context, Dr
+     }
+ 
+     WAKView* view = [m_window contentView];
++#if defined(WEBKIT_IOS6)
++    // One outstanding "tiles drew" notification, not one per tile.
++    //
++    // -[WebView _dispatchTileDidDraw:] reports the first paint of a load and
++    // returns immediately on every call after it, but the delayed perform that
++    // carries it allocates a timer and wakes the run loop each time. On the web
++    // thread that wake is a whole extra turn of the loop, which means another
++    // acquire and release of the web lock plus an autorelease pool - paid once
++    // per tile, per drawing pass. The flag is lowered by the callback itself, so
++    // no notification is dropped: a pass that finds one already in flight is a
++    // pass whose notification has not been delivered yet.
++    if (view && !g_webkitIOS6TileDidDrawPending) {
++        g_webkitIOS6TileDidDrawPending = 1;
++        [view performSelector:@selector(_dispatchTileDidDraw:) withObject:layer afterDelay:0.0];
++    }
++#else
+     [view performSelector:@selector(_dispatchTileDidDraw:) withObject:layer afterDelay:0.0];
++#endif
+ }
+ 
+ void LegacyTileCache::setNeedsDisplay()
+@@ -615,8 +724,17 @@ void LegacyTileCache::scheduleRenderingUpdateForPendingRepaint()
  
  void LegacyTileCache::setNeedsDisplayInRect(const IntRect& dirtyRect)
  {
 +    g_webkitIOS6PendingDrawWork = 1;
      Locker locker { m_savedDisplayRectMutex };
      bool addedFirstRect = m_savedDisplayRects.isEmpty();
++#if defined(WEBKIT_IOS6)
++    // A repaint contained in one already queued invalidates exactly the same
++    // pixels of exactly the same tiles, so queueing it only makes
++    // flushSavedDisplayRects() walk the grid again for nothing. Pages that
++    // invalidate an element and then its parent do this constantly.
++    if (!addedFirstRect && m_savedDisplayRects.last().contains(dirtyRect))
++        return;
++#endif
      m_savedDisplayRects.append(dirtyRect);
-@@ -665,6 +750,11 @@ bool LegacyTileCache::isTileCreationSuspended() const
+     if (!addedFirstRect)
+         return;
+@@ -665,6 +783,11 @@ bool LegacyTileCache::isTileCreationSuspended() const
  
  bool LegacyTileCache::isTileInvalidationSuspended() const 
  { 
@@ -1429,7 +2563,7 @@ index d3fd513118..f6726398de 100644
      return m_tilingMode == Zooming || m_tilingMode == Panning || m_tilingMode == ScrollToTop || m_tilingMode == Disabled; 
  }
  
-@@ -766,6 +856,62 @@ void LegacyTileCache::setSpeculativeTileCreationEnabled(bool enabled)
+@@ -766,6 +889,62 @@ void LegacyTileCache::setSpeculativeTileCreationEnabled(bool enabled)
          m_tileCreationTimer.startOneShot(0_s);
  }
  
@@ -1492,7 +2626,7 @@ index d3fd513118..f6726398de 100644
  void LegacyTileCache::prepareToDraw()
  {
      // This will trigger document relayout if needed.
-@@ -775,6 +921,9 @@ void LegacyTileCache::prepareToDraw()
+@@ -775,6 +954,9 @@ void LegacyTileCache::prepareToDraw()
          Locker locker { m_tileMutex };
          flushSavedDisplayRects();
      }
@@ -1503,13 +2637,67 @@ index d3fd513118..f6726398de 100644
  
  void LegacyTileCache::setLayerPoolCapacity(unsigned capacity)
 diff --git a/Source/WebCore/platform/ios/LegacyTileGrid.h b/Source/WebCore/platform/ios/LegacyTileGrid.h
-index fff86bd211..c617a4722e 100644
+index fff86bd211..cd8df49452 100644
 --- a/Source/WebCore/platform/ios/LegacyTileGrid.h
 +++ b/Source/WebCore/platform/ios/LegacyTileGrid.h
-@@ -106,7 +106,9 @@ private:
+@@ -70,16 +70,18 @@ public:
+ 
+     void dropAllTiles();
+     void dropInvalidTiles();
++    void dropInvalidTiles(const IntRect& bounds);
+     void dropTilesOutsideRect(const IntRect&);
+     void dropTilesIntersectingRect(const IntRect&);
+     // Drops tiles that intersect dropRect but do not intersect keepRect.
+     void dropTilesBetweenRects(const IntRect& dropRect, const IntRect& keepRect);
+-    bool dropDistantTiles(unsigned tilesNeeded, double shortestDistance);
++    bool dropDistantTiles(unsigned tilesNeeded, double shortestDistance, const IntRect& visibleRect);
+ 
+     void addTilesCoveringRect(const IntRect&);
+ 
+     bool tilesCover(const IntRect&) const;
+     void centerTileGridOrigin(const IntRect& visibleRect);
++    void centerTileGridOrigin(const IntRect& visibleRect, const IntRect& bounds);
+     void invalidateTiles(const IntRect& dirtyRect);
+ 
+     void updateTileOpacity();
+@@ -89,24 +91,40 @@ public:
+ 
+     bool hasTiles() const { return !m_tiles.isEmpty(); }
+ 
+-    IntRect calculateCoverRect(const IntRect& visibleRect, bool& centerGrid);
++    IntRect calculateCoverRect(const IntRect& visibleRect, bool& centerGrid, bool useMinimalCoverage);
++    IntRect calculateCoverRect(const IntRect& visibleRect, bool& centerGrid) { return calculateCoverRect(visibleRect, centerGrid, shouldUseMinimalTileCoverage()); }
+ 
+     // Logging
+     void dumpTiles();
+ 
+ private:
+-    double tileDistance2(const IntRect& visibleRect, const IntRect& tileRect) const;
++    // The direction-dependent part of tileDistance2() depends only on the
++    // visible rect and the tiling direction, not on the tile, so it is computed
++    // once per pass instead of once per candidate tile.
++    struct TileDistanceMetrics {
++        IntPoint visibleCenter;
++        double xScaleLeftward;
++        double xScaleRightward;
++        double yScaleUpward;
++        double yScaleDownward;
++    };
++    TileDistanceMetrics distanceMetricsFor(const IntRect& visibleRect) const;
++    static double tileDistance2(const IntRect& visibleRect, const IntRect& tileRect, const TileDistanceMetrics&);
+     unsigned tileByteSize() const;
+ 
+     void addTileForIndex(const TileIndex&);
++    void addTileForIndex(const TileIndex&, const IntRect& bounds);
+ 
+     RefPtr<LegacyTileGridTile> tileForIndex(const TileIndex&) const;
+     IntRect tileRectForIndex(const TileIndex&) const;
++    IntRect tileRectForIndex(const TileIndex&, const IntRect& bounds) const;
+     RefPtr<LegacyTileGridTile> tileForPoint(const IntPoint&) const;
      TileIndex tileIndexForPoint(const IntPoint&) const;
  
-     IntRect adjustCoverRectForPageBounds(const IntRect&) const;
+-    IntRect adjustCoverRectForPageBounds(const IntRect&) const;
++    IntRect adjustCoverRectForPageBounds(const IntRect&, bool useMinimalCoverage) const;
 +public:
      bool shouldUseMinimalTileCoverage() const;
 +private:
@@ -1517,7 +2705,7 @@ index fff86bd211..c617a4722e 100644
  private:        
      WeakRef<LegacyTileCache> m_tileCache;
 diff --git a/Source/WebCore/platform/ios/LegacyTileGrid.mm b/Source/WebCore/platform/ios/LegacyTileGrid.mm
-index 0c75b3f923..6077c84d78 100644
+index 0c75b3f923..1a793a1ed2 100644
 --- a/Source/WebCore/platform/ios/LegacyTileGrid.mm
 +++ b/Source/WebCore/platform/ios/LegacyTileGrid.mm
 @@ -41,6 +41,21 @@
@@ -1542,7 +2730,119 @@ index 0c75b3f923..6077c84d78 100644
  namespace WebCore {
  
  WTF_MAKE_TZONE_ALLOCATED_IMPL(LegacyTileGrid);
-@@ -222,8 +237,11 @@ void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect)
+@@ -88,7 +103,7 @@ void LegacyTileGrid::dropTilesOutsideRect(const IntRect& keepRect)
+ 
+ void LegacyTileGrid::dropTilesBetweenRects(const IntRect& dropRect, const IntRect& keepRect)
+ {
+-    Vector<TileIndex> toRemove;
++    Vector<TileIndex, 16> toRemove;
+     for (const auto& tile : m_tiles) {
+         const TileIndex& index = tile.key;
+         IntRect tileRect = tile.value->rect();
+@@ -113,12 +128,17 @@ static bool isFartherAway(const std::pair<double, T>& a, const std::pair<double,
+     return a.first > b.first;
+ }
+ 
+-bool LegacyTileGrid::dropDistantTiles(unsigned tilesNeeded, double shortestDistance)
++bool LegacyTileGrid::dropDistantTiles(unsigned tilesNeeded, double shortestDistance, const IntRect& visibleRect)
+ {
+-    unsigned bytesPerTile = tileByteSize();
++    // One protective reference for both queries: taking it retains and releases
++    // the window, and tileByteSize() would take a second one of its own.
++    Ref tileCache = m_tileCache.get();
++    IntSize tilePixelSize = m_tileSize;
++    tilePixelSize.scale(tileCache->screenScale());
++    unsigned bytesPerTile = LegacyTileLayerPool::bytesBackingLayerWithPixelSize(tilePixelSize);
+     unsigned bytesNeeded = tilesNeeded * bytesPerTile;
+     unsigned bytesUsed = tileCount() * bytesPerTile;
+-    unsigned maximumBytes = protect(tileCache())->tileCapacityForGrid(this);
++    unsigned maximumBytes = tileCache->tileCapacityForGrid(this);
+ 
+     int bytesToReclaim = int(bytesUsed) - (int(maximumBytes) - bytesNeeded);
+     if (bytesToReclaim <= 0)
+@@ -126,12 +146,12 @@ bool LegacyTileGrid::dropDistantTiles(unsigned tilesNeeded, double shortestDista
+ 
+     unsigned tilesToRemoveCount = bytesToReclaim / bytesPerTile;
+ 
+-    IntRect visibleRect = this->visibleRect();
+-    Vector<std::pair<double, TileIndex>> toRemove;
++    const TileDistanceMetrics metrics = distanceMetricsFor(visibleRect);
++    Vector<std::pair<double, TileIndex>, 16> toRemove;
+     for (const auto& tile : m_tiles) {
+         const TileIndex& index = tile.key;
+         const IntRect& tileRect = tile.value->rect();
+-        double distance = tileDistance2(visibleRect, tileRect);
++        double distance = tileDistance2(visibleRect, tileRect, metrics);
+         if (distance <= shortestDistance)
+             continue;
+         toRemove.append(std::make_pair(distance, index));
+@@ -154,8 +174,9 @@ bool LegacyTileGrid::dropDistantTiles(unsigned tilesNeeded, double shortestDista
+ void LegacyTileGrid::addTilesCoveringRect(const IntRect& rectToCover)
+ {
+     // We never draw anything outside of our bounds.
++    const IntRect bounds = this->bounds();
+     IntRect rect(rectToCover);
+-    rect.intersect(bounds());
++    rect.intersect(bounds);
+     if (rect.isEmpty())
+         return;
+ 
+@@ -165,14 +186,19 @@ void LegacyTileGrid::addTilesCoveringRect(const IntRect& rectToCover)
+         for (int xIndex = topLeftIndex.x(); xIndex <= bottomRightIndex.x(); ++xIndex) {
+             TileIndex index(xIndex, yIndex);
+             if (!tileForIndex(index))
+-                addTileForIndex(index);
++                addTileForIndex(index, bounds);
+         }
+     }
+ }
+ 
+ void LegacyTileGrid::addTileForIndex(const TileIndex& index)
+ {
+-    m_tiles.set(index, LegacyTileGridTile::create(this, tileRectForIndex(index)));
++    addTileForIndex(index, bounds());
++}
++
++void LegacyTileGrid::addTileForIndex(const TileIndex& index, const IntRect& bounds)
++{
++    m_tiles.set(index, LegacyTileGridTile::create(this, tileRectForIndex(index, bounds)));
+ }
+ 
+ CALayer* LegacyTileGrid::tileHostLayer() const
+@@ -191,12 +217,19 @@ RefPtr<LegacyTileGridTile> LegacyTileGrid::tileForIndex(const TileIndex& index)
+ }
+ 
+ IntRect LegacyTileGrid::tileRectForIndex(const TileIndex& index) const
++{
++    return tileRectForIndex(index, bounds());
++}
++
++// bounds() is a message send to the host layer. Callers that walk a range of
++// indices read it once and pass it in.
++IntRect LegacyTileGrid::tileRectForIndex(const TileIndex& index, const IntRect& bounds) const
+ {
+     IntRect rect(index.x() * m_tileSize.width() - (m_origin.x() ? m_tileSize.width() - m_origin.x() : 0),
+                  index.y() * m_tileSize.height() - (m_origin.y() ? m_tileSize.height() - m_origin.y() : 0),
+                  m_tileSize.width(),
+                  m_tileSize.height());
+-    rect.intersect(bounds());
++    rect.intersect(bounds);
+     return rect;
+ }
+ 
+@@ -210,6 +243,11 @@ LegacyTileGrid::TileIndex LegacyTileGrid::tileIndexForPoint(const IntPoint& poin
+ }
+ 
+ void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect)
++{
++    centerTileGridOrigin(visibleRect, bounds());
++}
++
++void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect, const IntRect& bounds)
+ {
+     if (visibleRect.isEmpty())
+         return;
+@@ -222,11 +260,14 @@ void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect)
      unsigned currentVerticalTiles = currentBottomRightIndex.y() - currentTopLeftIndex.y() + 1;
  
      // If we have tiles already, only center if we would get benefits from both directions (as we need to throw out existing tiles).
@@ -1554,8 +2854,12 @@ index 0c75b3f923..6077c84d78 100644
 +    }
  
      IntPoint newOrigin(0, 0);
-     IntSize size = bounds().size();
-@@ -238,9 +256,14 @@ void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect)
+-    IntSize size = bounds().size();
++    IntSize size = bounds.size();
+     if (size.width() > m_tileSize.width()) {
+         newOrigin.setX((visibleRect.x() - (minimumHorizontalTiles * m_tileSize.width() - visibleRect.width()) / 2) % m_tileSize.width());
+         if (newOrigin.x() < 0)
+@@ -238,9 +279,14 @@ void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect)
              newOrigin.setY(0);
      }
  
@@ -1572,7 +2876,86 @@ index 0c75b3f923..6077c84d78 100644
      m_tiles.clear();
      m_origin = newOrigin;
  }
-@@ -393,9 +416,34 @@ void LegacyTileGrid::invalidateTiles(const IntRect& dirtyRect)
+@@ -258,16 +304,18 @@ bool LegacyTileGrid::tilesCover(const IntRect& rect) const
+ 
+ void LegacyTileGrid::updateTileOpacity()
+ {
++    const BOOL opaque = m_tileCache->tilesOpaque();
+     TileMap::iterator end = m_tiles.end();
+     for (TileMap::iterator it = m_tiles.begin(); it != end; ++it)
+-        [it->value->tileLayer() setOpaque:m_tileCache->tilesOpaque()];
++        [it->value->tileLayer() setOpaque:opaque];
+ }
+ 
+ void LegacyTileGrid::updateTileBorderVisibility()
+ {
++    const bool visible = protect(m_tileCache)->tileBordersVisible();
+     TileMap::iterator end = m_tiles.end();
+     for (TileMap::iterator it = m_tiles.begin(); it != end; ++it)
+-        it->value->showBorder(protect(m_tileCache)->tileBordersVisible());
++        it->value->showBorder(visible);
+ }
+ 
+ unsigned LegacyTileGrid::tileCount() const
+@@ -277,7 +325,8 @@ unsigned LegacyTileGrid::tileCount() const
+ 
+ bool LegacyTileGrid::checkDoSingleTileLayout()
+ {
+-    IntSize size = bounds().size();
++    const IntRect bounds = this->bounds();
++    IntSize size = bounds.size();
+     if (size.width() > m_tileSize.width() || size.height() > m_tileSize.height())
+         return false;
+ 
+@@ -286,7 +335,7 @@ bool LegacyTileGrid::checkDoSingleTileLayout()
+         m_origin = IntPoint(0, 0);
+     }
+ 
+-    dropInvalidTiles();
++    dropInvalidTiles(bounds);
+ 
+     if (size.isEmpty()) {
+         ASSERT(!m_tiles.get(TileIndex(0, 0)));
+@@ -295,7 +344,7 @@ bool LegacyTileGrid::checkDoSingleTileLayout()
+ 
+     TileIndex originIndex(0, 0);
+     if (!m_tiles.get(originIndex))
+-        m_tiles.set(originIndex, LegacyTileGridTile::create(this, tileRectForIndex(originIndex)));
++        m_tiles.set(originIndex, LegacyTileGridTile::create(this, tileRectForIndex(originIndex, bounds)));
+ 
+     return true;
+ }
+@@ -317,13 +366,17 @@ void LegacyTileGrid::updateHostLayerSize()
+ 
+ void LegacyTileGrid::dropInvalidTiles()
+ {
+-    IntRect bounds = this->bounds();
++    dropInvalidTiles(bounds());
++}
++
++void LegacyTileGrid::dropInvalidTiles(const IntRect& bounds)
++{
+     IntRect dropBounds = intersection(m_validBounds, bounds);
+-    Vector<TileIndex> toRemove;
++    Vector<TileIndex, 16> toRemove;
+     for (const auto& tile : m_tiles) {
+         const TileIndex& index = tile.key;
+         const IntRect& tileRect = tile.value->rect();
+-        IntRect expectedTileRect = tileRectForIndex(index);
++        IntRect expectedTileRect = tileRectForIndex(index, bounds);
+         if (expectedTileRect != tileRect || !dropBounds.contains(tileRect))
+             toRemove.append(index);
+     }
+@@ -347,7 +400,7 @@ void LegacyTileGrid::invalidateTiles(const IntRect& dirtyRect)
+         m_validBounds = bounds;
+     }
+ 
+-    Vector<TileIndex> invalidatedTiles;
++    Vector<TileIndex, 16> invalidatedTiles;
+ 
+     if (dirtyRect.width() > m_tileSize.width() * 4 || dirtyRect.height() > m_tileSize.height() * 4) {
+         // For large invalidates, iterate over live tiles.
+@@ -393,12 +446,37 @@ void LegacyTileGrid::invalidateTiles(const IntRect& dirtyRect)
  
  bool LegacyTileGrid::shouldUseMinimalTileCoverage() const
  {
@@ -1609,13 +2992,30 @@ index 0c75b3f923..6077c84d78 100644
 +    return minimalMode || noSpeculative || underPressure;
  }
  
- IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
-@@ -420,15 +468,40 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
+-IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
++IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect, bool useMinimalCoverage) const
+ {
+     // Adjust the rect so that it stays within the bounds and keeps the pixel size.
+     IntRect bounds = this->bounds();
+@@ -408,7 +486,7 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
+     adjustedRect.move(rect.maxX() > bounds.maxX() ? bounds.maxX() - rect.maxX() : 0,
+               rect.maxY() > bounds.maxY() ? bounds.maxY() - rect.maxY() : 0);
+     adjustedRect = intersection(bounds, adjustedRect);
+-    if (adjustedRect == rect || adjustedRect.isEmpty() || shouldUseMinimalTileCoverage())
++    if (adjustedRect == rect || adjustedRect.isEmpty() || useMinimalCoverage)
+         return adjustedRect;
+     int pixels = adjustedRect.width() * adjustedRect.height();
+     if (adjustedRect.width() != rect.width())
+@@ -418,30 +496,47 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
+     return intersection(adjustedRect, bounds);
+ }
  
- IntRect LegacyTileGrid::calculateCoverRect(const IntRect& visibleRect, bool& centerGrid)
+-IntRect LegacyTileGrid::calculateCoverRect(const IntRect& visibleRect, bool& centerGrid)
++IntRect LegacyTileGrid::calculateCoverRect(const IntRect& visibleRect, bool& centerGrid, bool useMinimalCoverage)
  {
 -    // Use minimum coverRect if we are under memory pressure.
-     if (shouldUseMinimalTileCoverage()) {
+-    if (shouldUseMinimalTileCoverage()) {
++    if (useMinimalCoverage) {
          centerGrid = true;
          return visibleRect;
      }
@@ -1649,11 +3049,64 @@ index 0c75b3f923..6077c84d78 100644
 +    }();
      coverRect.inflateX(visibleRect.width() / 2);
 -    coverRect.inflateY(visibleRect.height());
+-    return adjustCoverRectForPageBounds(coverRect);
 +    coverRect.inflateY(visibleRect.height() * verticalScreens / 2);
-     return adjustCoverRectForPageBounds(coverRect);
++    return adjustCoverRectForPageBounds(coverRect, false);
  }
  
-@@ -484,6 +557,18 @@ double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect&
+-double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect& tileRect) const
++LegacyTileGrid::TileDistanceMetrics LegacyTileGrid::distanceMetricsFor(const IntRect& visibleRect) const
+ {
+-    // The "distance" calculated here is used to pick which tile to cache next. The idea is to create those
+-    // closest to the current viewport first so the user is more likely to see already rendered content we she
+-    // scrolls. The calculation is weighted to prefer vertical and downward direction.
+-    if (visibleRect.intersects(tileRect))
+-        return 0;
+-    IntPoint visibleCenter = visibleRect.location() + IntSize(visibleRect.width() / 2, visibleRect.height() / 2);
+-    IntPoint tileCenter = tileRect.location() + IntSize(tileRect.width() / 2, tileRect.height() / 2);
+-    
+     double horizontalBias = 1.0;
+     double leftwardBias = 1.0;
+     double rightwardBias = 1.0;
+@@ -472,51 +567,95 @@ double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect&
+         break;
+     }
+ 
+-    double xScale = horizontalBias * visibleRect.height() / visibleRect.width() * (tileCenter.x() >= visibleCenter.x() ? rightwardBias : leftwardBias);
+-    double yScale = verticalBias * visibleRect.width() / visibleRect.height() * (tileCenter.y() >= visibleCenter.y() ? downwardBias : upwardBias);
++    double aspectX = horizontalBias * visibleRect.height() / visibleRect.width();
++    double aspectY = verticalBias * visibleRect.width() / visibleRect.height();
++
++    return TileDistanceMetrics {
++        visibleRect.location() + IntSize(visibleRect.width() / 2, visibleRect.height() / 2),
++        aspectX * leftwardBias,
++        aspectX * rightwardBias,
++        aspectY * upwardBias,
++        aspectY * downwardBias
++    };
++}
++
++// The "distance" calculated here is used to pick which tile to cache next. The idea is to create those
++// closest to the current viewport first so the user is more likely to see already rendered content we she
++// scrolls. The calculation is weighted to prefer vertical and downward direction.
++double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect& tileRect, const TileDistanceMetrics& metrics)
++{
++    if (visibleRect.intersects(tileRect))
++        return 0;
++    IntPoint tileCenter = tileRect.location() + IntSize(tileRect.width() / 2, tileRect.height() / 2);
++
++    int dx = tileCenter.x() - metrics.visibleCenter.x();
++    int dy = tileCenter.y() - metrics.visibleCenter.y();
+ 
+-    double xDistance = xScale * (tileCenter.x() - visibleCenter.x());
+-    double yDistance = yScale * (tileCenter.y() - visibleCenter.y());
++    double xDistance = (dx >= 0 ? metrics.xScaleRightward : metrics.xScaleLeftward) * dx;
++    double yDistance = (dy >= 0 ? metrics.yScaleDownward : metrics.yScaleUpward) * dy;
+ 
+-    double distance2 = xDistance * xDistance + yDistance * yDistance;
+-    return distance2;
++    return xDistance * xDistance + yDistance * yDistance;
+ }
  
  void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode creationMode)
  {
@@ -1672,16 +3125,46 @@ index 0c75b3f923..6077c84d78 100644
      IntRect visibleRect = this->visibleRect();
      if (visibleRect.isEmpty())
          return;
-@@ -505,6 +590,8 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
-     Vector<LegacyTileGrid::TileIndex> tilesToCreate;
+ 
++    // bounds() and shouldUseMinimalTileCoverage() are a layer message send and a
++    // memory-pressure query respectively, and neither changes inside one pass.
++    IntRect bounds = this->bounds();
++    const bool coverRectIsOnlyTheViewport = shouldUseMinimalTileCoverage();
++
+     // Drop tiles that are wrong size or outside the frame (because the frame has been resized).
+-    dropInvalidTiles();
++    dropInvalidTiles(bounds);
+ 
+     bool centerGrid;
+-    IntRect coverRect = calculateCoverRect(visibleRect, centerGrid);
++    IntRect coverRect = calculateCoverRect(visibleRect, centerGrid, coverRectIsOnlyTheViewport);
+ 
+     // If tile size is bigger than the view, centering minimizes the painting needed to cover the screen.
+-    // This is especially useful after zooming 
++    // This is especially useful after zooming
+     centerGrid = centerGrid || !tileCount();
+     if (centerGrid)
+-        centerTileGridOrigin(visibleRect);
++        centerTileGridOrigin(visibleRect, bounds);
+ 
+     double shortestDistance = std::numeric_limits<double>::infinity();
+     double coveredDistance = 0;
+-    Vector<LegacyTileGrid::TileIndex> tilesToCreate;
++    Vector<LegacyTileGrid::TileIndex, 16> tilesToCreate;
      unsigned pendingTileCount = 0;
  
-+    bool coverRectIsOnlyTheViewport = shouldUseMinimalTileCoverage();
++    const TileDistanceMetrics metrics = distanceMetricsFor(visibleRect);
 +
      LegacyTileGrid::TileIndex topLeftIndex = tileIndexForPoint(topLeft(coverRect));
      LegacyTileGrid::TileIndex bottomRightIndex = tileIndexForPoint(bottomRight(coverRect));
      for (int yIndex = topLeftIndex.y(); yIndex <= bottomRightIndex.y(); ++yIndex) {
-@@ -517,6 +604,11 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+         for (int xIndex = topLeftIndex.x(); xIndex <= bottomRightIndex.x(); ++xIndex) {
+             LegacyTileGrid::TileIndex index(xIndex, yIndex);
+             // Currently visible tiles have distance of 0 and get all created in the same transaction.
+-            double distance = tileDistance2(visibleRect, tileRectForIndex(index));
++            double distance = tileDistance2(visibleRect, tileRectForIndex(index, bounds), metrics);
+             if (distance > coveredDistance)
+                 coveredDistance = distance;
              if (tileForIndex(index))
                  continue;
              ++pendingTileCount;
@@ -1693,25 +3176,88 @@ index 0c75b3f923..6077c84d78 100644
              if (distance > shortestDistance)
                  continue;
              if (distance < shortestDistance) {
-@@ -549,6 +641,18 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -537,7 +676,7 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+     // Even if we don't create any tiles, we should still drop distant tiles
+     // in case coverRect got smaller.
+     double keepDistance = std::min(shortestDistance, coveredDistance);
+-    if (!dropDistantTiles(tilesToCreateCount, keepDistance))
++    if (!dropDistantTiles(tilesToCreateCount, keepDistance, visibleRect))
+         return;
+ 
+     ASSERT(pendingTileCount >= tilesToCreateCount);
+@@ -545,10 +684,21 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+         return;
+ 
+     for (size_t n = 0; n < tilesToCreateCount; ++n)
+-        addTileForIndex(tilesToCreate[n]);
++        addTileForIndex(tilesToCreate[n], bounds);
  
      bool didCreateTiles = !!tilesToCreateCount;
      bool createMoreTiles = pendingTileCount > tilesToCreateCount;
 +
 +    static unsigned reportTick = 0;
-+    if (!(reportTick++ % 8)) {
-+        double tileBytes = (double)m_tiles.size() * m_tileSize.width() * m_tileSize.height() * 4.0;
-+        if (engineChatterEnabled()) WTFLogAlways("[tiles] %u tiles of %dx%d (%.1f MB each) = %.1f MB, coverRect %dx%d, doc %dx%d",
++    if (engineChatterEnabled() && !(reportTick++ % 8)) {
++        WTFLogAlways("[tiles] %u tiles of %dx%d (%.1f MB each) = %.1f MB, coverRect %dx%d, doc %dx%d",
 +            (unsigned)m_tiles.size(), m_tileSize.width(), m_tileSize.height(),
 +            tileByteSize() / (1024.0 * 1024.0),
 +            (double)m_tiles.size() * tileByteSize() / (1024.0 * 1024.0),
 +            coverRect.width(), coverRect.height(),
-+            tileCache().tileControllerShouldUseLowScaleTiles() ? 0 : bounds().width(), bounds().height());
++            tileCache().tileControllerShouldUseLowScaleTiles() ? 0 : bounds.width(), bounds.height());
 +    }
 +
      protect(tileCache())->finishedCreatingTiles(didCreateTiles, createMoreTiles);
  }
  
+diff --git a/Source/WebCore/platform/ios/LegacyTileGridTile.mm b/Source/WebCore/platform/ios/LegacyTileGridTile.mm
+index b5fa48d5f0..1c1eb5a7af 100644
+--- a/Source/WebCore/platform/ios/LegacyTileGridTile.mm
++++ b/Source/WebCore/platform/ios/LegacyTileGridTile.mm
+@@ -65,15 +65,29 @@ LegacyTileGridTile::LegacyTileGridTile(LegacyTileGrid* tileGrid, const IntRect&
+     }
+     LegacyTileLayer* layer = m_tileLayer.get();
+ 
+-    if (NSString *formatString = contentsFormatString(PlatformCALayer::contentsFormatForLayer()))
+-        layer.contentsFormat = formatString;
++    // Most of these layers come back out of the pool, where this same code put
++    // them, so the values are already what they are about to be set to. A CA
++    // setter is a write into the layer's transaction and, for contentsScale and
++    // contentsFormat, an invalidation of its backing store; a getter is not. Only
++    // the differences are written.
++    if (NSString *formatString = contentsFormatString(PlatformCALayer::contentsFormatForLayer())) {
++        if (![formatString isEqualToString:layer.contentsFormat])
++            layer.contentsFormat = formatString;
++    }
+ 
+     [layer setTileGrid:tileGrid];
+-    [layer setOpaque:tileCache->tilesOpaque()];
+-    [layer setEdgeAntialiasingMask:0];
+-    [layer setNeedsLayoutOnGeometryChange:NO];
+-    [layer setContentsScale:screenScale];
+-    [layer setDrawsAsynchronously:tileCache->acceleratedDrawingEnabled()];
++    const BOOL opaque = tileCache->tilesOpaque();
++    if ([layer isOpaque] != opaque)
++        [layer setOpaque:opaque];
++    if ([layer edgeAntialiasingMask])
++        [layer setEdgeAntialiasingMask:0];
++    if ([layer needsLayoutOnGeometryChange])
++        [layer setNeedsLayoutOnGeometryChange:NO];
++    if ([layer contentsScale] != screenScale)
++        [layer setContentsScale:screenScale];
++    const BOOL drawsAsynchronously = tileCache->acceleratedDrawingEnabled();
++    if ([layer drawsAsynchronously] != drawsAsynchronously)
++        [layer setDrawsAsynchronously:drawsAsynchronously];
+ 
+     // Host layer may have other sublayers. Keep the tile layers at the beginning of the array
+     // so they are painted behind everything else.
+@@ -128,6 +142,8 @@ void LegacyTileGridTile::showBorder(bool flag)
+         [layer setBorderColor:cachedCGColor(protect(m_tileGrid->tileCache())->colorForGridTileBorder(m_tileGrid)).get()];
+         [layer setBorderWidth:0.5f];
+     } else {
++        if (!layer.borderWidth && !layer.borderColor)
++            return;
+         [layer setBorderColor:nil];
+         [layer setBorderWidth:0];
+     }
 diff --git a/Source/WebCore/platform/ios/LegacyTileLayer.mm b/Source/WebCore/platform/ios/LegacyTileLayer.mm
 index 7283aae22a..52637587ef 100644
 --- a/Source/WebCore/platform/ios/LegacyTileLayer.mm
@@ -2099,6 +3645,130 @@ index 564c5a0031..6c6366c6e2 100644
  
  // Scroll Wheel
  @property(nonatomic, readonly) float deltaX;
+diff --git a/Source/WebCore/platform/ios/wak/WAKView.mm b/Source/WebCore/platform/ios/wak/WAKView.mm
+index a14de1fb2a..634d9b092b 100644
+--- a/Source/WebCore/platform/ios/wak/WAKView.mm
++++ b/Source/WebCore/platform/ios/wak/WAKView.mm
+@@ -40,6 +40,8 @@
+ #import "WebEvent.h"
+ #import <wtf/Assertions.h>
+ #import <wtf/NeverDestroyed.h>
++#import <wtf/RetainPtr.h>
++#import <wtf/Vector.h>
+ 
+ WEBCORE_EXPORT NSString *WAKViewFrameSizeDidChangeNotification =   @"WAKViewFrameSizeDidChangeNotification";
+ WEBCORE_EXPORT NSString *WAKViewDidScrollNotification =            @"WAKViewDidScrollNotification";
+@@ -57,6 +59,26 @@ static void setGlobalFocusView(WAKView *view)
+     globalFocusView() = view;
+ }
+ 
++// -[WAKView subviews] builds an autoreleased NSMutableArray of wrappers on every
++// call. The paint and layout paths walk the subviews on every frame and only
++// need a snapshot that keeps the views alive, so they take one on the stack.
++using SubviewSnapshot = Vector<RetainPtr<WAKView>, 8>;
++
++static void snapshotSubviews(WKViewRef viewRef, SubviewSnapshot& result)
++{
++    CFArrayRef subviews = viewRef ? WKViewGetSubviews(viewRef) : nullptr;
++    if (!subviews)
++        return;
++    CFIndex count = CFArrayGetCount(subviews);
++    if (!count)
++        return;
++    result.reserveCapacity(count);
++    for (CFIndex i = 0; i < count; ++i) {
++        if (WAKView *view = WAKViewForWKViewRef(static_cast<WKViewRef>(const_cast<void*>(CFArrayGetValueAtIndex(subviews, i)))))
++            result.append(retainPtr(view));
++    }
++}
++
+ static WAKScrollView *enclosingScrollView(WAKView *view)
+ {
+     view = [view superview];
+@@ -108,11 +130,23 @@ static void notificationCallback (WKViewRef v, WKViewNotificationType type, void
+             break;
+         }
+         case WKViewNotificationViewDidScroll: {
++#if defined(WEBKIT_IOS6)
++            // Posted without stopping the web thread.
++            //
++            // WebThreadRunOnMainThread drops every JS lock, releases the web
++            // lock, wakes the main thread and blocks until it has run the block -
++            // a full main-thread latency for a notification nothing in this
++            // process observes, on a callback that fires while the page is being
++            // scrolled. The frame-size notification next door already concluded
++            // that this ordering is not worth blocking for.
++            WebThreadCallDelegateAsync(invocationForPostNotification(WAKViewDidScrollNotification, view, nil));
++#else
+             WebThreadRunOnMainThread(^ {
+                  [[NSNotificationCenter defaultCenter] postNotificationName:WAKViewDidScrollNotification object:view userInfo:nil];
+             });
++#endif
+             break;
+-        }            
++        }
+         default: {
+             break;
+         }
+@@ -370,11 +404,11 @@ static void _WAKCopyWrapper(const void *value, void *context)
+     if (_isHidden)
+         return;
+ 
+-    WAKWindow *window = [self window];
++    WAKWindow *window = WKViewGetWindow(viewRef);
+     if (!window || CGRectIsEmpty(invalidRect))
+         return;
+ 
+-    CGRect rect = CGRectIntersection(invalidRect, [self bounds]);
++    CGRect rect = CGRectIntersection(invalidRect, WKViewGetBounds(viewRef));
+     if (CGRectIsEmpty(rect))
+         return;
+ 
+@@ -404,7 +438,10 @@ static void _WAKCopyWrapper(const void *value, void *context)
+ 
+ - (void)viewWillDraw
+ {
+-    [[self subviews] makeObjectsPerformSelector:@selector(viewWillDraw)];
++    SubviewSnapshot subviews;
++    snapshotSubviews(viewRef, subviews);
++    for (auto& subview : subviews)
++        [subview.get() viewWillDraw];
+ }
+ 
+ + (WAKView *)focusView
+@@ -495,10 +532,15 @@ static void _WAKCopyWrapper(const void *value, void *context)
+     [self drawRect:dirtyRect];
+ 
+     if (!_drawsOwnDescendants) {
+-        NSArray *subViews = [self subviews];
+-        for (WAKView *subView in subViews) {
+-            NSRect childDirtyRect = [self convertRect:dirtyRect toView:subView];
+-            [subView _drawRect:CGRectIntegral(childDirtyRect) context:context lockFocus:YES];
++        SubviewSnapshot subviews;
++        snapshotSubviews(viewRef, subviews);
++        if (!subviews.isEmpty()) {
++            // One walk up to base for this view instead of one per subview.
++            CGRect dirtyRectInBase = WKViewConvertRectToBase(viewRef, dirtyRect);
++            for (auto& subview : subviews) {
++                NSRect childDirtyRect = WKViewConvertRectFromBase([subview.get() _viewRef], dirtyRectInBase);
++                [subview.get() _drawRect:CGRectIntegral(childDirtyRect) context:context lockFocus:YES];
++            }
+         }
+     }
+ 
+@@ -595,8 +637,10 @@ static void _WAKCopyWrapper(const void *value, void *context)
+         return nil;
+ 
+     CGPoint subviewPoint = WKViewConvertPointFromSuperview(viewRef, point);
+-    for (WAKView *subview in [self subviews]) {
+-        if (WAKView *hitView = [subview hitTest: subviewPoint])
++    SubviewSnapshot subviews;
++    snapshotSubviews(viewRef, subviews);
++    for (auto& subview : subviews) {
++        if (WAKView *hitView = [subview.get() hitTest:subviewPoint])
+             return hitView;
+     }
+ 
 diff --git a/Source/WebCore/platform/ios/wak/WAKWindow.h b/Source/WebCore/platform/ios/wak/WAKWindow.h
 index eb69e45818..acfe9d9ace 100644
 --- a/Source/WebCore/platform/ios/wak/WAKWindow.h
@@ -2120,7 +3790,7 @@ index eb69e45818..acfe9d9ace 100644
  - (CGRect)frame;
  - (void)setContentRect:(CGRect)rect;
 diff --git a/Source/WebCore/platform/ios/wak/WAKWindow.mm b/Source/WebCore/platform/ios/wak/WAKWindow.mm
-index c475cc9ce0..96431eeead 100644
+index c475cc9ce0..1f9bdc406b 100644
 --- a/Source/WebCore/platform/ios/wak/WAKWindow.mm
 +++ b/Source/WebCore/platform/ios/wak/WAKWindow.mm
 @@ -35,6 +35,7 @@
@@ -2175,6 +3845,30 @@ index c475cc9ce0..96431eeead 100644
  - (WAKView *)firstResponder
  {
      return _responderView;
+@@ -478,9 +495,12 @@ static RetainPtr<WebEvent>& currentEvent()
+ 
+     static Class windowClass = NSClassFromString(@"UIWindow");
+ 
+-    while (superlayer && layer != _rootLayer && (!layer.delegate || ![layer.delegate isKindOfClass:windowClass])) {
++    while (superlayer && layer != _rootLayer) {
++        id delegate = [layer delegate];
++        if (delegate && [delegate isKindOfClass:windowClass])
++            break;
+         CGRect rectInSuper = [superlayer convertRect:rect fromLayer:layer];
+-        if ([superlayer masksToBounds] || !respectsMasksToBounds)
++        if (!respectsMasksToBounds || [superlayer masksToBounds])
+             rect = CGRectIntersection([superlayer bounds], rectInSuper);
+         else
+             rect = rectInSuper;
+@@ -618,7 +638,7 @@ static RetainPtr<WebEvent>& currentEvent()
+ 
+ - (void)displayRect:(NSRect)rect
+ {
+-    [[self contentView] displayRect:rect];
++    [_contentView displayRect:rect];
+ }
+ 
+ - (void)willRotate
 diff --git a/Source/WebCore/platform/ios/wak/WKTypes.h b/Source/WebCore/platform/ios/wak/WKTypes.h
 index 701b8bc661..5c6c9fbd18 100644
 --- a/Source/WebCore/platform/ios/wak/WKTypes.h
@@ -2204,7 +3898,7 @@ index 3070c8f1a4..7352c6ba83 100644
  WEBCORE_EXPORT bool WebThreadIsLockedOrDisabledInMainOrWebThread(void);
  
 diff --git a/Source/WebCore/platform/ios/wak/WebCoreThread.mm b/Source/WebCore/platform/ios/wak/WebCoreThread.mm
-index 942406fd91..30fd6708d8 100644
+index 942406fd91..bf2dda2b88 100644
 --- a/Source/WebCore/platform/ios/wak/WebCoreThread.mm
 +++ b/Source/WebCore/platform/ios/wak/WebCoreThread.mm
 @@ -25,6 +25,8 @@
@@ -2301,7 +3995,40 @@ index 942406fd91..30fd6708d8 100644
  }
  
  void WebThreadRunOnMainThread(void(^delegateBlock)())
-@@ -508,6 +567,69 @@ static void MainRunLoopAutoUnlock(CFRunLoopObserverRef, CFRunLoopActivity, void*
+@@ -492,6 +551,25 @@ NSInvocation* WebThreadMakeNSInvocation(id target, SEL selector)
+     return nil;
+ }
+ 
++#if defined(WEBKIT_IOS6)
++// The auto-unlock observer is installed once and left in place.
++//
++// CFRunLoopAddObserver/RemoveObserver for kCFRunLoopCommonModes walks every
++// common mode and edits each one's observer set, and the pair was paid on every
++// single acquisition of the web lock from the main thread - measured at 537
++// attempts from the tile layout pass alone in one scroll. The observer costs
++// nothing to leave installed: it is a C callback that reads one BOOL and returns
++// when there is nothing to unlock, so the flag alone decides.
++static void EnsureMainRunLoopAutoUnlockObserver()
++{
++    static bool installed;
++    if (installed)
++        return;
++    installed = true;
++    CFRunLoopAddObserver(CFRunLoopGetCurrent(), mainRunLoopAutoUnlockObserver().get(), kCFRunLoopCommonModes);
++}
++#endif
++
+ static void MainRunLoopAutoUnlock(CFRunLoopObserverRef, CFRunLoopActivity, void*)
+ {
+     ASSERT(!WebThreadIsCurrent());
+@@ -503,18 +581,86 @@ static void MainRunLoopAutoUnlock(CFRunLoopObserverRef, CFRunLoopActivity, void*
+         return;
+ 
+     mainThreadHasPendingAutoUnlock = NO;
++#if !defined(WEBKIT_IOS6)
+     CFRunLoopRemoveObserver(CFRunLoopGetCurrent(), mainRunLoopAutoUnlockObserver().get(), kCFRunLoopCommonModes);
++#endif
+ 
      _WebThreadUnlock();
  }
  
@@ -2353,10 +4080,9 @@ index 942406fd91..30fd6708d8 100644
 +        return true;
 +
 +    mainThreadHasPendingAutoUnlock = YES;
-+    CFRunLoopAddObserver(CFRunLoopGetCurrent(), mainRunLoopAutoUnlockObserver().get(), kCFRunLoopCommonModes);
++    EnsureMainRunLoopAutoUnlockObserver();
 +
 +    if (!webLock.tryLock()) {
-+        CFRunLoopRemoveObserver(CFRunLoopGetCurrent(), mainRunLoopAutoUnlockObserver().get(), kCFRunLoopCommonModes);
 +        mainThreadHasPendingAutoUnlock = NO;
 +        return false;
 +    }
@@ -2371,10 +4097,25 @@ index 942406fd91..30fd6708d8 100644
  static void _WebThreadAutoLock(void)
  {
      ASSERT(!WebThreadIsCurrent());
-@@ -532,8 +654,39 @@ static void WebRunLoopUnlockInternal(AutoreleasePoolOperation poolOperation)
+ 
+     if (!mainThreadLockCount) {
+         mainThreadHasPendingAutoUnlock = YES;
++#if defined(WEBKIT_IOS6)
++        EnsureMainRunLoopAutoUnlockObserver();
++#else
+         CFRunLoopAddObserver(CFRunLoopGetCurrent(), mainRunLoopAutoUnlockObserver().get(), kCFRunLoopCommonModes);
++#endif
+         _WebThreadLock();
+         CFRunLoopWakeUp(CFRunLoopGetMain());
+     }
+@@ -531,10 +677,42 @@ static void WebRunLoopLockInternal(AutoreleasePoolOperation poolOperation)
+ static void WebRunLoopUnlockInternal(AutoreleasePoolOperation poolOperation)
  {
      ASSERT(sAsyncDelegates());
-     if ([sAsyncDelegates() count]) {
+-    if ([sAsyncDelegates() count]) {
+-        for (NSInvocation* invocation in sAsyncDelegates().get())
++    NSMutableArray *asyncDelegates = sAsyncDelegates().get();
++    if ([asyncDelegates count]) {
 +#if defined(WEBKIT_IOS6)
 +        // Sent without waiting, which is what "async" was supposed to mean.
 +        //
@@ -2394,10 +4135,10 @@ index 942406fd91..30fd6708d8 100644
 +        if (blockOnAsyncDelegates < 0)
 +            blockOnAsyncDelegates = access("/tmp/native-block-async-delegates", F_OK) == 0 ? 1 : 0;
 +        if (blockOnAsyncDelegates) {
-+            for (NSInvocation *invocation in sAsyncDelegates().get())
++            for (NSInvocation *invocation in asyncDelegates)
 +                SendDelegateMessage(invocation);
 +        } else {
-+            for (NSInvocation *invocation in sAsyncDelegates().get()) {
++            for (NSInvocation *invocation in asyncDelegates) {
 +                RetainPtr<NSInvocation> retained = invocation;
 +                RunLoop::mainSingleton().dispatch([retained] {
 +                    [retained invoke];
@@ -2405,13 +4146,15 @@ index 942406fd91..30fd6708d8 100644
 +            }
 +        }
 +#else
-         for (NSInvocation* invocation in sAsyncDelegates().get())
++        for (NSInvocation* invocation in asyncDelegates)
              SendDelegateMessage(invocation);
+-        [sAsyncDelegates() removeAllObjects];
 +#endif
-         [sAsyncDelegates() removeAllObjects];
++        [asyncDelegates removeAllObjects];
      }
  
-@@ -761,8 +914,77 @@ static void _WebThreadLock()
+     if (poolOperation == PushOrPopAutoreleasePool && !perCalloutAutoreleasepoolEnabled)
+@@ -761,8 +939,77 @@ static void _WebThreadLock()
          CRASH();
      }
  
@@ -2489,7 +4232,7 @@ index 942406fd91..30fd6708d8 100644
  #if LOG_WEB_LOCK || LOG_MAIN_THREAD_LOCKING
      lockCount++;
  #if LOG_WEB_LOCK
-@@ -875,6 +1097,20 @@ void _WebThreadUnlock()
+@@ -875,6 +1122,20 @@ void _WebThreadUnlock()
      webLock.unlock();
  }
  
@@ -2511,10 +4254,37 @@ index 942406fd91..30fd6708d8 100644
  {
  #if ENABLE(WEB_THREAD_DISABLEMENT)
 diff --git a/Source/WebCore/platform/ios/wak/WebCoreThreadRun.cpp b/Source/WebCore/platform/ios/wak/WebCoreThreadRun.cpp
-index 37db5c62d5..238c7f75a9 100644
+index 37db5c62d5..e651fe86f0 100644
 --- a/Source/WebCore/platform/ios/wak/WebCoreThreadRun.cpp
 +++ b/Source/WebCore/platform/ios/wak/WebCoreThreadRun.cpp
-@@ -134,8 +134,17 @@ static void HandleRunSource(void *info)
+@@ -79,6 +79,15 @@ public:
+     {
+     }
+ 
++    // Without this the temporary built by every WebThreadRun() call is copied
++    // into the queue - one more Block_copy and Block_release per call - and the
++    // queue's own growth copies every element it already holds.
++    WebThreadBlock(WebThreadBlock&& other)
++        : m_block(std::exchange(other.m_block, nullptr))
++        , m_state(std::exchange(other.m_state, nullptr))
++    {
++    }
++
+     WebThreadBlock& operator=(const WebThreadBlock& other)
+     {
+         void (^oldBlock)() = m_block;
+@@ -127,15 +136,27 @@ static void HandleRunSource(void *info)
+     ASSERT(runSource());
+     ASSERT(runQueue);
+ 
++    // Taking the queue rather than copying it: copying Block_copy'd every queued
++    // block and clearing the original Block_release'd it again, a malloc/free
++    // pair per block on a source that fires for every WebThreadRun.
+     WebThreadRunQueue queueCopy;
+     {
+         Locker locker { runQueueMutex };
+-        queueCopy = *runQueue;
++        queueCopy = WTF::move(*runQueue);
          runQueue->clear();
      }
  

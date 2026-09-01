@@ -1280,6 +1280,461 @@ index ecf474442d..0b12109999 100644
          case FontLoadingBehavior::Block:
              return { 3_s, Seconds::infinity() };
          case FontLoadingBehavior::Swap:
+diff --git a/Source/WebCore/css/CSSPrimitiveValue.cpp b/Source/WebCore/css/CSSPrimitiveValue.cpp
+index 9989c5b989..dc7e4eb1d2 100644
+--- a/Source/WebCore/css/CSSPrimitiveValue.cpp
++++ b/Source/WebCore/css/CSSPrimitiveValue.cpp
+@@ -171,15 +171,17 @@ CSSPrimitiveValue::~CSSPrimitiveValue()
+     }
+ }
+ 
+-static CSSPrimitiveValue* valueFromPool(std::span<AlignedStorage<CSSPrimitiveValue>> pool, double value)
++static ALWAYS_INLINE CSSPrimitiveValue* valueFromPool(std::span<AlignedStorage<CSSPrimitiveValue>> pool, double value)
+ {
+-    // Casting to a signed integer first since casting a negative floating point value to an unsigned
+-    // integer is undefined behavior.
+-    unsigned poolIndex = static_cast<unsigned>(static_cast<int>(value));
+-    double roundTripValue = poolIndex;
+-    if (equalSpans(asByteSpan(value), asByteSpan(roundTripValue)) && poolIndex < pool.size())
+-        return pool[poolIndex].get();
+-    return nullptr;
++    // The range test comes first: it is one compare pair and it rejects every value the pool
++    // cannot hold (negatives, NaN, anything past the last entry) before doing any conversion.
++    if (!(value >= 0 && value < pool.size()))
++        return nullptr;
++    unsigned poolIndex = static_cast<unsigned>(value);
++    // Bit comparison rather than ==, so that -0.0 keeps its own non-pooled value as before.
++    if (std::bit_cast<uint64_t>(static_cast<double>(poolIndex)) != std::bit_cast<uint64_t>(value))
++        return nullptr;
++    return pool[poolIndex].get();
+ }
+ 
+ Ref<CSSPrimitiveValue> CSSPrimitiveValue::create(double value)
+@@ -217,6 +219,8 @@ Ref<CSSPrimitiveValue> CSSPrimitiveValue::create(CSS::UnevaluatedCalcBase value)
+ 
+ Ref<CSSPrimitiveValue> CSSPrimitiveValue::createInteger(double value)
+ {
++    if (RefPtr result = valueFromPool(staticCSSValuePool->m_integerValues, value))
++        return result.releaseNonNull();
+     return adoptRef(*new CSSPrimitiveValue(value, CSSUnitType::CSS_INTEGER));
+ }
+ 
+diff --git a/Source/WebCore/css/CSSSelector.h b/Source/WebCore/css/CSSSelector.h
+index c66cf7d77e..6487a1cdf0 100644
+--- a/Source/WebCore/css/CSSSelector.h
++++ b/Source/WebCore/css/CSSSelector.h
+@@ -356,6 +356,17 @@ inline bool CSSSelector::isAttributeSelector() const
+ inline void CSSSelector::setValue(const AtomString& value, bool matchLowerCase)
+ {
+     ASSERT(match() != Match::Tag);
++
++    // Without lowercasing the matching value is the value, so rare data can never be needed:
++    // take the pointer directly instead of paying for a temporary AtomString ref/deref pair.
++    if (!matchLowerCase && !m_hasRareData) {
++        if (m_data.value)
++            m_data.value->deref();
++        m_data.value = value.impl();
++        m_data.value->ref();
++        return;
++    }
++
+     auto matchingValue = matchLowerCase ? value.convertToASCIILowercase() : value;
+     if (!m_hasRareData && matchingValue != value)
+         createRareData();
+diff --git a/Source/WebCore/css/CSSSelectorList.h b/Source/WebCore/css/CSSSelectorList.h
+index 8efe92f777..eb1db57806 100644
+--- a/Source/WebCore/css/CSSSelectorList.h
++++ b/Source/WebCore/css/CSSSelectorList.h
+@@ -35,7 +35,9 @@
+ namespace WebCore {
+ 
+ class MutableCSSSelector;
+-using MutableCSSSelectorList = Vector<std::unique_ptr<MutableCSSSelector>>;
++// Inline capacity: nearly every selector list in a real stylesheet is one or two complex
++// selectors, so this keeps a malloc/free pair out of every rule prelude and every :is()/:not().
++using MutableCSSSelectorList = Vector<std::unique_ptr<MutableCSSSelector>, 4>;
+ 
+ class CSSSelectorList {
+     WTF_MAKE_TZONE_ALLOCATED(CSSSelectorList);
+diff --git a/Source/WebCore/css/CSSStyleProperties.cpp b/Source/WebCore/css/CSSStyleProperties.cpp
+index 833879ec4c..45dfa84b8b 100644
+--- a/Source/WebCore/css/CSSStyleProperties.cpp
++++ b/Source/WebCore/css/CSSStyleProperties.cpp
+@@ -414,6 +414,20 @@ bool PropertySetCSSStyleProperties::isPropertyImplicit(const String& propertyNam
+     return protect(m_propertySet)->isPropertyImplicit(cssPropertyID(propertyName));
+ }
+ 
++// cssParserContext() is virtual and materialises an OptionalOrReference<CSSParserContext> — an object
++// the size of a whole parser context — on the stack. The IDL-attribute setters are the hottest CSSOM
++// path there is, so fetch it once and share it with the exposure test instead of asking twice.
++static bool isExposedInContext(CSSPropertyID propertyID, const CSSParserContext& parserContext)
++{
++    if (propertyID == CSSPropertyInvalid)
++        return false;
++
++    bool parsingDescriptor = parserContext.enclosingRuleType && *parserContext.enclosingRuleType != StyleRuleType::Style;
++
++    return WebCore::isExposed(propertyID, &parserContext.propertySettings)
++        && (!CSSProperty::isDescriptorOnly(propertyID) || parsingDescriptor);
++}
++
+ ExceptionOr<void> PropertySetCSSStyleProperties::setProperty(const String& propertyName, const String& value, const String& priority)
+ {
+     StyleAttributeMutationScope mutationScope { parentElement() };
+@@ -422,7 +436,8 @@ ExceptionOr<void> PropertySetCSSStyleProperties::setProperty(const String& prope
+     if (isCustomPropertyName(propertyName))
+         propertyID = CSSPropertyCustom;
+ 
+-    if (!isExposed(propertyID))
++    auto parserContext = cssParserContext();
++    if (!isExposedInContext(propertyID, parserContext.get()))
+         return { };
+ 
+     if (!willMutate())
+@@ -434,9 +449,9 @@ ExceptionOr<void> PropertySetCSSStyleProperties::setProperty(const String& prope
+ 
+     bool changed;
+     if (propertyID == CSSPropertyCustom) [[unlikely]]
+-        changed = protect(m_propertySet)->setCustomProperty(propertyName, value, cssParserContext(), important ? IsImportant::Yes : IsImportant::No);
++        changed = protect(m_propertySet)->setCustomProperty(propertyName, value, parserContext.get(), important ? IsImportant::Yes : IsImportant::No);
+     else
+-        changed = protect(m_propertySet)->setProperty(propertyID, value, cssParserContext(), important ? IsImportant::Yes : IsImportant::No);
++        changed = protect(m_propertySet)->setProperty(propertyID, value, parserContext.get(), important ? IsImportant::Yes : IsImportant::No);
+ 
+     didMutate(changed ? MutationType::PropertyChanged : MutationType::NoChanges);
+ 
+@@ -490,10 +505,11 @@ ExceptionOr<void> PropertySetCSSStyleProperties::setPropertyInternal(CSSProperty
+     if (!willMutate())
+         return { };
+ 
+-    if (!isExposed(propertyID))
++    auto parserContext = cssParserContext();
++    if (!isExposedInContext(propertyID, parserContext.get()))
+         return { };
+ 
+-    SUPPRESS_UNCOUNTED_ARG if (m_propertySet->setProperty(propertyID, value, cssParserContext(), important)) {
++    SUPPRESS_UNCOUNTED_ARG if (m_propertySet->setProperty(propertyID, value, parserContext.get(), important)) {
+         didMutate(MutationType::PropertyChanged);
+         mutationScope.enqueueMutationRecord();
+     } else
+@@ -507,11 +523,7 @@ bool PropertySetCSSStyleProperties::isExposed(CSSPropertyID propertyID) const
+     if (propertyID == CSSPropertyInvalid)
+         return false;
+ 
+-    auto parserContext = cssParserContext();
+-    bool parsingDescriptor = parserContext->enclosingRuleType && *parserContext->enclosingRuleType != StyleRuleType::Style;
+-
+-    return WebCore::isExposed(propertyID, &parserContext->propertySettings)
+-        && (!CSSProperty::isDescriptorOnly(propertyID) || parsingDescriptor);
++    return isExposedInContext(propertyID, cssParserContext().get());
+ }
+ 
+ RefPtr<DeprecatedCSSOMValue> PropertySetCSSStyleProperties::wrapForDeprecatedCSSOM(CSSValue* internalValue)
+@@ -614,8 +626,12 @@ void StyleRuleCSSStyleProperties::reattach(MutableStyleProperties& propertySet)
+ 
+ bool InlineCSSStyleProperties::willMutate()
+ {
+-    if (m_parentElement)
+-        InspectorInstrumentation::willInvalidateStyleAttr(protect(*m_parentElement));
++    // protect() is a ref/deref pair that every element.style.foo = ... used to pay for, ahead of an
++    // instrumentation hook that bails on this same counter.
++    if (InspectorInstrumentationPublic::hasFrontends()) [[unlikely]] {
++        if (m_parentElement)
++            InspectorInstrumentation::willInvalidateStyleAttr(protect(*m_parentElement));
++    }
+     return true;
+ }
+ 
+diff --git a/Source/WebCore/css/CSSValue.h b/Source/WebCore/css/CSSValue.h
+index 2d3b95dc35..42adc7c701 100644
+--- a/Source/WebCore/css/CSSValue.h
++++ b/Source/WebCore/css/CSSValue.h
+@@ -355,13 +355,16 @@ inline bool compareCSSValueVector(const Vector<Ref<CSSValueType>>& firstVector,
+ template<typename CSSValueType>
+ inline bool compareCSSValuePtr(const RefPtr<CSSValueType>& first, const RefPtr<CSSValueType>& second)
+ {
++    if (first.get() == second.get())
++        return true;
+     return first ? second && first->equals(*second) : !second;
+ }
+ 
+ template<typename CSSValueType>
+ inline bool compareCSSValue(const Ref<CSSValueType>& first, const Ref<CSSValueType>& second)
+ {
+-    return first.get().equals(second);
++    // Pooled and otherwise shared values are the common case; skip the class-type dispatch in equals().
++    return first.ptr() == second.ptr() || first.get().equals(second);
+ }
+ 
+ void add(Hasher&, const CSSValue&);
+diff --git a/Source/WebCore/css/CSSValueList.cpp b/Source/WebCore/css/CSSValueList.cpp
+index dc253a4448..f9245caa86 100644
+--- a/Source/WebCore/css/CSSValueList.cpp
++++ b/Source/WebCore/css/CSSValueList.cpp
+@@ -195,7 +195,7 @@ Ref<CSSValueList> CSSValueList::create(char16_t separator, CSSValueListBuilder b
+ bool CSSValueContainingVector::hasValue(CSSValue& otherValue) const
+ {
+     for (Ref value : *this) {
+-        if (value->equals(otherValue))
++        if (value.ptr() == &otherValue || value->equals(otherValue))
+             return true;
+     }
+     return false;
+@@ -245,7 +245,11 @@ bool CSSValueContainingVector::itemsEqual(const CSSValueContainingVector& other)
+     if (size != other.size())
+         return false;
+     for (unsigned i = 0; i < size; ++i) {
+-        if (!protect((*this)[i])->equals(protect(other[i])))
++        auto& value = (*this)[i];
++        auto& otherValue = other[i];
++        if (&value == &otherValue)
++            continue;
++        if (!protect(value)->equals(protect(otherValue)))
+             return false;
+     }
+     return true;
+@@ -258,7 +262,10 @@ bool CSSValueList::equals(const CSSValueList& other) const
+ 
+ bool CSSValueContainingVector::containsSingleEqualItem(const CSSValue& other) const
+ {
+-    return size() == 1 && protect((*this)[0])->equals(other);
++    if (size() != 1)
++        return false;
++    auto& value = (*this)[0];
++    return &value == &other || protect(value)->equals(other);
+ }
+ 
+ bool CSSValueContainingVector::addDerivedHash(Hasher& hasher) const
+diff --git a/Source/WebCore/css/CSSValuePool.cpp b/Source/WebCore/css/CSSValuePool.cpp
+index 6219bf9cb1..8cfe2bc009 100644
+--- a/Source/WebCore/css/CSSValuePool.cpp
++++ b/Source/WebCore/css/CSSValuePool.cpp
+@@ -51,6 +51,7 @@ StaticCSSValuePool::StaticCSSValuePool()
+         new (m_pixelValues[i].get()) CSSPrimitiveValue(CSSValue::StaticCSSValue, i, CSSUnitType::CSS_PX);
+         new (m_percentageValues[i].get()) CSSPrimitiveValue(CSSValue::StaticCSSValue, i, CSSUnitType::CSS_PERCENTAGE);
+         new (m_numberValues[i].get()) CSSPrimitiveValue(CSSValue::StaticCSSValue, i, CSSUnitType::CSS_NUMBER);
++        new (m_integerValues[i].get()) CSSPrimitiveValue(CSSValue::StaticCSSValue, i, CSSUnitType::CSS_INTEGER);
+     }
+ }
+ 
+diff --git a/Source/WebCore/css/CSSValuePool.h b/Source/WebCore/css/CSSValuePool.h
+index aaf1fcde9a..f9584f2c59 100644
+--- a/Source/WebCore/css/CSSValuePool.h
++++ b/Source/WebCore/css/CSSValuePool.h
+@@ -61,6 +61,7 @@ private:
+     std::array<AlignedStorage<CSSPrimitiveValue>, maximumCacheableIntegerValue + 1> m_pixelValues;
+     std::array<AlignedStorage<CSSPrimitiveValue>, maximumCacheableIntegerValue + 1> m_percentageValues;
+     std::array<AlignedStorage<CSSPrimitiveValue>, maximumCacheableIntegerValue + 1> m_numberValues;
++    std::array<AlignedStorage<CSSPrimitiveValue>, maximumCacheableIntegerValue + 1> m_integerValues;
+     std::array<AlignedStorage<CSSKeywordValue>, numCSSValueKeywords> m_identifierValues;
+ };
+ 
+diff --git a/Source/WebCore/css/MutableStyleProperties.cpp b/Source/WebCore/css/MutableStyleProperties.cpp
+index e8a025be97..1ce8ab7704 100644
+--- a/Source/WebCore/css/MutableStyleProperties.cpp
++++ b/Source/WebCore/css/MutableStyleProperties.cpp
+@@ -136,7 +136,7 @@ bool MutableStyleProperties::removeCustomProperty(const String& propertyName, St
+     return removePropertyAtIndex(findCustomPropertyIndex(propertyName), returnText);
+ }
+ 
+-bool MutableStyleProperties::setProperty(CSSPropertyID propertyID, const String& value, CSSParserContext parserContext, IsImportant important, bool* didFailParsing)
++bool MutableStyleProperties::setProperty(CSSPropertyID propertyID, const String& value, const CSSParserContext& parserContext, IsImportant important, bool* didFailParsing)
+ {
+     if (!isExposed(propertyID, &parserContext.propertySettings) && !isInternal(propertyID)) {
+         // Allow internal properties as we use them to handle certain DOM-exposed values
+@@ -151,11 +151,22 @@ bool MutableStyleProperties::setProperty(CSSPropertyID propertyID, const String&
+ 
+     // When replacing an existing property value, this moves the property to the end of the list.
+     // Firefox preserves the position, and MSIE moves the property to the beginning.
+-    parserContext.mode = cssParserMode();
+-    auto parseResult = CSSParser::parseValue(*this, propertyID, value, important, parserContext);
+-    if (didFailParsing)
+-        *didFailParsing = parseResult == CSSParser::ParseResult::Error;
+-    return parseResult == CSSParser::ParseResult::Changed;
++    auto parse = [&](const CSSParserContext& context) {
++        auto parseResult = CSSParser::parseValue(*this, propertyID, value, important, context);
++        if (didFailParsing)
++            *didFailParsing = parseResult == CSSParser::ParseResult::Error;
++        return parseResult == CSSParser::ParseResult::Changed;
++    };
++
++    // The callers that matter (CSSOM property setters) hand us a context whose mode already
++    // matches, so only copy the context - which carries a URL and the property settings - when
++    // the mode actually has to be overridden.
++    if (parserContext.mode == cssParserMode()) [[likely]]
++        return parse(parserContext);
++
++    CSSParserContext contextWithDeclarationMode = parserContext;
++    contextWithDeclarationMode.mode = cssParserMode();
++    return parse(contextWithDeclarationMode);
+ }
+ 
+ bool MutableStyleProperties::setProperty(CSSPropertyID propertyID, const String& value, IsImportant important, bool* didFailParsing)
+@@ -164,7 +175,7 @@ bool MutableStyleProperties::setProperty(CSSPropertyID propertyID, const String&
+     return setProperty(propertyID, value, parserContext, important, didFailParsing);
+ }
+ 
+-bool MutableStyleProperties::setCustomProperty(const String& propertyName, const String& value, CSSParserContext parserContext, IsImportant important)
++bool MutableStyleProperties::setCustomProperty(const String& propertyName, const String& value, const CSSParserContext& parserContext, IsImportant important)
+ {
+     // Setting the value to an empty string just removes the property in both IE and Gecko.
+     // Setting it to null seems to produce less consistent results, but we treat it just the same.
+@@ -173,8 +184,12 @@ bool MutableStyleProperties::setCustomProperty(const String& propertyName, const
+ 
+     // When replacing an existing property value, this moves the property to the end of the list.
+     // Firefox preserves the position, and MSIE moves the property to the beginning.
+-    parserContext.mode = cssParserMode();
+-    return CSSParser::parseCustomPropertyValue(*this, AtomString { propertyName }, value, important, parserContext) == CSSParser::ParseResult::Changed;
++    if (parserContext.mode == cssParserMode()) [[likely]]
++        return CSSParser::parseCustomPropertyValue(*this, AtomString { propertyName }, value, important, parserContext) == CSSParser::ParseResult::Changed;
++
++    CSSParserContext contextWithDeclarationMode = parserContext;
++    contextWithDeclarationMode.mode = cssParserMode();
++    return CSSParser::parseCustomPropertyValue(*this, AtomString { propertyName }, value, important, contextWithDeclarationMode) == CSSParser::ParseResult::Changed;
+ }
+ 
+ void MutableStyleProperties::setProperty(CSSPropertyID propertyID, Ref<CSSValue>&& value, IsImportant important)
+@@ -219,7 +234,9 @@ bool MutableStyleProperties::setProperty(const CSSProperty& property, CSSPropert
+     }
+     if (toReplace) {
+         if (canUpdateInPlace(property, toReplace)) {
+-            if (*toReplace == property)
++            // Pooled and shared values make the "set to what it already is" case a pointer
++            // compare, which skips the virtual-ish dispatch inside CSSValue::equals().
++            if (toReplace->metadata() == property.metadata() && (toReplace->value() == property.value() || toReplace->value()->equals(*property.value())))
+                 return false;
+             *toReplace = property;
+             return true;
+@@ -236,16 +253,33 @@ bool MutableStyleProperties::setProperty(CSSPropertyID propertyID, CSSValueID id
+     return setProperty(CSSProperty(propertyID, CSSKeywordValue::create(identifier), important));
+ }
+ 
+-bool MutableStyleProperties::parseDeclaration(const String& styleDeclaration, CSSParserContext context)
++bool MutableStyleProperties::parseDeclaration(const String& styleDeclaration, const CSSParserContext& context)
+ {
+     auto oldProperties = WTF::move(m_propertyVector);
+     m_propertyVector.clear();
+ 
+-    context.mode = cssParserMode();
+-    CSSParser::parseDeclarationList(*this, styleDeclaration, context);
++    if (context.mode == cssParserMode()) [[likely]] {
++        CSSParser::parseDeclarationList(*this, styleDeclaration, context);
++    } else {
++        CSSParserContext contextWithDeclarationMode = context;
++        contextWithDeclarationMode.mode = cssParserMode();
++        CSSParser::parseDeclarationList(*this, styleDeclaration, contextWithDeclarationMode);
++    }
+ 
+     // We could do better. Just changing property order does not require style invalidation.
+-    return oldProperties != m_propertyVector;
++    // Rewriting a style attribute usually reproduces the very same pooled values, so compare
++    // value pointers before falling back to the full CSSValue::equals() dispatch.
++    if (oldProperties.size() != m_propertyVector.size())
++        return true;
++    for (size_t i = 0; i < oldProperties.size(); ++i) {
++        auto& oldProperty = oldProperties[i];
++        auto& newProperty = m_propertyVector[i];
++        if (!(oldProperty.metadata() == newProperty.metadata()))
++            return true;
++        if (oldProperty.value() != newProperty.value() && !oldProperty.value()->equals(*newProperty.value()))
++            return true;
++    }
++    return false;
+ }
+ 
+ bool MutableStyleProperties::addParsedProperties(const ParsedPropertyVector& properties)
+@@ -287,12 +321,15 @@ bool MutableStyleProperties::removeProperties(std::span<const CSSPropertyID> pro
+     if (m_propertyVector.isEmpty())
+         return false;
+ 
+-    // FIXME: This is always used with static sets and in that case constructing the hash repeatedly is pretty pointless.
+-    HashSet<CSSPropertyID> toRemove;
+-    toRemove.addAll(properties);
+-
+-    return m_propertyVector.removeAllMatching([&toRemove](const CSSProperty& property) {
+-        return toRemove.contains(property.id());
++    // The span is always a shorthand's longhand list, so it is a handful of entries; a linear
++    // scan over it beats building and hashing into a HashSet on every call.
++    return m_propertyVector.removeAllMatching([&](const CSSProperty& property) {
++        auto id = property.id();
++        for (auto candidate : properties) {
++            if (candidate == id)
++                return true;
++        }
++        return false;
+     }) > 0;
+ }
+ 
+@@ -300,9 +337,11 @@ int MutableStyleProperties::findPropertyIndex(CSSPropertyID propertyID) const
+ {
+     // Convert here propertyID into an uint16_t to compare it with the metadata's m_propertyID to avoid
+     // the compiler converting it to an int multiple times in the loop.
+-    auto& properties = m_propertyVector;
++    // The span is taken once: indexing the Vector re-loads its buffer pointer on every iteration,
++    // because the loop body is opaque enough that the compiler cannot prove it unchanged.
++    auto properties = m_propertyVector.span();
+     uint16_t id = std::to_underlying(propertyID);
+-    for (int n = m_propertyVector.size() - 1 ; n >= 0; --n) {
++    for (int n = static_cast<int>(properties.size()) - 1 ; n >= 0; --n) {
+         if (properties[n].metadata().m_propertyID == id)
+             return n;
+     }
+@@ -311,8 +350,8 @@ int MutableStyleProperties::findPropertyIndex(CSSPropertyID propertyID) const
+ 
+ int MutableStyleProperties::findCustomPropertyIndex(StringView propertyName) const
+ {
+-    auto& properties = m_propertyVector;
+-    for (int n = m_propertyVector.size() - 1 ; n >= 0; --n) {
++    auto properties = m_propertyVector.span();
++    for (int n = static_cast<int>(properties.size()) - 1 ; n >= 0; --n) {
+         if (properties[n].metadata().m_propertyID == CSSPropertyCustom) {
+             // We found a custom property. See if the name matches.
+             if (!properties[n].value())
+diff --git a/Source/WebCore/css/MutableStyleProperties.h b/Source/WebCore/css/MutableStyleProperties.h
+index 7a3381bddb..0eb22dd13f 100644
+--- a/Source/WebCore/css/MutableStyleProperties.h
++++ b/Source/WebCore/css/MutableStyleProperties.h
+@@ -63,7 +63,7 @@ public:
+     bool addParsedProperty(const CSSProperty&);
+ 
+     // These expand shorthand properties into multiple properties.
+-    bool setProperty(CSSPropertyID, const String& value, CSSParserContext, IsImportant = IsImportant::No, bool* didFailParsing = nullptr);
++    bool setProperty(CSSPropertyID, const String& value, const CSSParserContext&, IsImportant = IsImportant::No, bool* didFailParsing = nullptr);
+     bool setProperty(CSSPropertyID, const String& value, IsImportant = IsImportant::No, bool* didFailParsing = nullptr);
+     void setProperty(CSSPropertyID, Ref<CSSValue>&&, IsImportant = IsImportant::No);
+ 
+@@ -77,7 +77,7 @@ public:
+     bool mergeAndOverrideOnConflict(const StyleProperties&);
+ 
+     void clear();
+-    bool parseDeclaration(const String& styleDeclaration, CSSParserContext);
++    bool parseDeclaration(const String& styleDeclaration, const CSSParserContext&);
+ 
+     WEBCORE_EXPORT CSSStyleProperties& ensureCSSStyleProperties();
+     CSSStyleProperties& ensureInlineCSSStyleProperties(StyledElement& parentElement);
+@@ -86,7 +86,7 @@ public:
+     int NODELETE findCustomPropertyIndex(StringView propertyName) const;
+ 
+     // Methods for querying and altering CSS custom properties.
+-    bool setCustomProperty(const String& propertyName, const String& value, CSSParserContext, IsImportant = IsImportant::No);
++    bool setCustomProperty(const String& propertyName, const String& value, const CSSParserContext&, IsImportant = IsImportant::No);
+     bool removeCustomProperty(const String& propertyName, String* returnText = nullptr);
+ 
+ private:
+diff --git a/Source/WebCore/css/StyleProperties.cpp b/Source/WebCore/css/StyleProperties.cpp
+index 0ade933446..07abd7b37a 100644
+--- a/Source/WebCore/css/StyleProperties.cpp
++++ b/Source/WebCore/css/StyleProperties.cpp
+@@ -355,7 +355,8 @@ bool StyleProperties::propertyMatches(CSSPropertyID propertyID, const CSSValue*
+     int foundPropertyIndex = findPropertyIndex(propertyID);
+     if (foundPropertyIndex == -1)
+         return false;
+-    return protect(propertyAt(foundPropertyIndex).value())->equals(*propertyValue);
++    auto* value = propertyAt(foundPropertyIndex).value();
++    return value == propertyValue || protect(value)->equals(*propertyValue);
+ }
+ 
+ Ref<MutableStyleProperties> StyleProperties::mutableCopy() const
 diff --git a/Source/WebCore/css/StyleSheetContents.cpp b/Source/WebCore/css/StyleSheetContents.cpp
 index 24cef1124d..8d34a3f3d9 100644
 --- a/Source/WebCore/css/StyleSheetContents.cpp
@@ -1324,6 +1779,1130 @@ index a335b49971..cf2694b880 100644
      WEBCORE_EXPORT bool parseString(const String&);
  
      bool isCacheable() const;
+diff --git a/Source/WebCore/css/parser/CSSParser.cpp b/Source/WebCore/css/parser/CSSParser.cpp
+index 9f009df3e1..49f4460ec4 100644
+--- a/Source/WebCore/css/parser/CSSParser.cpp
++++ b/Source/WebCore/css/parser/CSSParser.cpp
+@@ -87,12 +87,22 @@
+ #include <bitset>
+ #include <memory>
+ #include <optional>
++#include <wtf/NeverDestroyed.h>
+ #include <wtf/StdLibExtras.h>
+ 
+ namespace WebCore {
+ 
+ static constexpr auto maximumRuleListNestingLevel = 128;
+ 
++// Returning a reference avoids copying the whole HashMap once per declaration.
++static const CSSNamespacePrefixMap& namespacePrefixMapFor(StyleSheetContents* styleSheet)
++{
++    if (styleSheet)
++        return styleSheet->namespacePrefixMap();
++    static NeverDestroyed<CSSNamespacePrefixMap> emptyMap;
++    return emptyMap.get();
++}
++
+ CSSParser::~CSSParser() = default;
+ 
+ CSSParser::CSSParser(const CSSParserContext& context, StyleSheetContents* styleSheet)
+@@ -509,23 +519,29 @@ RefPtr<StyleRuleBase> CSSParser::consumeQualifiedRule(CSSParserTokenRange& range
+ {
+     const auto initialRange = range;
+ 
+-    auto isNestedStyleRule = [&] {
+-        return hasStyleRuleAncestor() && allowedRules <= AllowedRules::RegularRules;
+-    };
++    // hasStyleRuleAncestor() scans the ancestor stack and neither operand changes while the
++    // prelude is consumed, so resolve it once instead of per prelude token.
++    const bool isNestedStyleRule = hasStyleRuleAncestor() && allowedRules <= AllowedRules::RegularRules;
+ 
+     auto preludeStart = range;
+ 
+     // Parsing a selector (aka a component value) should stop at the first semicolon (and goes to error recovery)
+     // instead of consuming the whole list of declarations (in nested context).
+     // At top level (aka non nested context), it's the normal rule list error recovery and we don't need this.
+-    while (!range.atEnd() && range.peek().type() != LeftBraceToken && (!isNestedStyleRule() || range.peek().type() != SemicolonToken))
++    while (!range.atEnd()) {
++        auto tokenType = range.peek().type();
++        if (tokenType == LeftBraceToken)
++            break;
++        if (isNestedStyleRule && tokenType == SemicolonToken)
++            break;
+         range.consumeComponentValue();
++    }
+ 
+     if (range.atEnd())
+         return { }; // Parse error, EOF instead of qualified rule block
+ 
+     // See comment above
+-    if (isNestedStyleRule() && range.peek().type() == SemicolonToken) {
++    if (isNestedStyleRule && range.peek().type() == SemicolonToken) {
+         range.consume();
+         return { };
+     }
+@@ -1708,8 +1724,12 @@ void CSSParser::consumeBlockContent(CSSParserTokenRange range, StyleRuleType rul
+         }
+     }
+ 
+-    // Store trailing declarations if any
+-    storeDeclarations();
++    // Store trailing declarations if any.
++    // When no nested rule split the block there is nothing to store: storeDeclarations() would
++    // allocate an initial block, swap the properties into it, and the restore below would swap
++    // them straight back. Skipping that saves a ~2KB allocation per style rule.
++    if (initialDeclarationBlock || ruleType == StyleRuleType::Function)
++        storeDeclarations();
+ 
+     // Restore the initial declaration block
+     if (initialDeclarationBlock)
+@@ -1843,7 +1863,7 @@ void CSSParser::consumeCustomPropertyValue(CSSParserTokenRange range, const Atom
+     if (range.atEnd())
+         topContext().m_parsedProperties.append(CSSProperty(CSSPropertyCustom, CSSCustomPropertyValue::createEmpty(variableName), important));
+     else {
+-        auto namespaceMap = m_styleSheet ? m_styleSheet->namespacePrefixMap() : CSSNamespacePrefixMap { };
++        auto& namespaceMap = namespacePrefixMapFor(m_styleSheet.get());
+         if (auto value = CSSSubstitutionParser::parseDeclarationValue(variableName, range, m_context, namespaceMap))
+             topContext().m_parsedProperties.append(CSSProperty(CSSPropertyCustom, value.releaseNonNull(), important));
+     }
+@@ -1851,8 +1871,7 @@ void CSSParser::consumeCustomPropertyValue(CSSParserTokenRange range, const Atom
+ 
+ void CSSParser::consumeDeclarationValue(CSSParserTokenRange range, CSSPropertyID propertyID, IsImportant important, StyleRuleType ruleType)
+ {
+-    auto namespaceMap = m_styleSheet ? m_styleSheet->namespacePrefixMap() : CSSNamespacePrefixMap { };
+-    CSSPropertyParser::parseValue(propertyID, important, range, m_context, topContext().m_parsedProperties, ruleType, namespaceMap);
++    CSSPropertyParser::parseValue(propertyID, important, range, m_context, topContext().m_parsedProperties, ruleType, namespacePrefixMapFor(m_styleSheet.get()));
+ }
+ 
+ } // namespace WebCore
+diff --git a/Source/WebCore/css/parser/CSSParserFastPaths.cpp b/Source/WebCore/css/parser/CSSParserFastPaths.cpp
+index 9e287b94cb..d12d9df801 100644
+--- a/Source/WebCore/css/parser/CSSParserFastPaths.cpp
++++ b/Source/WebCore/css/parser/CSSParserFastPaths.cpp
+@@ -105,11 +105,62 @@ std::optional<CSS::Range> CSSParserFastPaths::lengthValueRangeForPropertiesSuppo
+     }
+ }
+ 
++// Up to 15 decimal digits fit exactly in a double's 53 bit integer range, and 10^k is exactly
++// representable for k <= 22, so mantissa / 10^fractionDigits is the correctly rounded value of
++// the literal: bit for bit what charactersToDouble() returns, without entering strtod.
++template<typename CharacterType> static inline std::optional<double> parseExactDecimal(std::span<const CharacterType> characters)
++{
++    constexpr unsigned maximumExactDigits = 15;
++    static constexpr std::array<double, maximumExactDigits + 1> powersOfTen {
++        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15
++    };
++
++    size_t position = 0;
++    bool negative = false;
++    if (position < characters.size() && (characters[position] == '+' || characters[position] == '-')) {
++        negative = characters[position] == '-';
++        ++position;
++    }
++
++    uint64_t mantissa = 0;
++    unsigned digits = 0;
++    unsigned fractionDigits = 0;
++    while (position < characters.size() && isASCIIDigit(characters[position])) {
++        mantissa = mantissa * 10 + static_cast<unsigned>(characters[position] - '0');
++        ++digits;
++        ++position;
++        if (digits > maximumExactDigits)
++            return std::nullopt;
++    }
++    if (position < characters.size() && characters[position] == '.') {
++        ++position;
++        while (position < characters.size() && isASCIIDigit(characters[position])) {
++            mantissa = mantissa * 10 + static_cast<unsigned>(characters[position] - '0');
++            ++digits;
++            ++fractionDigits;
++            ++position;
++            if (digits > maximumExactDigits)
++                return std::nullopt;
++        }
++    }
++
++    // Anything else (exponent, leading space, trailing junk, no digits at all) is left to the general path.
++    if (!digits || position != characters.size())
++        return std::nullopt;
++
++    double result = static_cast<double>(mantissa);
++    if (fractionDigits)
++        result /= powersOfTen[fractionDigits];
++    return negative ? -result : result;
++}
++
+ template<typename CharacterType> static inline std::optional<double> parseCSSNumber(std::span<const CharacterType> characters)
+ {
+     // The charactersToDouble() function allows a trailing '.' but that is not allowed in CSS number values.
+     if (!characters.empty() && characters.back() == '.')
+         return std::nullopt;
++    if (auto number = parseExactDecimal(characters))
++        return number;
+     // FIXME: If we don't want to skip over leading spaces, we should use parseDouble, not charactersToDouble.
+     bool ok;
+     auto number = charactersToDouble(characters, &ok);
+@@ -118,8 +169,10 @@ template<typename CharacterType> static inline std::optional<double> parseCSSNum
+     return number;
+ }
+ 
++enum class AllowFontRelativeUnits : bool { No, Yes };
++
+ template <typename CharacterType>
+-static inline bool parseSimpleLength(std::span<const CharacterType> characters, CSSUnitType& unit, double& number)
++static inline bool parseSimpleLength(std::span<const CharacterType> characters, CSSUnitType& unit, double& number, AllowFontRelativeUnits allowFontRelativeUnits = AllowFontRelativeUnits::No)
+ {
+     if (characters.size() > 2 && isASCIIAlphaCaselessEqual(characters[characters.size() - 2], 'p') && isASCIIAlphaCaselessEqual(characters[characters.size() - 1], 'x')) {
+         dropLast(characters, 2);
+@@ -127,6 +180,14 @@ static inline bool parseSimpleLength(std::span<const CharacterType> characters,
+     } else if (!characters.empty() && characters.back() == '%') {
+         dropLast(characters);
+         unit = CSSUnitType::CSS_PERCENTAGE;
++    } else if (allowFontRelativeUnits == AllowFontRelativeUnits::Yes && characters.size() > 2 && isASCIIAlphaCaselessEqual(characters[characters.size() - 2], 'e') && isASCIIAlphaCaselessEqual(characters[characters.size() - 1], 'm')) {
++        if (characters.size() > 3 && isASCIIAlphaCaselessEqual(characters[characters.size() - 3], 'r')) {
++            dropLast(characters, 3);
++            unit = CSSUnitType::CSS_REM;
++        } else {
++            dropLast(characters, 2);
++            unit = CSSUnitType::CSS_EM;
++        }
+     }
+ 
+     auto parsedNumber = parseCSSNumber(characters);
+@@ -192,10 +253,10 @@ static RefPtr<CSSValue> parseSimpleLengthValue(StringView string, CSSParserMode
+     auto unit = CSSUnitType::CSS_NUMBER;
+ 
+     if (string.is8Bit()) {
+-        if (!parseSimpleLength(string.span8(), unit, number))
++        if (!parseSimpleLength(string.span8(), unit, number, AllowFontRelativeUnits::Yes))
+             return nullptr;
+     } else {
+-        if (!parseSimpleLength(string.span16(), unit, number))
++        if (!parseSimpleLength(string.span16(), unit, number, AllowFontRelativeUnits::Yes))
+             return nullptr;
+     }
+ 
+@@ -731,37 +792,34 @@ std::optional<SRGBA<uint8_t>> CSSParserFastPaths::parseNamedColor(StringView str
+     return parseNamedColorInternal(string.span16());
+ }
+ 
+-static bool isUniversalKeyword(StringView string)
++// A CSS identifier never starts with a digit, a '.' or a '+', so those strings can be rejected
++// before paying for the lowercasing copy and hash lookup inside cssValueKeywordID().
++template<typename CharacterType> static inline bool couldBeIdentifierStart(CharacterType character)
+ {
+-    // These keywords can be used for all properties.
+-    return equalLettersIgnoringASCIICase(string, "initial"_s)
+-        || equalLettersIgnoringASCIICase(string, "inherit"_s)
+-        || equalLettersIgnoringASCIICase(string, "unset"_s)
+-        || equalLettersIgnoringASCIICase(string, "revert"_s)
+-        || equalLettersIgnoringASCIICase(string, "revert-layer"_s)
+-        || equalLettersIgnoringASCIICase(string, "revert-rule"_s);
++    return !isASCIIDigit(character) && character != '.' && character != '+';
+ }
+ 
+ static RefPtr<CSSValue> parseKeywordValue(CSSPropertyID property, StringView string, CSS::PropertyParserState& state)
+ {
+     ASSERT(!string.isEmpty());
+ 
+-    if (!CSSPropertyParsing::isKeywordFastPathEligibleStyleProperty(property)) {
+-        // All properties, including non-keyword properties, accept the CSS-wide keywords.
+-        if (!isUniversalKeyword(string))
+-            return nullptr;
+-
+-        // Leave shorthands to parse CSS-wide keywords using CSSPropertyParser.
+-        if (shorthandForProperty(property).length())
+-            return nullptr;
+-    }
++    if (string.isEmpty() || !couldBeIdentifierStart(string[0]))
++        return nullptr;
+ 
+     auto valueID = cssValueKeywordID(string);
+     if (!valueID)
+         return nullptr;
+ 
+-    if (isCSSWideKeyword(valueID))
++    if (isCSSWideKeyword(valueID)) {
++        // All properties, including non-keyword properties, accept the CSS-wide keywords, but
++        // shorthands are left to CSSPropertyParser, which expands them to their longhands.
++        if (!CSSPropertyParsing::isKeywordFastPathEligibleStyleProperty(property) && shorthandForProperty(property).length())
++            return nullptr;
+         return CSSKeywordValue::create(valueID);
++    }
++
++    if (!CSSPropertyParsing::isKeywordFastPathEligibleStyleProperty(property))
++        return nullptr;
+ 
+     if (CSSPropertyParsing::isKeywordValidForStyleProperty(property, valueID, state))
+         return CSSKeywordValue::create(valueID);
+@@ -1028,6 +1086,54 @@ static RefPtr<CSSValue> parseOpacity(StringView string)
+     return CSSPrimitiveValue::create(number, CSSUnitType::CSS_NUMBER);
+ }
+ 
++// Matches the <integer> production the way the tokenizer does: an optional sign then digits,
++// with no decimal point and no exponent (those produce a NumberToken the integer consumers
++// reject). Nine digits keeps the result inside the int range the general parser narrows to;
++// longer runs fall back so the two paths cannot disagree.
++template<typename CharacterType> static inline bool parseSimpleInteger(std::span<const CharacterType> characters, double& number)
++{
++    constexpr unsigned maximumDigits = 9;
++
++    size_t position = 0;
++    bool negative = false;
++    if (position < characters.size() && (characters[position] == '+' || characters[position] == '-')) {
++        negative = characters[position] == '-';
++        ++position;
++    }
++
++    unsigned value = 0;
++    unsigned digits = 0;
++    while (position < characters.size() && isASCIIDigit(characters[position])) {
++        value = value * 10 + static_cast<unsigned>(characters[position] - '0');
++        ++digits;
++        ++position;
++        if (digits > maximumDigits)
++            return false;
++    }
++
++    if (!digits || position != characters.size())
++        return false;
++
++    // Going through int, as the general parser does, so that "-0" yields 0 and not -0.
++    number = negative ? -static_cast<int>(value) : static_cast<int>(value);
++    return true;
++}
++
++static RefPtr<CSSValue> parseSimpleIntegerValue(StringView string)
++{
++    ASSERT(!string.isEmpty());
++
++    double number;
++    if (string.is8Bit()) {
++        if (!parseSimpleInteger(string.span8(), number))
++            return nullptr;
++    } else {
++        if (!parseSimpleInteger(string.span16(), number))
++            return nullptr;
++    }
++    return CSSPrimitiveValue::createInteger(number);
++}
++
+ static RefPtr<CSSValue> parseColorWithAuto(StringView string, const CSSParserContext& context)
+ {
+     ASSERT(!string.isEmpty());
+@@ -1051,6 +1157,13 @@ RefPtr<CSSValue> CSSParserFastPaths::maybeParseValue(CSSPropertyID property, Str
+         return parseOpacity(string);
+     case CSSPropertyTransform:
+         return parseSimpleTransform(string);
++    case CSSPropertyOrder:
++    case CSSPropertyZIndex:
++        // Both are a bare unbounded <integer> plus, for z-index, the "auto" keyword, which the
++        // keyword fast path below still handles.
++        if (auto result = parseSimpleIntegerValue(string))
++            return result;
++        break;
+     case CSSPropertyCaretColor:
+     case CSSPropertyAccentColor:
+         if (isExposed(property, &state.context.propertySettings))
+@@ -1061,10 +1174,14 @@ RefPtr<CSSValue> CSSParserFastPaths::maybeParseValue(CSSPropertyID property, Str
+     }
+ 
+     if (CSSProperty::isColorProperty(property)) {
+-        auto context = state.context;
+-        if (!CSSProperty::acceptsQuirkyColor(property))
++        // Copying the context is only needed when the mode actually has to be overridden; it
++        // carries a URL and the whole property settings block.
++        if (state.context.mode != HTMLStandardMode && !CSSProperty::acceptsQuirkyColor(property)) {
++            CSSParserContext context = state.context;
+             context.mode = HTMLStandardMode;
+-        return parseColor(string, context);
++            return parseColor(string, context);
++        }
++        return parseColor(string, state.context);
+     }
+ 
+     if (auto valueRange = lengthValueRangeForPropertiesSupportingSimpleLengths(property)) {
+diff --git a/Source/WebCore/css/parser/CSSParserToken.cpp b/Source/WebCore/css/parser/CSSParserToken.cpp
+index 2f7f3edd4b..39385d9f61 100644
+--- a/Source/WebCore/css/parser/CSSParserToken.cpp
++++ b/Source/WebCore/css/parser/CSSParserToken.cpp
+@@ -351,55 +351,6 @@ CSSUnitType CSSParserToken::stringToUnitType(StringView stringView)
+     return cssPrimitiveValueUnitFromTrie(stringView.span16());
+ }
+ 
+-CSSParserToken::CSSParserToken(CSSParserTokenType type, BlockType blockType)
+-    : m_type(type)
+-    , m_blockType(blockType)
+-{
+-}
+-
+-CSSParserToken::CSSParserToken(unsigned nonNewlineWhitespaceCount)
+-    : m_type(NonNewlineWhitespaceToken)
+-    , m_blockType(NotBlock)
+-    , m_whitespaceCount(nonNewlineWhitespaceCount)
+-{
+-}
+-
+-// Just a helper used for Delimiter tokens.
+-CSSParserToken::CSSParserToken(CSSParserTokenType type, char16_t c)
+-    : m_type(type)
+-    , m_blockType(NotBlock)
+-    , m_delimiter(c)
+-{
+-    ASSERT(m_type == DelimiterToken);
+-}
+-
+-CSSParserToken::CSSParserToken(CSSParserTokenType type, StringView value, BlockType blockType)
+-    : m_type(type)
+-    , m_blockType(blockType)
+-    , m_id(-1)
+-{
+-    initValueFromStringView(value);
+-}
+-
+-CSSParserToken::CSSParserToken(double numericValue, NumericValueType numericValueType, NumericSign sign, StringView originalText)
+-    : m_type(NumberToken)
+-    , m_blockType(NotBlock)
+-    , m_numericValueType(numericValueType)
+-    , m_numericSign(sign)
+-    , m_unit(static_cast<unsigned>(CSSUnitType::CSS_NUMBER))
+-    , m_numericValue(numericValue)
+-{
+-    initValueFromStringView(originalText);
+-}
+-
+-CSSParserToken::CSSParserToken(HashTokenType type, StringView value)
+-    : m_type(HashToken)
+-    , m_blockType(NotBlock)
+-    , m_hashTokenType(type)
+-{
+-    initValueFromStringView(value);
+-}
+-
+ static StringView NODELETE mergeIfAdjacent(StringView a, StringView b)
+ {
+     if (a.is8Bit() && b.is8Bit()) {
+diff --git a/Source/WebCore/css/parser/CSSParserToken.h b/Source/WebCore/css/parser/CSSParserToken.h
+index e2f46adf86..5c175be4e6 100644
+--- a/Source/WebCore/css/parser/CSSParserToken.h
++++ b/Source/WebCore/css/parser/CSSParserToken.h
+@@ -194,4 +194,55 @@ inline void CSSParserToken::updateCharacters(std::span<const CharacterType> char
+     m_valueDataCharRaw = characters.data();
+ }
+ 
++// The tokenizer runs one of these per token and returns the result by value; defining them here
++// lets the token be built in place instead of through an out-of-line call and a copy.
++
++inline CSSParserToken::CSSParserToken(CSSParserTokenType type, BlockType blockType)
++    : m_type(type)
++    , m_blockType(blockType)
++{
++}
++
++inline CSSParserToken::CSSParserToken(unsigned nonNewlineWhitespaceCount)
++    : m_type(NonNewlineWhitespaceToken)
++    , m_blockType(NotBlock)
++    , m_whitespaceCount(nonNewlineWhitespaceCount)
++{
++}
++
++inline CSSParserToken::CSSParserToken(CSSParserTokenType type, char16_t c)
++    : m_type(type)
++    , m_blockType(NotBlock)
++    , m_delimiter(c)
++{
++    ASSERT(m_type == DelimiterToken);
++}
++
++inline CSSParserToken::CSSParserToken(CSSParserTokenType type, StringView value, BlockType blockType)
++    : m_type(type)
++    , m_blockType(blockType)
++    , m_id(-1)
++{
++    initValueFromStringView(value);
++}
++
++inline CSSParserToken::CSSParserToken(double numericValue, NumericValueType numericValueType, NumericSign sign, StringView originalText)
++    : m_type(NumberToken)
++    , m_blockType(NotBlock)
++    , m_numericValueType(numericValueType)
++    , m_numericSign(sign)
++    , m_unit(static_cast<unsigned>(CSSUnitType::CSS_NUMBER))
++    , m_numericValue(numericValue)
++{
++    initValueFromStringView(originalText);
++}
++
++inline CSSParserToken::CSSParserToken(HashTokenType type, StringView value)
++    : m_type(HashToken)
++    , m_blockType(NotBlock)
++    , m_hashTokenType(type)
++{
++    initValueFromStringView(value);
++}
++
+ } // namespace WebCore
+diff --git a/Source/WebCore/css/parser/CSSParserTokenRange.cpp b/Source/WebCore/css/parser/CSSParserTokenRange.cpp
+index 417f585457..fb5fd5f6e9 100644
+--- a/Source/WebCore/css/parser/CSSParserTokenRange.cpp
++++ b/Source/WebCore/css/parser/CSSParserTokenRange.cpp
+@@ -46,22 +46,33 @@ CSSParserTokenRange CSSParserTokenRange::consumeBlock()
+ {
+     ASSERT(peek().getBlockType() == CSSParserToken::BlockStart);
+     auto start = m_tokens.subspan(1);
++    // Walk by index: the do/while already guarantees we never step past the end, so the
++    // emptiness test and the span update that consume() performs per token are dead weight.
++    size_t size = m_tokens.size();
++    size_t consumed = 0;
+     unsigned nestingLevel = 0;
+     do {
+-        const CSSParserToken& token = consume();
+-        if (token.getBlockType() == CSSParserToken::BlockStart)
++        auto blockType = m_tokens[consumed++].getBlockType();
++        if (blockType == CSSParserToken::BlockStart)
+             nestingLevel++;
+-        else if (token.getBlockType() == CSSParserToken::BlockEnd)
++        else if (blockType == CSSParserToken::BlockEnd)
+             nestingLevel--;
+-    } while (nestingLevel && !m_tokens.empty());
++    } while (nestingLevel && consumed < size);
++    skip(m_tokens, consumed);
+ 
+     if (nestingLevel)
+-        return start.first(m_tokens.data() - start.data()); // Ended at EOF
+-    return start.first(m_tokens.data() - start.data() - 1);
++        return start.first(consumed - 1); // Ended at EOF
++    return start.first(consumed - 2);
+ }
+ 
+ CSSParserTokenRange CSSParserTokenRange::consumeBlockCheckingForEditability(StyleSheetContents* styleSheet)
+ {
++#if defined(WEBKIT_IOS6)
++    // This port has no editing, so style-based editability never affects anything; skip comparing
++    // every ident token in the sheet against "-webkit-user-modify".
++    UNUSED_PARAM(styleSheet);
++    return consumeBlock();
++#else
+     ASSERT(peek().getBlockType() == CSSParserToken::BlockStart);
+     auto start = m_tokens.subspan(1);
+     unsigned nestingLevel = 0;
+@@ -79,20 +90,34 @@ CSSParserTokenRange CSSParserTokenRange::consumeBlockCheckingForEditability(Styl
+     if (nestingLevel)
+         return start.first(m_tokens.data() - start.data()); // Ended at EOF
+     return start.first(m_tokens.data() - start.data() - 1);
++#endif
+ }
+ 
+ void CSSParserTokenRange::consumeComponentValue()
+ {
+     // FIXME: This is going to do multiple passes over large sections of a stylesheet.
+     // We should consider optimising this by precomputing where each block ends.
++    if (m_tokens.empty()) [[unlikely]]
++        return;
++
++    // The overwhelmingly common case is a single non-block token; take it without entering the
++    // nesting loop, and walk by index otherwise so consume()'s per-token bookkeeping is skipped.
++    if (m_tokens[0].getBlockType() == CSSParserToken::NotBlock) {
++        skip(m_tokens, 1);
++        return;
++    }
++
++    size_t size = m_tokens.size();
++    size_t consumed = 0;
+     unsigned nestingLevel = 0;
+     do {
+-        const CSSParserToken& token = consume();
+-        if (token.getBlockType() == CSSParserToken::BlockStart)
++        auto type = m_tokens[consumed++].getBlockType();
++        if (type == CSSParserToken::BlockStart)
+             nestingLevel++;
+-        else if (token.getBlockType() == CSSParserToken::BlockEnd)
++        else if (type == CSSParserToken::BlockEnd)
+             nestingLevel--;
+-    } while (nestingLevel && !m_tokens.empty());
++    } while (nestingLevel && consumed < size);
++    skip(m_tokens, consumed);
+ }
+ 
+ void CSSParserTokenRange::trimTrailingWhitespace()
+diff --git a/Source/WebCore/css/parser/CSSPropertyParser.cpp b/Source/WebCore/css/parser/CSSPropertyParser.cpp
+index 9e8a861237..de6d71e6ce 100644
+--- a/Source/WebCore/css/parser/CSSPropertyParser.cpp
++++ b/Source/WebCore/css/parser/CSSPropertyParser.cpp
+@@ -187,7 +187,12 @@ CSSValueID cssValueKeywordID(StringView string)
+         return CSSValueInvalid;
+     if (length > maxCSSValueKeywordLength)
+         return CSSValueInvalid;
+-    
++    // Every entry in CSSValueKeywords.in starts with an ASCII letter or '-', so anything else
++    // can be rejected before the lowercasing copy and the hash lookup.
++    auto first = string[0];
++    if (!isASCIIAlpha(first) && first != '-')
++        return CSSValueInvalid;
++
+     return string.is8Bit() ? cssValueKeywordID(string.span8()) : cssValueKeywordID(string.span16());
+ }
+ 
+@@ -202,6 +207,12 @@ bool isCustomPropertyName(StringView propertyName)
+ 
+ static RefPtr<CSSValue> consumeCSSWideKeywordValue(CSSParserTokenRange& range)
+ {
++    // CSSParserToken::id() is CSSValueInvalid for anything but an IdentToken, so every other
++    // declaration - the majority - can skip the range copy and the token consumption. This runs
++    // once per declaration in every stylesheet.
++    if (range.peek().type() != IdentToken)
++        return nullptr;
++
+     auto rangeCopy = range;
+     auto valueID = rangeCopy.consumeIncludingWhitespace().id();
+     if (!rangeCopy.atEnd())
+diff --git a/Source/WebCore/css/parser/CSSPropertyParserConsumer+Ident.cpp b/Source/WebCore/css/parser/CSSPropertyParserConsumer+Ident.cpp
+index d8d5d24d27..8ccab51fbb 100644
+--- a/Source/WebCore/css/parser/CSSPropertyParserConsumer+Ident.cpp
++++ b/Source/WebCore/css/parser/CSSPropertyParserConsumer+Ident.cpp
+@@ -168,6 +168,10 @@ RefPtr<CSSValue> consumeDashedIdent(CSSParserTokenRange& range, CSS::PropertyPar
+ 
+ std::optional<CSSWideKeyword> consumeCSSWideKeyword(CSSParserTokenRange& range)
+ {
++    // Only an IdentToken can have a CSS-wide keyword id; skip the copy and consume otherwise.
++    if (range.peek().type() != IdentToken)
++        return { };
++
+     auto rangeCopy = range;
+     auto valueID = rangeCopy.consumeIncludingWhitespace().id();
+     if (!rangeCopy.atEnd())
+diff --git a/Source/WebCore/css/parser/CSSSelectorParser.cpp b/Source/WebCore/css/parser/CSSSelectorParser.cpp
+index 5dd761d528..fd0024d18e 100644
+--- a/Source/WebCore/css/parser/CSSSelectorParser.cpp
++++ b/Source/WebCore/css/parser/CSSSelectorParser.cpp
+@@ -659,18 +659,27 @@ std::unique_ptr<MutableCSSSelector> CSSSelectorParser::consumeSimpleSelector(CSS
+ {
+     const CSSParserToken& token = range.peek();
+     std::unique_ptr<MutableCSSSelector> selector;
+-    if (token.type() == HashToken)
++    switch (token.type()) {
++    case HashToken:
+         selector = consumeId(range);
+-    else if (token.type() == DelimiterToken && token.delimiter() == '.')
+-        selector = consumeClass(range);
+-    else if (token.type() == DelimiterToken && token.delimiter() == '&')
+-        selector = consumeNesting(range);
+-    else if (token.type() == LeftBracketToken)
++        break;
++    case DelimiterToken:
++        if (token.delimiter() == '.')
++            selector = consumeClass(range);
++        else if (token.delimiter() == '&')
++            selector = consumeNesting(range);
++        else
++            return nullptr;
++        break;
++    case LeftBracketToken:
+         selector = consumeAttribute(range);
+-    else if (token.type() == ColonToken)
++        break;
++    case ColonToken:
+         selector = consumePseudo(range);
+-    else
++        break;
++    default:
+         return nullptr;
++    }
+ 
+     if (!selector) {
+         m_failedParsing = true;
+@@ -1097,21 +1106,23 @@ CSSSelector::Relation CSSSelectorParser::consumeCombinator(CSSParserTokenRange&
+         fallbackResult = CSSSelector::Relation::DescendantSpace;
+     }
+ 
+-    if (range.peek().type() != DelimiterToken)
++    auto& token = range.peek();
++    if (token.type() != DelimiterToken)
+         return fallbackResult;
+ 
+-    char16_t delimiter = range.peek().delimiter();
+-
+-    if (delimiter == '+' || delimiter == '~' || delimiter == '>') {
++    switch (token.delimiter()) {
++    case '+':
++        range.consumeIncludingWhitespace();
++        return CSSSelector::Relation::DirectAdjacent;
++    case '~':
++        range.consumeIncludingWhitespace();
++        return CSSSelector::Relation::IndirectAdjacent;
++    case '>':
+         range.consumeIncludingWhitespace();
+-        if (delimiter == '+')
+-            return CSSSelector::Relation::DirectAdjacent;
+-        if (delimiter == '~')
+-            return CSSSelector::Relation::IndirectAdjacent;
+         return CSSSelector::Relation::Child;
++    default:
++        return fallbackResult;
+     }
+-
+-    return fallbackResult;
+ }
+ 
+ CSSSelector::Match CSSSelectorParser::consumeAttributeMatch(CSSParserTokenRange& range)
+@@ -1275,19 +1286,18 @@ const AtomString& CSSSelectorParser::determineNamespace(const AtomString& prefix
+ void CSSSelectorParser::prependTypeSelectorIfNeeded(const AtomString& namespacePrefix, const AtomString& elementName, MutableCSSSelector& compoundSelector)
+ {
+     bool isShadowDOM = compoundSelector.needsImplicitShadowCombinatorForMatching();
+-    
++
+     if (elementName.isNull() && defaultNamespace() == starAtom() && !isShadowDOM)
+         return;
+ 
+-    AtomString determinedElementName = elementName.isNull() ? starAtom() : elementName;
+-    AtomString namespaceURI = determineNamespace(namespacePrefix);
++    // Binding by reference: each AtomString copy here is an atomic refcount pair on armv7.
++    const AtomString& determinedElementName = elementName.isNull() ? starAtom() : elementName;
++    const AtomString& namespaceURI = determineNamespace(namespacePrefix);
+     if (namespaceURI.isNull()) {
+         m_failedParsing = true;
+         return;
+     }
+-    AtomString determinedPrefix = namespacePrefix;
+-    if (namespaceURI == defaultNamespace())
+-        determinedPrefix = nullAtom();
++    const AtomString& determinedPrefix = namespaceURI == defaultNamespace() ? nullAtom() : namespacePrefix;
+     QualifiedName tag(determinedPrefix, determinedElementName, namespaceURI);
+ 
+     // *:host never matches, so we can't discard the *,
+diff --git a/Source/WebCore/css/parser/CSSSubstitutionParser.cpp b/Source/WebCore/css/parser/CSSSubstitutionParser.cpp
+index f154cd224b..23b7297031 100644
+--- a/Source/WebCore/css/parser/CSSSubstitutionParser.cpp
++++ b/Source/WebCore/css/parser/CSSSubstitutionParser.cpp
+@@ -44,7 +44,7 @@
+ #include "CSSValueKeywords.h"
+ #include "StyleCustomProperty.h"
+ #include "StyleSheetContents.h"
+-#include <stack>
++#include <wtf/Vector.h>
+ 
+ namespace WebCore {
+ 
+@@ -83,20 +83,20 @@ static std::optional<ClassifyBlockResult> classifyBlock(CSSParserTokenRange rang
+         unsigned topLevelBraceBlocks = 0;
+         bool doneWithThisRange = false;
+     };
+-    ClassifyBlockState initialState { .range = range };
+-
+-    std::stack<ClassifyBlockState> stack;
+-    stack.push(initialState);
++    // std::stack is deque-backed and heap-allocates on the first push; a Vector with inline
++    // capacity keeps the whole walk on the stack for the nesting depths real stylesheets use.
++    Vector<ClassifyBlockState, 8> stack;
++    stack.append(ClassifyBlockState { .range = range });
+ 
+     auto result = ClassifyBlockResult { };
+ 
+-    while (!stack.empty()) {
+-        auto& current = stack.top();
++    while (!stack.isEmpty()) {
++        auto& current = stack.last();
+         if (current.doneWithThisRange) {
+             // If there is a top level brace block, the value should contains only that.
+             if (current.topLevelBraceBlocks > 1 || (current.topLevelBraceBlocks == 1 && current.hasOtherValues))
+                 result.hasTopLevelBraceBlockMixedWithOtherValues = true;
+-            stack.pop();
++            stack.removeLast();
+             continue;
+         }
+ 
+@@ -117,54 +117,70 @@ static std::optional<ClassifyBlockResult> classifyBlock(CSSParserTokenRange rang
+ 
+         if (current.range.peek().getBlockType() == CSSParserToken::BlockStart) {
+             const CSSParserToken& token = current.range.peek();
++            auto tokenType = token.type();
+             CSSParserTokenRange block = current.range.consumeBlock();
+             block.consumeWhitespace();
+ 
+-            if (token.type() == LeftBraceToken && current.isTopLevelBlock && block.atEnd())
++            if (current.isTopLevelBlock && tokenType == LeftBraceToken && block.atEnd())
+                 result.hasEmptyTopLevelBraceBlock = true;
+ 
+-            if (token.functionId() == CSSValueVar) {
+-                if (!isValidVariableReference(block, parserContext))
+-                    return { };
+-                result.hasSubstitutionFunctions = true;
+-                continue;
+-            }
+-            if (token.functionId() == CSSValueEnv) {
+-                if (!isValidConstantReference(block, parserContext))
+-                    return { };
+-                result.hasSubstitutionFunctions = true;
+-                continue;
+-            }
+-            if (token.functionId() == CSSValueAttr && parserContext.cssAttrSubstitutionFunctionEnabled) {
+-                if (!isValidAttrReference(block, parserContext))
+-                    return { };
+-                result.hasSubstitutionFunctions = true;
+-                continue;
+-            }
+-            if (token.functionId() == CSSValueRandomItem && parserContext.cssRandomItemFunctionEnabled) {
+-                if (!isValidRandomItemReference(block, parserContext))
+-                    return { };
+-                result.hasSubstitutionFunctions = true;
+-                continue;
+-            }
+-            if (token.functionId() == CSSValueIf && parserContext.cssIfFunctionEnabled) {
+-                if (!isValidIfReference(block, parserContext))
+-                    return { };
+-                result.hasSubstitutionFunctions = true;
+-                continue;
+-            }
+-            if (token.functionId() == CSSValueInternalAutoBase && parserContext.cssInternalAutoBaseParsingEnabled) {
+-                result.hasSubstitutionFunctions = true;
+-                continue;
++            // functionId() resolves the ident through a keyword lookup; ask for it once instead
++            // of once per candidate function name.
++            if (tokenType == FunctionToken) {
++                switch (token.functionId()) {
++                case CSSValueVar:
++                    if (!isValidVariableReference(block, parserContext))
++                        return { };
++                    result.hasSubstitutionFunctions = true;
++                    continue;
++                case CSSValueEnv:
++                    if (!isValidConstantReference(block, parserContext))
++                        return { };
++                    result.hasSubstitutionFunctions = true;
++                    continue;
++                case CSSValueAttr:
++                    if (parserContext.cssAttrSubstitutionFunctionEnabled) {
++                        if (!isValidAttrReference(block, parserContext))
++                            return { };
++                        result.hasSubstitutionFunctions = true;
++                        continue;
++                    }
++                    break;
++                case CSSValueRandomItem:
++                    if (parserContext.cssRandomItemFunctionEnabled) {
++                        if (!isValidRandomItemReference(block, parserContext))
++                            return { };
++                        result.hasSubstitutionFunctions = true;
++                        continue;
++                    }
++                    break;
++                case CSSValueIf:
++                    if (parserContext.cssIfFunctionEnabled) {
++                        if (!isValidIfReference(block, parserContext))
++                            return { };
++                        result.hasSubstitutionFunctions = true;
++                        continue;
++                    }
++                    break;
++                case CSSValueInternalAutoBase:
++                    if (parserContext.cssInternalAutoBaseParsingEnabled) {
++                        result.hasSubstitutionFunctions = true;
++                        continue;
++                    }
++                    break;
++                default:
++                    break;
++                }
++
++                if (parserContext.propertySettings.cssFunctionAtRuleEnabled && isCustomPropertyName(token.value())) {
++                    // https://drafts.csswg.org/css-mixins/#typedef-dashed-function
++                    if (!isValidDashedFunction(block, parserContext))
++                        return { };
++                    result.hasSubstitutionFunctions = true;
++                    continue;
++                }
+             }
+-            if (token.type() == FunctionToken && isCustomPropertyName(token.value()) && parserContext.propertySettings.cssFunctionAtRuleEnabled) {
+-                // https://drafts.csswg.org/css-mixins/#typedef-dashed-function
+-                if (!isValidDashedFunction(block, parserContext))
+-                    return { };
+-                result.hasSubstitutionFunctions = true;
+-                continue;
+-            }
+-            stack.push(ClassifyBlockState {
++            stack.append(ClassifyBlockState {
+                 .range = block,
+                 .isTopLevelBlock = false, // Nested block, not top-level
+             });
+@@ -392,6 +408,19 @@ static std::optional<VariableType> classifyVariableRange(CSSParserTokenRange ran
+ 
+ bool CSSSubstitutionParser::containsSubstitutionFunctions(CSSParserTokenRange range, const CSSParserContext& parserContext)
+ {
++    // Every path that sets hasSubstitutionFunctions requires a FunctionToken, and the tokens of
++    // nested blocks are laid out flat in the same span, so one scan settles it. This runs for
++    // every declaration the property parser rejects, where the answer is almost always no.
++    bool hasFunctionToken = false;
++    for (auto& token : range.span()) {
++        if (token.type() == FunctionToken) {
++            hasFunctionToken = true;
++            break;
++        }
++    }
++    if (!hasFunctionToken)
++        return false;
++
+     auto type = classifyVariableRange(range, parserContext);
+     if (!type)
+         return false;
+diff --git a/Source/WebCore/css/parser/CSSTokenizer.cpp b/Source/WebCore/css/parser/CSSTokenizer.cpp
+index 491c66cf38..5599e0f8f3 100644
+--- a/Source/WebCore/css/parser/CSSTokenizer.cpp
++++ b/Source/WebCore/css/parser/CSSTokenizer.cpp
+@@ -139,11 +139,6 @@ unsigned CSSTokenizer::tokenCount()
+     return m_tokens.size();
+ }
+ 
+-bool CSSTokenizer::isWhitespace(CSSParserTokenType type)
+-{
+-    return type == NonNewlineWhitespaceToken || type == NewlineToken;
+-}
+-
+ CSSParserToken CSSTokenizer::newline(char16_t)
+ {
+     return CSSParserToken(NewlineToken);
+@@ -761,18 +756,13 @@ bool CSSTokenizer::consumeIfNext(char16_t character)
+ // http://www.w3.org/TR/css3-syntax/#consume-a-name
+ StringView CSSTokenizer::consumeName()
+ {
+-    // Names without escapes get handled without allocations
+-    for (unsigned size = 0; ; ++size) {
+-        char16_t cc = m_input.peek(size);
+-        if (isNameCodePoint(cc))
+-            continue;
+-        // peek will return NUL when we hit the end of the
+-        // input. In that case we want to still use the rangeAt() fast path
+-        // below.
+-        if (cc == kEndOfFileMarker && m_input.offset() + size < m_input.length())
+-            break;
+-        if (cc == '\\')
+-            break;
++    // Names without escapes get handled without allocations. skipWhilePredicate walks the raw
++    // 8-bit or 16-bit buffer, so the whole name costs one bounds test instead of one per character.
++    unsigned size = m_input.skipWhilePredicate<isNameCodePoint>(0);
++    char16_t terminator = m_input.peek(size);
++    // peek returns NUL both for an embedded NUL and for the end of the input; only the former
++    // needs the escape-handling slow path.
++    if (terminator != '\\' && !(terminator == kEndOfFileMarker && m_input.offset() + size < m_input.length())) {
+         unsigned startOffset = m_input.offset();
+         m_input.advance(size);
+         return m_input.rangeAt(startOffset, size);
+diff --git a/Source/WebCore/css/parser/CSSTokenizer.h b/Source/WebCore/css/parser/CSSTokenizer.h
+index 98cde39ba5..b1bb8ff650 100644
+--- a/Source/WebCore/css/parser/CSSTokenizer.h
++++ b/Source/WebCore/css/parser/CSSTokenizer.h
+@@ -55,7 +55,13 @@ public:
+     WEBCORE_EXPORT CSSParserTokenRange NODELETE tokenRange() const LIFETIME_BOUND;
+     unsigned NODELETE tokenCount();
+ 
+-    static bool NODELETE isWhitespace(CSSParserTokenType);
++    // Defined here rather than out of line: this is the per-token test in
++    // CSSParserTokenRange::consumeWhitespace and in the selector/substitution walks.
++    static bool isWhitespace(CSSParserTokenType type)
++    {
++        static_assert(NewlineToken == NonNewlineWhitespaceToken + 1);
++        return static_cast<unsigned>(type) - NonNewlineWhitespaceToken <= 1;
++    }
+ 
+     Vector<String>&& escapedStringsForAdoption() { return WTF::move(m_stringPool); }
+ 
+diff --git a/Source/WebCore/css/parser/CSSTokenizerInputStream.cpp b/Source/WebCore/css/parser/CSSTokenizerInputStream.cpp
+index 354458e03e..3c384efc84 100644
+--- a/Source/WebCore/css/parser/CSSTokenizerInputStream.cpp
++++ b/Source/WebCore/css/parser/CSSTokenizerInputStream.cpp
+@@ -42,25 +42,32 @@ CSSTokenizerInputStream::CSSTokenizerInputStream(const String& input)
+     , m_stringLength(input.length())
+     , m_string(input.impl())
+ {
++    if (!m_stringLength)
++        return;
++    m_is8Bit = m_string->is8Bit();
++    if (m_is8Bit)
++        m_characters8 = m_string->span8().data();
++    else
++        m_characters16 = m_string->span16().data();
+ }
+ 
+ void CSSTokenizerInputStream::advanceUntilNonWhitespace()
+ {
+     // Using ASCII whitespace here rather than CSS space since we don't do preprocessing
+-    auto advance = [this](auto characters) {
++    auto advance = [this](auto* characters) {
+         while (m_offset < m_stringLength && isASCIIWhitespace(characters[m_offset]))
+             ++m_offset;
+     };
+ 
+-    if (m_string->is8Bit())
+-        advance(m_string->span8());
++    if (m_is8Bit)
++        advance(m_characters8);
+     else
+-        advance(m_string->span16());
++        advance(m_characters16);
+ }
+ 
+ void CSSTokenizerInputStream::advanceUntilNewlineOrNonWhitespace()
+ {
+-    auto advance = [this](auto characters) {
++    auto advance = [this](auto* characters) {
+         while (m_offset < m_stringLength && isASCIIWhitespace(characters[m_offset])) {
+             if (isCSSNewline(characters[m_offset]))
+                 return;
+@@ -68,10 +75,10 @@ void CSSTokenizerInputStream::advanceUntilNewlineOrNonWhitespace()
+         }
+     };
+ 
+-    if (m_string->is8Bit())
+-        advance(m_string->span8());
++    if (m_is8Bit)
++        advance(m_characters8);
+     else
+-        advance(m_string->span16());
++        advance(m_characters16);
+ }
+ 
+ double CSSTokenizerInputStream::getDouble(unsigned start, unsigned end) const
+@@ -80,10 +87,10 @@ double CSSTokenizerInputStream::getDouble(unsigned start, unsigned end) const
+     bool isResultOK = false;
+     double result = 0.0;
+     if (start < end) {
+-        if (m_string->is8Bit())
+-            result = charactersToDouble(m_string->span8().subspan(m_offset + start, end - start), &isResultOK);
++        if (m_is8Bit)
++            result = charactersToDouble(std::span<const Latin1Character> { m_characters8 + m_offset + start, end - start }, &isResultOK);
+         else
+-            result = charactersToDouble(m_string->span16().subspan(m_offset + start, end - start), &isResultOK);
++            result = charactersToDouble(std::span<const char16_t> { m_characters16 + m_offset + start, end - start }, &isResultOK);
+     }
+     // FIXME: It looks like callers ensure we have a valid number
+     return isResultOK ? result : 0.0;
+diff --git a/Source/WebCore/css/parser/CSSTokenizerInputStream.h b/Source/WebCore/css/parser/CSSTokenizerInputStream.h
+index b0742b2e21..9577136bea 100644
+--- a/Source/WebCore/css/parser/CSSTokenizerInputStream.h
++++ b/Source/WebCore/css/parser/CSSTokenizerInputStream.h
+@@ -46,18 +46,19 @@ public:
+     // end of the stream.
+     char16_t nextInputChar() const
+     {
+-        if (m_offset >= m_stringLength)
++        if (m_offset >= m_stringLength) [[unlikely]]
+             return kEndOfFileMarker;
+-        return (*m_string)[m_offset];
++        return characterAt(m_offset);
+     }
+ 
+     // Gets the char at lookaheadOffset from the current stream position. Will
+     // return NUL (kEndOfFileMarker) if the stream position is at the end.
+     char16_t peek(unsigned lookaheadOffset) const
+     {
+-        if ((m_offset + lookaheadOffset) >= m_stringLength)
++        size_t index = m_offset + lookaheadOffset;
++        if (index >= m_stringLength) [[unlikely]]
+             return kEndOfFileMarker;
+-        return (*m_string)[m_offset + lookaheadOffset];
++        return characterAt(index);
+     }
+ 
+     void advance(unsigned offset = 1) { m_offset += offset; }
+@@ -72,13 +73,11 @@ public:
+     template<bool characterPredicate(char16_t)>
+     unsigned skipWhilePredicate(unsigned offset)
+     {
+-        if (m_string->is8Bit()) {
+-            auto characters8 = m_string->span8();
+-            while ((m_offset + offset) < m_stringLength && characterPredicate(characters8[m_offset + offset]))
++        if (m_is8Bit) {
++            while ((m_offset + offset) < m_stringLength && characterPredicate(m_characters8[m_offset + offset]))
+                 ++offset;
+         } else {
+-            auto characters16 = m_string->span16();
+-            while ((m_offset + offset) < m_stringLength && characterPredicate(characters16[m_offset + offset]))
++            while ((m_offset + offset) < m_stringLength && characterPredicate(m_characters16[m_offset + offset]))
+                 ++offset;
+         }
+         return offset;
+@@ -93,12 +92,24 @@ public:
+     StringView rangeAt(unsigned start, unsigned length) const
+     {
+         ASSERT(start + length <= m_stringLength);
+-        return StringView(m_string.get()).substring(start, length); // FIXME: Should make a constructor on StringView for this.
++        if (m_is8Bit)
++            return StringView(static_cast<const void*>(m_characters8 + start), length, true);
++        return StringView(static_cast<const void*>(m_characters16 + start), length, false);
+     }
+ 
+ private:
++    char16_t characterAt(size_t index) const
++    {
++        return m_is8Bit ? m_characters8[index] : m_characters16[index];
++    }
++
+     size_t m_offset;
+     const size_t m_stringLength;
++    // The buffer pointer is hoisted out of the StringImpl once so that every character
++    // access is a single indexed load instead of re-testing the is8Bit flag.
++    const Latin1Character* m_characters8 { nullptr };
++    const char16_t* m_characters16 { nullptr };
++    bool m_is8Bit { false };
+     RefPtr<StringImpl> m_string;
+ };
+ 
+diff --git a/Source/WebCore/css/parser/MutableCSSSelector.cpp b/Source/WebCore/css/parser/MutableCSSSelector.cpp
+index c631175d1e..99cae861e7 100644
+--- a/Source/WebCore/css/parser/MutableCSSSelector.cpp
++++ b/Source/WebCore/css/parser/MutableCSSSelector.cpp
+@@ -111,16 +111,13 @@ MutableCSSSelector::MutableCSSSelector(const CSSSelector& selector, SimpleSelect
+ 
+ MutableCSSSelector::~MutableCSSSelector()
+ {
+-    if (!m_precedingInComplexSelector)
+-        return;
+-    Vector<std::unique_ptr<MutableCSSSelector>, 16> toDelete;
+-    std::unique_ptr<MutableCSSSelector> selector = WTF::move(m_precedingInComplexSelector);
+-    while (true) {
+-        std::unique_ptr<MutableCSSSelector> next = WTF::move(selector->m_precedingInComplexSelector);
+-        toDelete.append(WTF::move(selector));
+-        if (!next)
+-            break;
+-        selector = WTF::move(next);
++    // Unlink each link before deleting it, so the nested destructor bottoms out immediately.
++    // Staying iterative needs no side vector, which keeps this off the allocator entirely.
++    auto* selector = m_precedingInComplexSelector.release();
++    while (selector) {
++        auto* next = selector->m_precedingInComplexSelector.release();
++        delete selector;
++        selector = next;
+     }
+ }
+ 
+diff --git a/Source/WebCore/css/parser/MutableCSSSelector.h b/Source/WebCore/css/parser/MutableCSSSelector.h
+index aa8b53a95c..965024abb8 100644
+--- a/Source/WebCore/css/parser/MutableCSSSelector.h
++++ b/Source/WebCore/css/parser/MutableCSSSelector.h
+@@ -29,7 +29,9 @@ namespace WebCore {
+ struct CSSSelectorParserContext;
+ 
+ class MutableCSSSelector;
+-using MutableCSSSelectorList = Vector<std::unique_ptr<MutableCSSSelector>>;
++// Inline capacity: nearly every selector list in a real stylesheet is one or two complex
++// selectors, so this keeps a malloc/free pair out of every rule prelude and every :is()/:not().
++using MutableCSSSelectorList = Vector<std::unique_ptr<MutableCSSSelector>, 4>;
+ 
+ class MutableCSSSelector {
+     WTF_MAKE_TZONE_ALLOCATED(MutableCSSSelector);
+diff --git a/Source/WebCore/dom/CharacterData.cpp b/Source/WebCore/dom/CharacterData.cpp
+index 008b4055f6..eccfb7d7f9 100644
+--- a/Source/WebCore/dom/CharacterData.cpp
++++ b/Source/WebCore/dom/CharacterData.cpp
+@@ -248,7 +248,8 @@ void CharacterData::dispatchModifiedEvent(const String& oldData)
+         dispatchSubtreeModifiedEvent();
+     }
+ 
+-    InspectorInstrumentation::characterDataModified(protect(document()), *this);
++    if (InspectorInstrumentationPublic::hasFrontends()) [[unlikely]]
++        InspectorInstrumentation::characterDataModified(protect(document()), *this);
+ }
+ 
+ bool CharacterData::containsOnlyASCIIWhitespace() const
 diff --git a/Source/WebCore/dom/ContentVisibilityDocumentState.cpp b/Source/WebCore/dom/ContentVisibilityDocumentState.cpp
 index 2bd3a4d530..6c4cf652d6 100644
 --- a/Source/WebCore/dom/ContentVisibilityDocumentState.cpp
@@ -1360,10 +2939,46 @@ index 2bd3a4d530..6c4cf652d6 100644
          auto observer = IntersectionObserver::create(document, WTF::move(callback), WTF::move(options), includeObscuredInsets);
          if (observer.hasException())
 diff --git a/Source/WebCore/dom/Document.cpp b/Source/WebCore/dom/Document.cpp
-index e99ae903ee..d559917c5a 100644
+index e99ae903ee..e00f9a45db 100644
 --- a/Source/WebCore/dom/Document.cpp
 +++ b/Source/WebCore/dom/Document.cpp
-@@ -2842,6 +2842,10 @@ void Document::updateRenderTree(std::unique_ptr<Style::Update> styleUpdate)
+@@ -1526,6 +1526,20 @@ static ALWAYS_INLINE Ref<HTMLElement> createUpgradeCandidateElement(Document& do
+     return createUpgradeCandidateElement(document, registry, QualifiedName { nullAtom(), localName, xhtmlNamespaceURI });
+ }
+ 
++static ALWAYS_INLINE bool isAlreadyASCIILowercase(const AtomString& name)
++{
++    auto* impl = name.impl();
++    if (!impl)
++        return true;
++    if (!impl->is8Bit()) [[unlikely]]
++        return false;
++    for (auto character : impl->span8()) {
++        if (isASCIIUpper(character)) [[unlikely]]
++            return false;
++    }
++    return true;
++}
++
+ template<typename NameType>
+ static ExceptionOr<Ref<Element>> createHTMLElementWithNameValidation(Document& document, const NameType& name, CustomElementRegistry* registry)
+ {
+@@ -1563,8 +1577,13 @@ ExceptionOr<Ref<Element>> Document::createElementForBindings(const AtomString& n
+     }
+ 
+     auto result = [&]() -> ExceptionOr<Ref<Element>> {
+-        if (document->isHTMLDocument())
++        if (document->isHTMLDocument()) {
++            // convertToASCIILowercase() is an out-of-line WTF call that returns a new AtomString even
++            // when it changes nothing, which is the case for every createElement('div') a page makes.
++            if (isAlreadyASCIILowercase(name)) [[likely]]
++                return createHTMLElementWithNameValidation(document, name, registry.get());
+             return createHTMLElementWithNameValidation(document, name.convertToASCIILowercase(), registry.get());
++        }
+ 
+         if (document->isXHTMLDocument())
+             return createHTMLElementWithNameValidation(document, name, registry.get());
+@@ -2842,6 +2861,10 @@ void Document::updateRenderTree(std::unique_ptr<Style::Update> styleUpdate)
  
  void Document::resolveStyle(ResolveStyleType type)
  {
@@ -1374,7 +2989,7 @@ index e99ae903ee..d559917c5a 100644
      ScriptDisallowedScope::InMainThread scriptDisallowedScope;
  
      ASSERT(!view() || !view()->isPainting());
-@@ -4488,7 +4492,7 @@ bool Document::shouldScheduleLayout() const
+@@ -4488,7 +4511,7 @@ bool Document::shouldScheduleLayout() const
          return true;
      if (!bodyOrFrameset())
          return false;
@@ -1383,7 +2998,7 @@ index e99ae903ee..d559917c5a 100644
          return false;
      if (view() && !view()->isVisuallyNonEmpty())
          return false;
-@@ -5622,11 +5626,15 @@ void Document::metaElementColorSchemeChanged()
+@@ -5622,11 +5645,15 @@ void Document::metaElementColorSchemeChanged()
  
  void Document::processFormatDetection(const String& features)
  {
@@ -1399,7 +3014,7 @@ index e99ae903ee..d559917c5a 100644
  }
  
  void Document::processWebAppOrientations()
-@@ -9507,6 +9515,23 @@ void Document::didRemoveTouchEventHandler(Node& handler, EventHandlerRemoval rem
+@@ -9507,6 +9534,23 @@ void Document::didRemoveTouchEventHandler(Node& handler, EventHandlerRemoval rem
  #endif
  }
  
@@ -1459,6 +3074,240 @@ index c1f74ff146..a0993151ef 100644
  #endif
  
      EventTargetSet m_wheelEventTargets;
+diff --git a/Source/WebCore/dom/Element.cpp b/Source/WebCore/dom/Element.cpp
+index 9e2a41b6e9..19a9f91bc2 100644
+--- a/Source/WebCore/dom/Element.cpp
++++ b/Source/WebCore/dom/Element.cpp
+@@ -848,7 +848,9 @@ ALWAYS_INLINE void Element::synchronizeAttribute(const QualifiedName& name) cons
+ {
+     if (!elementData())
+         return;
+-    if (name == styleAttr && elementData()->styleAttributeIsDirty()) [[unlikely]] {
++    // The dirty bit lives in the ElementData word already loaded above; comparing against the global
++    // styleAttr needs that global's address first, so let the bit test decide.
++    if (elementData()->styleAttributeIsDirty() && name == styleAttr) [[unlikely]] {
+         ASSERT_WITH_SECURITY_IMPLICATION(isStyledElement());
+         static_cast<const StyledElement*>(this)->synchronizeStyleAttributeInternal();
+         return;
+@@ -5806,42 +5808,55 @@ void Element::clearSpatialPortalController()
+ 
+ void Element::willModifyAttribute(const QualifiedName& name, const AtomString& oldValue, const AtomString& newValue)
+ {
+-    if (name == HTMLNames::idAttr)
++    switch (name.nodeName()) {
++    case AttributeNames::idAttr:
+         updateId(oldValue, newValue, NotifyObservers::No); // Will notify observers after the attribute is actually changed.
+-    else if (name == HTMLNames::nameAttr)
++        break;
++    case AttributeNames::nameAttr:
+         updateName(oldValue, newValue);
+-    else if (name == HTMLNames::forAttr) {
++        break;
++    case AttributeNames::forAttr:
+         if (auto* label = dynamicDowncast<HTMLLabelElement>(*this)) {
+             if (treeScope().shouldCacheLabelsByForAttribute())
+                 label->updateLabel(protect(treeScope()), oldValue, newValue);
+         }
+-    } else if (name == HTMLNames::hiddenAttr)
++        break;
++    case AttributeNames::hiddenAttr:
+         setStateFlag(StateFlag::ShouldNotifyTextManipulationControllerIfDisplayed);
++        break;
++    default:
++        break;
++    }
+ 
+     if (auto recipients = MutationObserverInterestGroup::createForAttributesMutation(*this, name))
+         recipients->enqueueMutationRecord(MutationRecord::createAttributes(*this, name, oldValue));
+ 
+-    InspectorInstrumentation::willModifyDOMAttr(protect(document()), *this, oldValue, newValue);
++    // Building the Ref argument is not free, and the instrumentation itself bails out on this same test.
++    if (InspectorInstrumentationPublic::hasFrontends()) [[unlikely]]
++        InspectorInstrumentation::willModifyDOMAttr(protect(document()), *this, oldValue, newValue);
+ }
+ 
+ void Element::didAddAttribute(const QualifiedName& name, const AtomString& value)
+ {
+     notifyAttributeChanged(name, nullAtom(), value);
+-    InspectorInstrumentation::didModifyDOMAttr(protect(document()), *this, name.toAtomString(), value);
++    if (InspectorInstrumentationPublic::hasFrontends()) [[unlikely]]
++        InspectorInstrumentation::didModifyDOMAttr(protect(document()), *this, name.toAtomString(), value);
+     dispatchSubtreeModifiedEvent();
+ }
+ 
+ void Element::didModifyAttribute(const QualifiedName& name, const AtomString& oldValue, const AtomString& newValue)
+ {
+     notifyAttributeChanged(name, oldValue, newValue);
+-    InspectorInstrumentation::didModifyDOMAttr(protect(document()), *this, name.toAtomString(), newValue);
++    if (InspectorInstrumentationPublic::hasFrontends()) [[unlikely]]
++        InspectorInstrumentation::didModifyDOMAttr(protect(document()), *this, name.toAtomString(), newValue);
+     // Do not dispatch a DOMSubtreeModified event here; see bug 81141.
+ }
+ 
+ void Element::didRemoveAttribute(const QualifiedName& name, const AtomString& oldValue)
+ {
+     notifyAttributeChanged(name, oldValue, nullAtom());
+-    InspectorInstrumentation::didRemoveDOMAttr(protect(document()), *this, name.toAtomString());
++    if (InspectorInstrumentationPublic::hasFrontends()) [[unlikely]]
++        InspectorInstrumentation::didRemoveDOMAttr(protect(document()), *this, name.toAtomString());
+     dispatchSubtreeModifiedEvent();
+ }
+ 
+diff --git a/Source/WebCore/dom/ElementData.h b/Source/WebCore/dom/ElementData.h
+index a2e489837b..15499d5fed 100644
+--- a/Source/WebCore/dom/ElementData.h
++++ b/Source/WebCore/dom/ElementData.h
+@@ -27,10 +27,12 @@
+ 
+ #include <WebCore/Attribute.h>
+ #include <WebCore/SpaceSplitString.h>
++#include <wtf/ASCIICType.h>
+ #include <wtf/IndexedRange.h>
+ #include <wtf/StdLibExtras.h>
+ #include <wtf/TypeCasts.h>
+ #include <wtf/Vector.h>
++#include <wtf/text/StringView.h>
+ 
+ namespace WebCore {
+ 
+@@ -232,11 +234,49 @@ ALWAYS_INLINE const Attribute* NODELETE ElementData::findAttributeByName(const A
+     return nullptr;
+ }
+ 
++// QualifiedName::matches() succeeds either on impl identity or on (localName, namespaceURI) identity,
++// and impl identity implies localName identity, so a mismatching localName rules the attribute out
++// after a single load. Everything derived from the searched-for name is loaded once, before the loop.
++ALWAYS_INLINE bool attributeNameMatchesLoweredString(const QualifiedName& name, const AtomString& value)
++{
++    auto* valueImpl = value.impl();
++    if (!valueImpl)
++        return false;
++    StringView prefix { name.prefix().string() };
++    StringView localName { name.localName().string() };
++    unsigned prefixLength = prefix.length();
++    if (valueImpl->length() != prefixLength + 1 + localName.length())
++        return false;
++    StringView candidate { *valueImpl };
++    return candidate[prefixLength] == ':' && candidate.left(prefixLength) == prefix && candidate.substring(prefixLength + 1) == localName;
++}
++
++ALWAYS_INLINE bool atomStringIsASCIILowercase(const AtomString& name)
++{
++    auto* impl = name.impl();
++    if (!impl)
++        return true;
++    if (!impl->is8Bit()) [[unlikely]]
++        return false;
++    for (auto character : impl->span8()) {
++        if (isASCIIUpper(character)) [[unlikely]]
++            return false;
++    }
++    return true;
++}
++
+ SUPPRESS_NODELETE ALWAYS_INLINE unsigned NODELETE ElementData::findAttributeIndexByName(const QualifiedName& name) const
+ {
+     auto attributes = attributeSpan();
+-    for (auto [i, attribute] : indexedRange(attributes)) {
+-        if (attribute.name().matches(name))
++    auto* targetImpl = name.impl();
++    auto* targetLocalName = targetImpl->m_localName.impl();
++    auto* targetNamespaceURI = targetImpl->m_namespaceURI.impl();
++    unsigned count = static_cast<unsigned>(attributes.size());
++    for (unsigned i = 0; i < count; ++i) {
++        auto* impl = attributes[i].name().impl();
++        if (impl->m_localName.impl() != targetLocalName)
++            continue;
++        if (impl == targetImpl || impl->m_namespaceURI.impl() == targetNamespaceURI)
+             return i;
+     }
+     return attributeNotFound;
+@@ -250,16 +290,22 @@ SUPPRESS_NODELETE ALWAYS_INLINE unsigned NODELETE ElementData::findAttributeInde
+     if (attributes.empty())
+         return attributeNotFound;
+ 
+-    auto& caseAdjustedName = shouldIgnoreAttributeCase ? name.convertToASCIILowercase() : name;
+-
+-    for (auto [i, attribute] : indexedRange(attributes)) {
+-        if (!attribute.name().hasPrefix()) {
+-            if (attribute.localName() == caseAdjustedName)
++    // The overwhelmingly common query is an already-lowercase name, where lowercasing is a no-op.
++    // Detecting that inline avoids an out-of-line WTF call plus an AtomString copy per lookup.
++    AtomString loweredName;
++    if (shouldIgnoreAttributeCase && !atomStringIsASCIILowercase(name)) [[unlikely]]
++        loweredName = name.convertToASCIILowercase();
++    const AtomString& caseAdjustedName = loweredName.isNull() ? name : loweredName;
++    auto* caseAdjustedNameImpl = caseAdjustedName.impl();
++
++    unsigned count = static_cast<unsigned>(attributes.size());
++    for (unsigned i = 0; i < count; ++i) {
++        auto& attributeName = attributes[i].name();
++        if (attributeName.impl()->m_prefix.isNull()) [[likely]] {
++            if (attributeName.impl()->m_localName.impl() == caseAdjustedNameImpl)
+                 return i;
+-        } else {
+-            if (attribute.name().toString() == caseAdjustedName)
+-                return i;
+-        }
++        } else if (attributeNameMatchesLoweredString(attributeName, caseAdjustedName))
++            return i;
+     }
+ 
+     return attributeNotFound;
+@@ -267,8 +313,14 @@ SUPPRESS_NODELETE ALWAYS_INLINE unsigned NODELETE ElementData::findAttributeInde
+ 
+ SUPPRESS_NODELETE ALWAYS_INLINE const Attribute* NODELETE ElementData::findAttributeByName(const QualifiedName& name) const
+ {
++    auto* targetImpl = name.impl();
++    auto* targetLocalName = targetImpl->m_localName.impl();
++    auto* targetNamespaceURI = targetImpl->m_namespaceURI.impl();
+     for (auto& attribute : attributeSpan()) {
+-        if (attribute.name().matches(name))
++        auto* impl = attribute.name().impl();
++        if (impl->m_localName.impl() != targetLocalName)
++            continue;
++        if (impl == targetImpl || impl->m_namespaceURI.impl() == targetNamespaceURI)
+             return &attribute;
+     }
+     return nullptr;
+diff --git a/Source/WebCore/dom/EventLoop.cpp b/Source/WebCore/dom/EventLoop.cpp
+index 3abc026892..064d7164d4 100644
+--- a/Source/WebCore/dom/EventLoop.cpp
++++ b/Source/WebCore/dom/EventLoop.cpp
+@@ -312,9 +312,12 @@ void EventLoop::stopGroup(EventLoopTaskGroup& group)
+ 
+ void EventLoop::scheduleToRunIfNeeded()
+ {
+-    if (microtaskQueue().isScheduledToRun())
++    // microtaskQueue() is virtual and creates the queue on first use; asking for
++    // it twice per queued task and per queued microtask bought nothing.
++    SUPPRESS_UNCOUNTED_LOCAL auto& microtaskQueue = this->microtaskQueue();
++    if (microtaskQueue.isScheduledToRun())
+         return;
+-    microtaskQueue().setIsScheduledToRun(true);
++    microtaskQueue.setIsScheduledToRun(true);
+     scheduleToRun();
+ }
+ 
+@@ -350,9 +353,15 @@ void EventLoop::run(JSC::VM& vm, std::optional<ApproximateTime> deadline)
+             didPerformMicrotaskCheckpoint = true;
+             performMicrotaskCheckpoint(vm);
+         }
+-        for (auto& task : m_tasks)
+-            remainingTasks.append(WTF::move(task));
+-        m_tasks = WTF::move(remainingTasks);
++        // Nothing was deferred in the overwhelmingly common case, and then
++        // m_tasks already holds exactly the tasks queued while running, in
++        // order: moving them through a second vector only threw away the
++        // buffer that had just been allocated for them.
++        if (!remainingTasks.isEmpty()) {
++            for (auto& task : m_tasks)
++                remainingTasks.append(WTF::move(task));
++            m_tasks = WTF::move(remainingTasks);
++        }
+ 
+         if (!m_tasks.isEmpty() && hasReachedDeadline)
+             scheduleToRunIfNeeded();
 diff --git a/Source/WebCore/dom/EventTarget.cpp b/Source/WebCore/dom/EventTarget.cpp
 index 508b64bf39..669c3fdef1 100644
 --- a/Source/WebCore/dom/EventTarget.cpp
@@ -1533,6 +3382,63 @@ index 80848cbb4a..015ef94c82 100644
  #endif
  
  namespace JSC {
+diff --git a/Source/WebCore/dom/Node.cpp b/Source/WebCore/dom/Node.cpp
+index ec87f45132..8ae6c91b34 100644
+--- a/Source/WebCore/dom/Node.cpp
++++ b/Source/WebCore/dom/Node.cpp
+@@ -1099,12 +1099,15 @@ void Node::invalidateNodeListCollectionAndInnerHTMLPrefixCachesInAncestorsForAtt
+ 
+     bool shouldInvalidate = document().shouldInvalidateNodeListAndCollectionCachesForAttribute(attrName);
+ 
+-    WeakPtr cachedContainer = document().cachedSetInnerHTML().cachedContainer;
+-    bool shouldSetMutationBit = isMutationBySetInnerHTML == IsMutationBySetInnerHTML::No && cachedContainer;
++    auto& cachedSetInnerHTML = document().cachedSetInnerHTML();
++    bool shouldSetMutationBit = isMutationBySetInnerHTML == IsMutationBySetInnerHTML::No && cachedSetInnerHTML.cachedContainer;
+ 
+     if (!shouldInvalidate && !shouldSetMutationBit)
+         return;
+ 
++    // Taking the WeakPtr refs its impl; every attribute change paid for that even when nothing below runs.
++    WeakPtr cachedContainer = cachedSetInnerHTML.cachedContainer;
++
+     if (shouldInvalidate) {
+         protect(document())->invalidateNodeListAndCollectionCaches([&attrName](auto& list) {
+             list.invalidateCacheForAttribute(attrName);
+@@ -1128,10 +1131,13 @@ void Node::invalidateNodeListCollectionAndInnerHTMLPrefixCachesInAncestorsForAtt
+ 
+ void Node::setDidMutateSubtreeAfterSetInnerHTMLOnAncestors()
+ {
+-    WeakPtr cachedContainer = document().cachedSetInnerHTML().cachedContainer;
+-    if (!cachedContainer)
++    // Every child change and every inline-style write lands here, so test the member before taking a
++    // WeakPtr of it: constructing one refs the impl, and there is normally nothing cached at all.
++    auto& cachedSetInnerHTML = document().cachedSetInnerHTML();
++    if (!cachedSetInnerHTML.cachedContainer) [[likely]]
+         return;
+ 
++    WeakPtr cachedContainer = cachedSetInnerHTML.cachedContainer;
+     for (auto* node = this; node; node = node->parentNode()) {
+         node->setDidMutateSubtreeAfterSetInnerHTML();
+         if (node == cachedContainer.get())
+@@ -2700,13 +2706,16 @@ void Node::dispatchEvent(Event& event)
+ 
+ void Node::dispatchSubtreeModifiedEvent()
+ {
++    // Ordered cheapest-and-most-selective first: no page in practice registers a DOMSubtreeModified
++    // listener, so this single flag test retires the call before anything else is loaded.
++    if (!document().hasListenerType(Document::ListenerType::DOMSubtreeModified)) [[likely]]
++        return;
++
+     if (isInShadowTree() || document().shouldNotFireMutationEvents())
+         return;
+ 
+     ASSERT_WITH_SECURITY_IMPLICATION(ScriptDisallowedScope::InMainThread::isEventDispatchAllowedInSubtree(*this));
+ 
+-    if (!document().hasListenerType(Document::ListenerType::DOMSubtreeModified))
+-        return;
+     const AtomString& subtreeModifiedEventName = eventNames().DOMSubtreeModifiedEvent;
+     if (!parentNode() && !hasEventListeners(subtreeModifiedEventName))
+         return;
 diff --git a/Source/WebCore/dom/PointerEvent.h b/Source/WebCore/dom/PointerEvent.h
 index a9ad0f77ee..f7202c4e48 100644
 --- a/Source/WebCore/dom/PointerEvent.h
@@ -1570,6 +3476,97 @@ index a9ad0f77ee..f7202c4e48 100644
      static unsigned pointerIdForTouchPoint(const PlatformTouchPoint&);
  #endif
  
+diff --git a/Source/WebCore/dom/StyledElement.cpp b/Source/WebCore/dom/StyledElement.cpp
+index 50d58d7099..d7ce7fe22f 100644
+--- a/Source/WebCore/dom/StyledElement.cpp
++++ b/Source/WebCore/dom/StyledElement.cpp
+@@ -48,6 +48,7 @@
+ #include "MutableStyleProperties.h"
+ #include "SVGElement.h"
+ #include "ScriptableDocumentParser.h"
++#include "StylePropertiesInlines.h"
+ #include "StylePropertyMap.h"
+ #include "StylePropertyShorthand.h"
+ #include "StyleResolver.h"
+@@ -129,7 +130,15 @@ CSSStyleProperties* StyledElement::inlineStyleCSSOMWrapper()
+ 
+ static bool usesStyleBasedEditability(const StyleProperties& properties)
+ {
++#if defined(WEBKIT_IOS6)
++    // Every single inline-style write runs this probe. getPropertyCSSValue() is an exported out-of-line
++    // call that takes a ref on the value it finds and re-checks the system-font shorthand quirk; all this
++    // predicate wants to know is whether the declaration carries the property at all.
++    int index = properties.findPropertyIndex(CSSPropertyWebkitUserModify);
++    return index != -1 && properties.propertyAt(static_cast<unsigned>(index)).value();
++#else
+     return properties.getPropertyCSSValue(CSSPropertyWebkitUserModify);
++#endif
+ }
+ 
+ void StyledElement::setInlineStyleFromString(const AtomString& newStyleString)
+diff --git a/Source/WebCore/dom/WindowEventLoop.cpp b/Source/WebCore/dom/WindowEventLoop.cpp
+index 2627207099..4d90a2dd00 100644
+--- a/Source/WebCore/dom/WindowEventLoop.cpp
++++ b/Source/WebCore/dom/WindowEventLoop.cpp
+@@ -128,22 +128,43 @@ MicrotaskQueue& WindowEventLoop::microtaskQueue()
+ 
+ void WindowEventLoop::scheduleIdlePeriod()
+ {
++    m_maybeHasPendingIdleCallbacks = true;
+     m_idleTimer.startOneShot(0_s);
+ }
+ 
+ void WindowEventLoop::opportunisticallyRunIdleCallbacks(std::optional<MonotonicTime> deadline)
+ {
+-    if (shouldEndIdlePeriod())
+-        return; // No need to schedule m_idleTimer since there is a task. didReachTimeToRun() will call this function.
++#if defined(WEBKIT_IOS6)
++    // This runs after every turn of the event loop and after every opportunistic
++    // task, and on a page that never calls requestIdleCallback every one of those
++    // turns walked the associated contexts and the microtask queue to conclude
++    // there was nothing to do. IdleCallbackController::queueIdleCallback is the
++    // only thing that can create an idle callback, and it always calls
++    // scheduleIdlePeriod() on this loop; the flag is cleared again below as soon
++    // as the walk finds nothing pending, so it stays honest.
++    if (!m_maybeHasPendingIdleCallbacks)
++        return;
++#endif
+ 
++    // Both checks are pure reads and either of them ends the function, so the
++    // cheaper one that almost always fires goes first: requestIdleCallback is
++    // rare, and this runs after every turn of the event loop. The old order paid
++    // for a scan of the task queue and of the microtask queue first.
+     auto hasPendingIdleCallbacks = findMatchingAssociatedContext([&](ScriptExecutionContext& context) {
+         if (auto* document = dynamicDowncast<Document>(context))
+             return document->hasPendingIdleCallback();
+         return false;
+     });
+ 
+-    if (!hasPendingIdleCallbacks)
++    if (!hasPendingIdleCallbacks) {
++#if defined(WEBKIT_IOS6)
++        m_maybeHasPendingIdleCallbacks = false;
++#endif
+         return;
++    }
++
++    if (shouldEndIdlePeriod())
++        return; // No need to schedule m_idleTimer since there is a task. didReachTimeToRun() will call this function.
+ 
+     auto now = MonotonicTime::now();
+     if (auto scheduledWork = nextScheduledWorkTime()) {
+diff --git a/Source/WebCore/dom/WindowEventLoop.h b/Source/WebCore/dom/WindowEventLoop.h
+index eaf5040cbf..57d79270eb 100644
+--- a/Source/WebCore/dom/WindowEventLoop.h
++++ b/Source/WebCore/dom/WindowEventLoop.h
+@@ -102,6 +102,7 @@ private:
+     std::unique_ptr<CustomElementQueue> m_customElementQueue;
+     bool m_processingBackupElementQueue { false };
+ 
++    bool m_maybeHasPendingIdleCallbacks { false };
+     MonotonicTime m_lastIdlePeriodStartTime;
+     Seconds m_expectedIdleCallbackDuration { 4_ms };
+ };
 diff --git a/Source/WebCore/editing/cocoa/AttributedString.mm b/Source/WebCore/editing/cocoa/AttributedString.mm
 index 9a7ef1e23f..5cfb1e0c58 100644
 --- a/Source/WebCore/editing/cocoa/AttributedString.mm
@@ -1663,6 +3660,1003 @@ index aa930666d4..887c89d9d8 100644
      return 8192 * 8192;
  #else
      return 16384 * 16384;
+diff --git a/Source/WebCore/html/parser/HTMLDocumentParser.cpp b/Source/WebCore/html/parser/HTMLDocumentParser.cpp
+index 6b769b0753..fa090e0c00 100644
+--- a/Source/WebCore/html/parser/HTMLDocumentParser.cpp
++++ b/Source/WebCore/html/parser/HTMLDocumentParser.cpp
+@@ -276,8 +276,10 @@ bool HTMLDocumentParser::pumpTokenizerLoop(SynchronousMode mode, bool parsingFra
+ {
+     RefPtr parserScheduler = m_parserScheduler;
+     RefPtr frame = parsingFragment ? nullptr : document()->frame();
++    // The scheduler is a UniqueRef member of the frame we already hold, so it outlives the loop.
++    SUPPRESS_UNCOUNTED_LOCAL NavigationScheduler* navigationScheduler = frame ? &frame->navigationScheduler() : nullptr;
+     do {
+-        if (isWaitingForScripts()) [[unlikely]] {
++        if (!parsingFragment && isWaitingForScriptsWhenNotParsingFragment()) [[unlikely]] {
+             if (mode == SynchronousMode::AllowYield && parserScheduler->shouldYieldBeforeExecutingScript(protect(m_treeBuilder->scriptToProcess()).get(), session))
+                 return true;
+ 
+@@ -291,7 +293,7 @@ bool HTMLDocumentParser::pumpTokenizerLoop(SynchronousMode mode, bool parsingFra
+         // how the parser has always handled stopping when the page assigns window.location. What should
+         // happen instead is that assigning window.location causes the parser to stop parsing cleanly.
+         // The problem is we're not prepared to do that at every point where we run JavaScript.
+-        SUPPRESS_UNCOUNTED_ARG if (frame && frame->navigationScheduler().locationChangePending()) [[unlikely]]
++        if (navigationScheduler && navigationScheduler->locationChangePending()) [[unlikely]]
+             return false;
+ 
+         if (mode == SynchronousMode::AllowYield && parserScheduler->shouldYieldBeforeToken(session)) [[unlikely]]
+@@ -349,8 +351,14 @@ void HTMLDocumentParser::pumpTokenizer(SynchronousMode mode)
+         m_preloadScanner->scan(*m_preloader, *document);
+     }
+     // The viewport definition is known here, so we can load link preloads with media attributes.
+-    if (document->loader())
+-        LinkLoader::loadLinksFromHeader(document->loader()->response().httpHeaderField(HTTPHeaderName::Link), document->url(), *document, LinkLoader::MediaAttributeCheck::MediaAttributeNotEmpty);
++    if (!m_checkedForLinkHeader) {
++        if (RefPtr loader = document->loader()) {
++            m_checkedForLinkHeader = true;
++            m_linkHeader = loader->response().httpHeaderField(HTTPHeaderName::Link);
++        }
++    }
++    if (!m_linkHeader.isEmpty())
++        LinkLoader::loadLinksFromHeader(m_linkHeader, document->url(), *document, LinkLoader::MediaAttributeCheck::MediaAttributeNotEmpty);
+ }
+ 
+ void HTMLDocumentParser::constructTreeFromHTMLToken(HTMLTokenizer::TokenPtr& rawToken)
+@@ -539,6 +547,14 @@ bool HTMLDocumentParser::isWaitingForScripts() const
+         ASSERT(!m_scriptRunner || !m_scriptRunner->hasParserBlockingScript());
+         return false;
+     }
++    return isWaitingForScriptsWhenNotParsingFragment();
++}
++
++// The per-token path in pumpTokenizerLoop already knows whether this is a fragment parse, so it
++// calls this directly rather than paying for the tree builder hop in isParsingFragment() again.
++bool HTMLDocumentParser::isWaitingForScriptsWhenNotParsingFragment() const
++{
++    ASSERT(!isParsingFragment());
+     // When the TreeBuilder encounters a </script> tag, it returns to the HTMLDocumentParser
+     // where the script is transfered from the treebuilder to the script runner.
+     // The script runner will hold the script until its loaded and run. During
+diff --git a/Source/WebCore/html/parser/HTMLDocumentParser.h b/Source/WebCore/html/parser/HTMLDocumentParser.h
+index 29b452f152..821fa48651 100644
+--- a/Source/WebCore/html/parser/HTMLDocumentParser.h
++++ b/Source/WebCore/html/parser/HTMLDocumentParser.h
+@@ -95,6 +95,7 @@ private:
+     void prepareToStopParsing() final;
+     void stopParsing() final;
+     bool NODELETE isWaitingForScripts() const;
++    bool NODELETE isWaitingForScriptsWhenNotParsingFragment() const;
+     bool isExecutingScript() const final;
+     bool hasScriptsWaitingForStylesheets() const final;
+     void executeScriptsWaitingForStylesheets() final;
+@@ -155,6 +156,11 @@ private:
+     bool m_endWasDelayed { false };
+     unsigned m_pumpSessionNestingLevel { 0 };
+     bool m_shouldEmitTracePoints { false };
++
++    // The response headers do not change while we parse, so the Link header is fetched once
++    // instead of on every exit from the pump (once per parser-blocking script).
++    bool m_checkedForLinkHeader { false };
++    String m_linkHeader;
+ };
+ 
+ inline HTMLTokenizer& HTMLDocumentParser::tokenizer()
+diff --git a/Source/WebCore/html/parser/HTMLPreloadScanner.cpp b/Source/WebCore/html/parser/HTMLPreloadScanner.cpp
+index 6c6c6cd364..66223101e3 100644
+--- a/Source/WebCore/html/parser/HTMLPreloadScanner.cpp
++++ b/Source/WebCore/html/parser/HTMLPreloadScanner.cpp
+@@ -629,9 +629,17 @@ void HTMLPreloadScanner::scan(HTMLResourcePreloader& preloader, Document& docume
+ 
+     PreloadRequestStream requests;
+ 
+-    while (auto token = m_tokenizer.nextToken(m_source)) {
++    while (true) {
++#if defined(WEBKIT_IOS6)
++        // Buffering the document's text a second time only to throw it away costs more than the
++        // scan itself on a small device. Keep the payload only while it can reach the CSS scanner.
++        m_tokenizer.setShouldDiscardCharacterData(!m_scanner.inStyle());
++#endif
++        auto token = m_tokenizer.nextToken(m_source);
++        if (!token)
++            break;
+         if (token->type() == HTMLToken::Type::StartTag)
+-            m_tokenizer.updateStateFor(AtomString::lookUp(token->name().span()));
++            m_tokenizer.updateStateFor(token->name().span());
+         m_scanner.scan(*token, requests, document);
+     }
+ 
+diff --git a/Source/WebCore/html/parser/HTMLPreloadScanner.h b/Source/WebCore/html/parser/HTMLPreloadScanner.h
+index 3c8edfef0f..8d8faf0e0a 100644
+--- a/Source/WebCore/html/parser/HTMLPreloadScanner.h
++++ b/Source/WebCore/html/parser/HTMLPreloadScanner.h
+@@ -57,6 +57,10 @@ public:
+ 
+     bool inPicture() { return !m_pictureSourceState.isEmpty(); }
+ 
++    // The only character token contents this scanner ever reads are the ones it feeds to the CSS
++    // scanner from inside a <style> element.
++    bool inStyle() const { return m_inStyle; }
++
+ private:
+     enum class TagId {
+         // These tags are scanned by the StartTagScanner.
+diff --git a/Source/WebCore/html/parser/HTMLToken.h b/Source/WebCore/html/parser/HTMLToken.h
+index 19609dfaf0..94771d778d 100644
+--- a/Source/WebCore/html/parser/HTMLToken.h
++++ b/Source/WebCore/html/parser/HTMLToken.h
+@@ -77,6 +77,7 @@ public:
+     const DataVector& name() const LIFETIME_BOUND;
+ 
+     void appendToName(char16_t);
++    void appendToName(std::span<const Latin1Character>);
+ 
+     // DOCTYPE.
+ 
+@@ -105,6 +106,7 @@ public:
+ 
+     void beginAttribute();
+     void appendToAttributeName(char16_t);
++    void appendToAttributeName(std::span<const Latin1Character>);
+     void appendToAttributeValue(char16_t);
+     void appendToAttributeValue(unsigned index, StringView value);
+     template<typename CharacterType> void appendToAttributeValue(std::span<const CharacterType>);
+@@ -121,6 +123,7 @@ public:
+     const DataVector& characters() const LIFETIME_BOUND;
+     bool charactersIsAll8BitData() const;
+ 
++    void makeCharacterWithoutData();
+     void appendToCharacter(Latin1Character);
+     void appendToCharacter(char16_t);
+     void appendToCharacter(const Vector<Latin1Character, 32>&);
+@@ -135,6 +138,7 @@ public:
+     void appendToComment(char);
+     void appendToComment(ASCIILiteral);
+     void appendToComment(char16_t);
++    void appendToComment(std::span<const Latin1Character>);
+ 
+ private:
+     DataVector m_data;
+@@ -184,6 +188,14 @@ inline void HTMLToken::appendToName(char16_t character)
+     m_data8BitCheck |= character;
+ }
+ 
++// m_data8BitCheck is only ever read back for Character and Comment tokens, and Latin-1 input
++// cannot push it above 0xFF, so the bulk appenders below deliberately leave it alone.
++inline void HTMLToken::appendToName(std::span<const Latin1Character> characters)
++{
++    ASSERT(m_type == Type::StartTag || m_type == Type::EndTag || m_type == Type::DOCTYPE);
++    m_data.append(characters);
++}
++
+ inline void HTMLToken::setForceQuirks()
+ {
+     ASSERT(m_type == Type::DOCTYPE);
+@@ -318,6 +330,13 @@ inline void HTMLToken::appendToAttributeName(char16_t character)
+     m_currentAttribute->name.append(character);
+ }
+ 
++inline void HTMLToken::appendToAttributeName(std::span<const Latin1Character> characters)
++{
++    ASSERT(m_type == Type::StartTag || m_type == Type::EndTag);
++    ASSERT(m_currentAttribute);
++    m_currentAttribute->name.append(characters);
++}
++
+ inline void HTMLToken::appendToAttributeValue(char16_t character)
+ {
+     ASSERT(character);
+@@ -359,6 +378,15 @@ inline bool HTMLToken::charactersIsAll8BitData() const
+     return m_data8BitCheck <= 0xFF;
+ }
+ 
++// Marks the token as a Character token without recording what the characters were. Used by
++// callers that only need token types and boundaries; every other observer of a Character token
++// (the tokenizer's own end-tag bookkeeping included) reads only the type.
++inline void HTMLToken::makeCharacterWithoutData()
++{
++    ASSERT(m_type == Type::Uninitialized || m_type == Type::Character);
++    m_type = Type::Character;
++}
++
+ inline void HTMLToken::appendToCharacter(Latin1Character character)
+ {
+     ASSERT(m_type == Type::Uninitialized || m_type == Type::Character);
+@@ -433,6 +461,12 @@ inline void HTMLToken::appendToComment(char16_t character)
+     m_data8BitCheck |= character;
+ }
+ 
++inline void HTMLToken::appendToComment(std::span<const Latin1Character> characters)
++{
++    ASSERT(m_type == Type::Comment);
++    m_data.append(characters);
++}
++
+ inline const HTMLToken::Attribute* findAttribute(const HTMLToken::AttributeList& attributes, std::span<const char16_t> name)
+ {
+     for (auto& attribute : attributes) {
+diff --git a/Source/WebCore/html/parser/HTMLTokenizer.cpp b/Source/WebCore/html/parser/HTMLTokenizer.cpp
+index 63107305e5..b1eac39787 100644
+--- a/Source/WebCore/html/parser/HTMLTokenizer.cpp
++++ b/Source/WebCore/html/parser/HTMLTokenizer.cpp
+@@ -76,6 +76,130 @@ static std::span<const Latin1Character> findPlainTextInQuotedAttributeValue(std:
+     return span.first(it - span.begin());
+ }
+ 
++// https://html.spec.whatwg.org/multipage/parsing.html#rawtext-state
++// https://html.spec.whatwg.org/multipage/parsing.html#script-data-state
++// RAWTEXT and script data have no character references, so only '<' ends a plain-text run.
++static bool isRawTextSpecialCharacter(Latin1Character c)
++{
++    return c == '<' || c == '\r' || c == '\n' || c == '\0';
++}
++
++static std::span<const Latin1Character> findPlainTextInRawText(std::span<const Latin1Character> span)
++{
++    auto it = std::ranges::find_if(span, isRawTextSpecialCharacter);
++    return span.first(it - span.begin());
++}
++
++// https://html.spec.whatwg.org/multipage/parsing.html#script-data-escaped-state
++// https://html.spec.whatwg.org/multipage/parsing.html#script-data-double-escaped-state
++// Inside a `<!--` comment in a script, '-' also has to be looked at.
++static bool isEscapedScriptDataSpecialCharacter(Latin1Character c)
++{
++    return c == '-' || c == '<' || c == '\r' || c == '\n' || c == '\0';
++}
++
++static std::span<const Latin1Character> findPlainTextInEscapedScriptData(std::span<const Latin1Character> span)
++{
++    auto it = std::ranges::find_if(span, isEscapedScriptDataSpecialCharacter);
++    return span.first(it - span.begin());
++}
++
++// https://html.spec.whatwg.org/multipage/parsing.html#comment-state
++// Only '-' can begin the end of a comment.
++static bool isCommentSpecialCharacter(Latin1Character c)
++{
++    return c == '-' || c == '\r' || c == '\n' || c == '\0';
++}
++
++static std::span<const Latin1Character> findPlainTextInComment(std::span<const Latin1Character> span)
++{
++    auto it = std::ranges::find_if(span, isCommentSpecialCharacter);
++    return span.first(it - span.begin());
++}
++
++// https://html.spec.whatwg.org/multipage/parsing.html#tag-name-state
++// A run of lowercase letters and digits needs neither case folding nor any of the delimiter
++// tests, so it can go straight into the token. Everything else, uppercase included, falls back
++// to the per-character path that does the lowercasing.
++static bool isTagNameSpecialCharacter(Latin1Character c)
++{
++    return !isASCIILower(c) && !isASCIIDigit(c);
++}
++
++static std::span<const Latin1Character> findPlainTextInTagName(std::span<const Latin1Character> span)
++{
++    auto it = std::ranges::find_if(span, isTagNameSpecialCharacter);
++    return span.first(it - span.begin());
++}
++
++// https://html.spec.whatwg.org/multipage/parsing.html#attribute-name-state
++// As above, plus the two joiners that appear in nearly every custom and data-* attribute.
++static bool isAttributeNameSpecialCharacter(Latin1Character c)
++{
++    return !isASCIILower(c) && !isASCIIDigit(c) && c != '-' && c != '_';
++}
++
++static std::span<const Latin1Character> findPlainTextInAttributeName(std::span<const Latin1Character> span)
++{
++    auto it = std::ranges::find_if(span, isAttributeNameSpecialCharacter);
++    return span.first(it - span.begin());
++}
++
++// https://html.spec.whatwg.org/multipage/parsing.html#attribute-value-(unquoted)-state
++// The delimiters, the character-reference start, the characters the preprocessor must see, and
++// the characters that merely raise a (silent) parse error.
++static bool isUnquotedAttributeValueSpecialCharacter(Latin1Character c)
++{
++    switch (c) {
++    case '\0':
++    case '\t':
++    case '\n':
++    case '\f':
++    case '\r':
++    case ' ':
++    case '"':
++    case '&':
++    case '\'':
++    case '<':
++    case '=':
++    case '>':
++    case '`':
++        return true;
++    default:
++        return false;
++    }
++}
++
++static std::span<const Latin1Character> findPlainTextInUnquotedAttributeValue(std::span<const Latin1Character> span)
++{
++    auto it = std::ranges::find_if(span, isUnquotedAttributeValueSpecialCharacter);
++    return span.first(it - span.begin());
++}
++
++// Scans ahead for a run of characters that the current state would only ever copy through, and
++// hands the whole run over in one call, skipping the per-character trip around the state machine
++// (preprocessor peek, delimiter tests, goto).
++//
++// The current character has already been appended by the caller, so the scan starts at index 1
++// and stops one short of the end: advancePastMultiple8 needs at least one character to remain in
++// the substring to become the next current character.
++//
++// The scan is skipped when skipNextNewLine() is set (the current character was a '\r'): the
++// preprocessor has to see the very next character itself to collapse a following '\n', and
++// batching past it would drop that '\n'.
++#define BATCH_PLAIN_TEXT(findPlainText, appendPlainText, state)                             \
++    do {                                                                                    \
++        auto batchSource = source.currentSubstringSpan8();                                  \
++        if (batchSource.size() > 2 && !m_preprocessor.skipNextNewLine()) {                  \
++            auto plainText = findPlainText(batchSource.subspan(1, batchSource.size() - 2)); \
++            if (!plainText.empty()) {                                                       \
++                appendPlainText(plainText);                                                 \
++                source.advancePastMultiple8(plainText.size() + 1);                          \
++                SWITCH_TO(state);                                                           \
++            }                                                                               \
++        }                                                                                   \
++    } while (false)
++
+ static inline Latin1Character NODELETE convertASCIIAlphaToLower(char16_t character)
+ {
+     ASSERT(isASCIIAlpha(character));
+@@ -108,6 +232,10 @@ inline void HTMLTokenizer::bufferASCIICharacter(char16_t character)
+ {
+     ASSERT(character != kEndOfFileMarker);
+     ASSERT(isASCII(character));
++    if (m_shouldDiscardCharacterData) [[unlikely]] {
++        m_token.makeCharacterWithoutData();
++        return;
++    }
+     Latin1Character narrowedCharacter = character;
+     m_token.appendToCharacter(narrowedCharacter);
+ }
+@@ -115,6 +243,10 @@ inline void HTMLTokenizer::bufferASCIICharacter(char16_t character)
+ inline void HTMLTokenizer::bufferCharacter(char16_t character)
+ {
+     ASSERT(character != kEndOfFileMarker);
++    if (m_shouldDiscardCharacterData) [[unlikely]] {
++        m_token.makeCharacterWithoutData();
++        return;
++    }
+     m_token.appendToCharacter(character);
+ }
+ 
+@@ -125,6 +257,10 @@ inline void HTMLTokenizer::bufferCharacters(std::span<const CharacterType> chara
+     for (auto character : characters)
+         ASSERT(character != kEndOfFileMarker);
+ #endif
++    if (m_shouldDiscardCharacterData) [[unlikely]] {
++        m_token.makeCharacterWithoutData();
++        return;
++    }
+     m_token.appendToCharacter(characters);
+ }
+ 
+@@ -252,30 +388,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+         if (character == kEndOfFileMarker)
+             return emitEndOfFile(source);
+         bufferCharacter(character);
+-        // Optimization: scan ahead for a run of plain-text characters in the
+-        // current 8-bit substring and buffer them all at once, avoiding the
+-        // per-character overhead of the main tokenizer loop.
+-        // We skip batching when m_preprocessor.skipNextNewLine() is true (i.e.
+-        // the current character was a '\r'). The preprocessor expects the very
+-        // next peek to check whether a '\n' follows (for \r\n normalization);
+-        // batching would bypass that check and cause a subsequent '\n' to be
+-        // incorrectly skipped.
+-        {
+-            auto span = source.currentSubstringSpan8();
+-            if (span.size() > 2 && !m_preprocessor.skipNextNewLine()) {
+-                // span[0] is the current character, already buffered above. We also
+-                // stop before the last character because advancePastMultiple8()
+-                // requires at least one character to remain in the span (it becomes
+-                // the new current character for the next iteration).
+-                auto plainText = findPlainTextInDataState(span.subspan(1, span.size() - 2));
+-                if (!plainText.empty()) {
+-                    bufferCharacters(plainText);
+-                    // +1 to also advance past span[0] (the current character already buffered above).
+-                    source.advancePastMultiple8(plainText.size() + 1);
+-                    SWITCH_TO(DataState);
+-                }
+-            }
+-        }
++        BATCH_PLAIN_TEXT(findPlainTextInDataState, bufferCharacters, DataState);
+         ADVANCE_TO(DataState);
+     END_STATE()
+ 
+@@ -293,6 +406,8 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+         if (character == kEndOfFileMarker)
+             RECONSUME_IN(DataState);
+         bufferCharacter(character);
++        // RCDATA reacts to exactly the same characters as the Data state, so it shares that scan.
++        BATCH_PLAIN_TEXT(findPlainTextInDataState, bufferCharacters, RCDATAState);
+         ADVANCE_TO(RCDATAState);
+     END_STATE()
+ 
+@@ -308,6 +423,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+         if (character == kEndOfFileMarker)
+             RECONSUME_IN(DataState);
+         bufferCharacter(character);
++        BATCH_PLAIN_TEXT(findPlainTextInRawText, bufferCharacters, RAWTEXTState);
+         ADVANCE_TO(RAWTEXTState);
+     END_STATE()
+ 
+@@ -317,6 +433,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+         if (character == kEndOfFileMarker)
+             RECONSUME_IN(DataState);
+         bufferCharacter(character);
++        BATCH_PLAIN_TEXT(findPlainTextInRawText, bufferCharacters, ScriptDataState);
+         ADVANCE_TO(ScriptDataState);
+     END_STATE()
+ 
+@@ -381,6 +498,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+             RECONSUME_IN(DataState);
+         }
+         m_token.appendToName(toASCIILower(character));
++        BATCH_PLAIN_TEXT(findPlainTextInTagName, m_token.appendToName, TagNameState);
+         ADVANCE_PAST_NON_NEWLINE_TO(TagNameState);
+     END_STATE()
+ 
+@@ -563,6 +681,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+             RECONSUME_IN(DataState);
+         }
+         bufferCharacter(character);
++        BATCH_PLAIN_TEXT(findPlainTextInEscapedScriptData, bufferCharacters, ScriptDataEscapedState);
+         ADVANCE_TO(ScriptDataEscapedState);
+     END_STATE()
+ 
+@@ -686,6 +805,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+             RECONSUME_IN(DataState);
+         }
+         bufferCharacter(character);
++        BATCH_PLAIN_TEXT(findPlainTextInEscapedScriptData, bufferCharacters, ScriptDataDoubleEscapedState);
+         ADVANCE_TO(ScriptDataDoubleEscapedState);
+     END_STATE()
+ 
+@@ -769,6 +889,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+             parseError();
+         m_token.beginAttribute();
+         m_token.appendToAttributeName(toASCIILower(character));
++        BATCH_PLAIN_TEXT(findPlainTextInAttributeName, m_token.appendToAttributeName, AttributeNameState);
+         ADVANCE_PAST_NON_NEWLINE_TO(AttributeNameState);
+     END_STATE()
+ 
+@@ -790,6 +911,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+         if (character == '"' || character == '\'' || character == '<' || character == '=')
+             parseError();
+         m_token.appendToAttributeName(toASCIILower(character));
++        BATCH_PLAIN_TEXT(findPlainTextInAttributeName, m_token.appendToAttributeName, AttributeNameState);
+         ADVANCE_PAST_NON_NEWLINE_TO(AttributeNameState);
+     END_STATE()
+ 
+@@ -812,6 +934,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+             parseError();
+         m_token.beginAttribute();
+         m_token.appendToAttributeName(toASCIILower(character));
++        BATCH_PLAIN_TEXT(findPlainTextInAttributeName, m_token.appendToAttributeName, AttributeNameState);
+         ADVANCE_PAST_NON_NEWLINE_TO(AttributeNameState);
+     END_STATE()
+ 
+@@ -853,25 +976,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+             RECONSUME_IN(DataState);
+         }
+         m_token.appendToAttributeValue(character);
+-        // Optimization: scan ahead for a run of plain-text characters in the
+-        // current 8-bit substring and append them all at once, avoiding the
+-        // per-character overhead of the main tokenizer loop.
+-        // We skip batching when m_preprocessor.skipNextNewLine() is true (i.e.
+-        // the current character was a '\r'). The preprocessor expects the very
+-        // next peek to check whether a '\n' follows (for \r\n normalization);
+-        // batching would bypass that check and cause a subsequent '\n' to be
+-        // incorrectly skipped.
+-        {
+-            auto span = source.currentSubstringSpan8();
+-            if (span.size() > 2 && !m_preprocessor.skipNextNewLine()) {
+-                auto plainText = findPlainTextInQuotedAttributeValue<'"'>(span.subspan(1, span.size() - 2));
+-                if (!plainText.empty()) {
+-                    m_token.appendToAttributeValue(plainText);
+-                    source.advancePastMultiple8(plainText.size() + 1);
+-                    SWITCH_TO(AttributeValueDoubleQuotedState);
+-                }
+-            }
+-        }
++        BATCH_PLAIN_TEXT(findPlainTextInQuotedAttributeValue<'"'>, m_token.appendToAttributeValue, AttributeValueDoubleQuotedState);
+         ADVANCE_TO(AttributeValueDoubleQuotedState);
+     END_STATE()
+ 
+@@ -890,25 +995,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+             RECONSUME_IN(DataState);
+         }
+         m_token.appendToAttributeValue(character);
+-        // Optimization: scan ahead for a run of plain-text characters in the
+-        // current 8-bit substring and append them all at once, avoiding the
+-        // per-character overhead of the main tokenizer loop.
+-        // We skip batching when m_preprocessor.skipNextNewLine() is true (i.e.
+-        // the current character was a '\r'). The preprocessor expects the very
+-        // next peek to check whether a '\n' follows (for \r\n normalization);
+-        // batching would bypass that check and cause a subsequent '\n' to be
+-        // incorrectly skipped.
+-        {
+-            auto span = source.currentSubstringSpan8();
+-            if (span.size() > 2 && !m_preprocessor.skipNextNewLine()) {
+-                auto plainText = findPlainTextInQuotedAttributeValue<'\''>(span.subspan(1, span.size() - 2));
+-                if (!plainText.empty()) {
+-                    m_token.appendToAttributeValue(plainText);
+-                    source.advancePastMultiple8(plainText.size() + 1);
+-                    SWITCH_TO(AttributeValueSingleQuotedState);
+-                }
+-            }
+-        }
++        BATCH_PLAIN_TEXT(findPlainTextInQuotedAttributeValue<'\''>, m_token.appendToAttributeValue, AttributeValueSingleQuotedState);
+         ADVANCE_TO(AttributeValueSingleQuotedState);
+     END_STATE()
+ 
+@@ -933,6 +1020,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+         if (character == '"' || character == '\'' || character == '<' || character == '=' || character == '`')
+             parseError();
+         m_token.appendToAttributeValue(character);
++        BATCH_PLAIN_TEXT(findPlainTextInUnquotedAttributeValue, m_token.appendToAttributeValue, AttributeValueUnquotedState);
+         ADVANCE_PAST_NON_NEWLINE_TO(AttributeValueUnquotedState);
+     END_STATE()
+ 
+@@ -1065,6 +1153,7 @@ bool HTMLTokenizer::processToken(SegmentedString& source)
+             return emitAndReconsumeInDataState();
+         }
+         m_token.appendToComment(character);
++        BATCH_PLAIN_TEXT(findPlainTextInComment, m_token.appendToComment, CommentState);
+         ADVANCE_TO(CommentState);
+     END_STATE()
+ 
+@@ -1494,6 +1583,25 @@ void HTMLTokenizer::updateStateFor(const AtomString& tagName)
+         m_state = RAWTEXTState;
+ }
+ 
++void HTMLTokenizer::updateStateFor(std::span<const char16_t> tagName)
++{
++    // xmp, title, style, script, iframe, noembed, textarea, noframes, noscript, plaintext.
++    if (tagName.size() < 3 || tagName.size() > 9)
++        return;
++    switch (tagName.front()) {
++    case 'i':
++    case 'n':
++    case 'p':
++    case 's':
++    case 't':
++    case 'x':
++        break;
++    default:
++        return;
++    }
++    updateStateFor(AtomString::lookUp(tagName));
++}
++
+ inline void HTMLTokenizer::appendToTemporaryBuffer(char16_t character)
+ {
+     ASSERT(isASCII(character));
+diff --git a/Source/WebCore/html/parser/HTMLTokenizer.h b/Source/WebCore/html/parser/HTMLTokenizer.h
+index c128cd927d..bc9d8afbaa 100644
+--- a/Source/WebCore/html/parser/HTMLTokenizer.h
++++ b/Source/WebCore/html/parser/HTMLTokenizer.h
+@@ -61,8 +61,16 @@ public:
+     // https://html.spec.whatwg.org/multipage/syntax.html#parsing-html-fragments
+     void NODELETE updateStateFor(const AtomString& tagName);
+ 
++    // Same, but for a raw tokenizer tag name. Rejects the great majority of tag names on length
++    // and first letter alone, so the atom table is only consulted for plausible candidates.
++    void updateStateFor(std::span<const char16_t> tagName);
++
+     void setForceNullCharacterReplacement(bool);
+ 
++    // A speculative pass that only cares about tags can ask for character token payloads to be
++    // dropped. Token types and boundaries, and therefore the state machine, are unaffected.
++    void setShouldDiscardCharacterData(bool);
++
+     bool shouldAllowCDATA() const;
+     void setShouldAllowCDATA(bool);
+ 
+@@ -186,6 +194,7 @@ private:
+     State m_state { DataState };
+     bool m_forceNullCharacterReplacement { false };
+     bool m_shouldAllowCDATA { false };
++    bool m_shouldDiscardCharacterData { false };
+ 
+     mutable HTMLToken m_token;
+ 
+@@ -294,6 +303,11 @@ inline void HTMLTokenizer::setForceNullCharacterReplacement(bool value)
+     m_forceNullCharacterReplacement = value;
+ }
+ 
++inline void HTMLTokenizer::setShouldDiscardCharacterData(bool value)
++{
++    m_shouldDiscardCharacterData = value;
++}
++
+ inline bool HTMLTokenizer::shouldAllowCDATA() const
+ {
+     return m_shouldAllowCDATA;
+diff --git a/Source/WebCore/html/parser/HTMLTreeBuilder.cpp b/Source/WebCore/html/parser/HTMLTreeBuilder.cpp
+index 98b69b6672..1fa57b8d09 100644
+--- a/Source/WebCore/html/parser/HTMLTreeBuilder.cpp
++++ b/Source/WebCore/html/parser/HTMLTreeBuilder.cpp
+@@ -359,13 +359,19 @@ void HTMLTreeBuilder::constructTree(AtomHTMLToken&& token)
+     //   replace U+0000 NULL with U+FFFD), which treats integration points as HTML content and thus
+     //   excludes them.
+     //   https://html.spec.whatwg.org/multipage/parsing.html#tree-construction
+-    bool adjustedCurrentNodeIsForeign = !m_tree.isEmpty() && !isInHTMLNamespace(adjustedCurrentStackItem());
+-    bool inForeignContent = adjustedCurrentNodeIsForeign
+-        && !HTMLElementStack::isHTMLIntegrationPoint(adjustedCurrentStackItem())
+-        && !HTMLElementStack::isMathMLTextIntegrationPoint(adjustedCurrentStackItem());
+-
+-    m_parser->tokenizer().setForceNullCharacterReplacement(m_insertionMode == InsertionMode::Text || inForeignContent);
+-    m_parser->tokenizer().setShouldAllowCDATA(adjustedCurrentNodeIsForeign);
++    bool adjustedCurrentNodeIsForeign = false;
++    bool inForeignContent = false;
++    if (!m_tree.isEmpty()) {
++        HTMLStackItem& adjustedCurrentNode = adjustedCurrentStackItem();
++        adjustedCurrentNodeIsForeign = !isInHTMLNamespace(adjustedCurrentNode);
++        inForeignContent = adjustedCurrentNodeIsForeign
++            && !HTMLElementStack::isHTMLIntegrationPoint(adjustedCurrentNode)
++            && !HTMLElementStack::isMathMLTextIntegrationPoint(adjustedCurrentNode);
++    }
++
++    auto& tokenizer = m_parser->tokenizer();
++    tokenizer.setForceNullCharacterReplacement(m_insertionMode == InsertionMode::Text || inForeignContent);
++    tokenizer.setShouldAllowCDATA(adjustedCurrentNodeIsForeign);
+ 
+ #if ASSERT_ENABLED
+     m_destructionProhibited = false;
+diff --git a/Source/WebCore/inspector/InspectorInstrumentation.cpp b/Source/WebCore/inspector/InspectorInstrumentation.cpp
+index 04a4d2d337..9637aff92b 100644
+--- a/Source/WebCore/inspector/InspectorInstrumentation.cpp
++++ b/Source/WebCore/inspector/InspectorInstrumentation.cpp
+@@ -1344,6 +1344,7 @@ void InspectorInstrumentation::didHandleMemoryPressureImpl(InstrumentingAgents&
+ }
+ #endif
+ 
++#if !defined(WEBKIT_IOS6)
+ bool InspectorInstrumentation::consoleAgentEnabled(ScriptExecutionContext* scriptExecutionContext)
+ {
+     FAST_RETURN_IF_NO_FRONTENDS(false);
+@@ -1361,6 +1362,7 @@ bool InspectorInstrumentation::timelineAgentTracking(ScriptExecutionContext* scr
+         return agents->trackingTimelineAgent();
+     return false;
+ }
++#endif
+ 
+ void InspectorInstrumentation::didRequestAnimationFrameImpl(InstrumentingAgents& instrumentingAgents, int callbackId, ScriptExecutionContext& scriptExecutionContext)
+ {
+diff --git a/Source/WebCore/inspector/InspectorInstrumentation.h b/Source/WebCore/inspector/InspectorInstrumentation.h
+index a34d1717de..9cdfb4dbcb 100644
+--- a/Source/WebCore/inspector/InspectorInstrumentation.h
++++ b/Source/WebCore/inspector/InspectorInstrumentation.h
+@@ -349,8 +349,13 @@ public:
+     static void firstFrontendCreated();
+     static void lastFrontendDeleted();
+ 
++#if defined(WEBKIT_IOS6)
++    static bool consoleAgentEnabled(ScriptExecutionContext*) { return false; }
++    static bool timelineAgentTracking(ScriptExecutionContext*) { return false; }
++#else
+     static bool consoleAgentEnabled(ScriptExecutionContext*);
+     static bool timelineAgentTracking(ScriptExecutionContext*);
++#endif
+ 
+     static InstrumentingAgents* instrumentingAgents(Page*);
+     static InstrumentingAgents* instrumentingAgents(ScriptExecutionContext*);
+@@ -629,9 +634,13 @@ inline void InspectorInstrumentation::willDestroyDOMNode(Node& node)
+ 
+ inline void InspectorInstrumentation::didChangeRendererForDOMNode(Node& node)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     ASSERT(InspectorInstrumentationPublic::hasFrontends());
+     if (RefPtr agents = instrumentingAgents(node.document()))
+         didChangeRendererForDOMNodeImpl(*agents, node);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::didAddOrRemoveScrollbars(LocalFrameView& frameView)
+@@ -690,7 +699,11 @@ inline void InspectorInstrumentation::documentDetached(Document& document)
+ 
+ inline void InspectorInstrumentation::frameWindowDiscarded(LocalFrame& frame, LocalDOMWindow* domWindow)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     frameWindowDiscardedImpl(protect(instrumentingAgents(frame)), domWindow);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::mediaQueryResultChanged(Document& document)
+@@ -1137,12 +1150,20 @@ inline void InspectorInstrumentation::didLoadResourceFromMemoryCache(Page& page,
+ 
+ inline void InspectorInstrumentation::didReceiveResourceResponse(LocalFrame& frame, ResourceLoaderIdentifier identifier, DocumentLoader* loader, const ResourceResponse& response, ResourceLoader* resourceLoader)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     didReceiveResourceResponseImpl(protect(instrumentingAgents(frame)), identifier, loader, response, resourceLoader);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::didReceiveResourceResponse(ServiceWorkerGlobalScope& globalScope, ResourceLoaderIdentifier identifier, const ResourceResponse& response)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     didReceiveResourceResponseImpl(protect(instrumentingAgents(globalScope)), identifier, nullptr, response, nullptr);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::didReceiveThreadableLoaderResponse(Document& document, DocumentThreadableLoader& documentThreadableLoader, ResourceLoaderIdentifier identifier)
+@@ -1180,31 +1201,51 @@ inline void InspectorInstrumentation::didFinishLoading(ServiceWorkerGlobalScope&
+ 
+ inline void InspectorInstrumentation::didFailLoading(LocalFrame* frame, DocumentLoader* loader, ResourceLoaderIdentifier identifier, const ResourceError& error)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     if (RefPtr agents = instrumentingAgents(frame))
+         didFailLoadingImpl(*agents, identifier, loader, error);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::didFailLoading(ServiceWorkerGlobalScope& globalScope, ResourceLoaderIdentifier identifier, const ResourceError& error)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     didFailLoadingImpl(protect(instrumentingAgents(globalScope)), identifier, nullptr, error);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::continueAfterXFrameOptionsDenied(LocalFrame& frame, ResourceLoaderIdentifier identifier, DocumentLoader& loader, const ResourceResponse& response)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     // Treat the same as didReceiveResponse.
+     didReceiveResourceResponseImpl(protect(instrumentingAgents(frame)), identifier, &loader, response, nullptr);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::continueWithPolicyDownload(LocalFrame& frame, ResourceLoaderIdentifier identifier, DocumentLoader& loader, const ResourceResponse& response)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     // Treat the same as didReceiveResponse.
+     didReceiveResourceResponseImpl(protect(instrumentingAgents(frame)), identifier, &loader, response, nullptr);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::continueWithPolicyIgnore(LocalFrame& frame, ResourceLoaderIdentifier identifier, DocumentLoader& loader, const ResourceResponse& response)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     // Treat the same as didReceiveResponse.
+     didReceiveResourceResponseImpl(protect(instrumentingAgents(frame)), identifier, &loader, response, nullptr);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::willLoadXHRSynchronously(ScriptExecutionContext* context)
+@@ -1263,7 +1304,11 @@ inline void InspectorInstrumentation::frameDetachedFromParent(LocalFrame& frame)
+ 
+ inline void InspectorInstrumentation::didCommitLoad(LocalFrame& frame, DocumentLoader* loader)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     didCommitLoadImpl(protect(instrumentingAgents(frame)), frame, loader);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::frameDocumentUpdated(LocalFrame& frame)
+@@ -1326,16 +1371,24 @@ inline bool InspectorInstrumentation::willIntercept(const LocalFrame* frame, con
+ 
+ inline bool InspectorInstrumentation::shouldInterceptRequest(const ResourceLoader& loader)
+ {
++#if defined(WEBKIT_IOS6)
++    return false;
++#else
+     ASSERT(InspectorInstrumentationPublic::hasFrontends());
+     if (RefPtr agents = instrumentingAgents(loader.frame()))
+         return shouldInterceptRequestImpl(*agents, loader);
+     return false;
++#endif
+ }
+ 
+ inline bool InspectorInstrumentation::shouldInterceptResponse(const LocalFrame& frame, const ResourceResponse& response)
+ {
++#if defined(WEBKIT_IOS6)
++    return false;
++#else
+     ASSERT(InspectorInstrumentationPublic::hasFrontends());
+     return shouldInterceptResponseImpl(protect(instrumentingAgents(frame)), response);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::interceptRequest(ResourceLoader& loader, Function<void(const ResourceRequest&)>&& handler)
+@@ -1561,32 +1614,56 @@ inline void InspectorInstrumentation::willDestroyWebAnimation(WebAnimation& anim
+ 
+ inline void InspectorInstrumentation::addMessageToConsole(LocalFrame& frame, std::unique_ptr<Inspector::ConsoleMessage> message)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     addMessageToConsoleImpl(protect(instrumentingAgents(frame)), WTF::move(message));
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::addMessageToConsole(WorkerOrWorkletGlobalScope& globalScope, std::unique_ptr<Inspector::ConsoleMessage> message)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     addMessageToConsoleImpl(protect(instrumentingAgents(globalScope)), WTF::move(message));
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::consoleCount(LocalFrame& frame, JSC::JSGlobalObject* state, const String& label)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     consoleCountImpl(protect(instrumentingAgents(frame)), state, label);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::consoleCount(WorkerOrWorkletGlobalScope& globalScope, JSC::JSGlobalObject* state, const String& label)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     consoleCountImpl(protect(instrumentingAgents(globalScope)), state, label);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::consoleCountReset(LocalFrame& frame, JSC::JSGlobalObject* state, const String& label)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     consoleCountResetImpl(protect(instrumentingAgents(frame)), state, label);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::consoleCountReset(WorkerOrWorkletGlobalScope& globalScope, JSC::JSGlobalObject* state, const String& label)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     consoleCountResetImpl(protect(instrumentingAgents(globalScope)), state, label);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::takeHeapSnapshot(LocalFrame& frame, const String& title)
+@@ -1603,32 +1680,56 @@ inline void InspectorInstrumentation::takeHeapSnapshot(WorkerOrWorkletGlobalScop
+ 
+ inline void InspectorInstrumentation::startConsoleTiming(LocalFrame& frame, JSC::JSGlobalObject* exec, const String& label)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     startConsoleTimingImpl(protect(instrumentingAgents(frame)), exec, label);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::startConsoleTiming(WorkerOrWorkletGlobalScope& globalScope, JSC::JSGlobalObject* exec, const String& label)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     startConsoleTimingImpl(protect(instrumentingAgents(globalScope)), exec, label);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::logConsoleTiming(LocalFrame& frame, JSC::JSGlobalObject* exec, const String& label, Ref<Inspector::ScriptArguments>&& arguments)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     logConsoleTimingImpl(protect(instrumentingAgents(frame)), exec, label, WTF::move(arguments));
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::logConsoleTiming(WorkerOrWorkletGlobalScope& globalScope, JSC::JSGlobalObject* exec, const String& label, Ref<Inspector::ScriptArguments>&& arguments)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     logConsoleTimingImpl(protect(instrumentingAgents(globalScope)), exec, label, WTF::move(arguments));
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::stopConsoleTiming(LocalFrame& frame, JSC::JSGlobalObject* exec, const String& label)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     stopConsoleTimingImpl(protect(instrumentingAgents(frame)), exec, label);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::stopConsoleTiming(WorkerOrWorkletGlobalScope& globalScope, JSC::JSGlobalObject* exec, const String& label)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     stopConsoleTimingImpl(protect(instrumentingAgents(globalScope)), exec, label);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::consoleTimeStamp(LocalFrame& frame, Ref<Inspector::ScriptArguments>&& arguments)
+@@ -1670,14 +1771,22 @@ inline void InspectorInstrumentation::stopProfiling(WorkerOrWorkletGlobalScope&
+ 
+ inline void InspectorInstrumentation::consoleStartRecordingCanvas(CanvasRenderingContext& context, JSC::JSGlobalObject& exec, JSC::JSObject* options)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     if (RefPtr agents = instrumentingAgents(protect(protect(context.canvasBase())->scriptExecutionContext())))
+         consoleStartRecordingCanvasImpl(*agents, context, exec, options);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::consoleStopRecordingCanvas(CanvasRenderingContext& context)
+ {
++#if defined(WEBKIT_IOS6)
++    return;
++#else
+     if (RefPtr agents = instrumentingAgents(protect(protect(context.canvasBase())->scriptExecutionContext())))
+         consoleStopRecordingCanvasImpl(*agents, context);
++#endif
+ }
+ 
+ inline void InspectorInstrumentation::performanceMark(ScriptExecutionContext& context, const String& label, std::optional<MonotonicTime> startTime)
+diff --git a/Source/WebCore/inspector/InspectorInstrumentationPublic.h b/Source/WebCore/inspector/InspectorInstrumentationPublic.h
+index da6d0f1ce3..fa8b8481ff 100644
+--- a/Source/WebCore/inspector/InspectorInstrumentationPublic.h
++++ b/Source/WebCore/inspector/InspectorInstrumentationPublic.h
+@@ -28,6 +28,19 @@
+ #include <atomic>
+ namespace WebCore {
+ 
++#if defined(WEBKIT_IOS6)
++
++#define FAST_RETURN_IF_NO_FRONTENDS(value) \
++    return value;
++
++class WEBCORE_EXPORT InspectorInstrumentationPublic {
++public:
++    static constexpr bool hasFrontends() { return false; }
++    static std::atomic<int> s_frontendCounter;
++};
++
++#else
++
+ #define FAST_RETURN_IF_NO_FRONTENDS(value)                          \
+     if (!InspectorInstrumentationPublic::hasFrontends()) [[likely]] \
+         return value;
+@@ -38,4 +51,6 @@ public:
+     static std::atomic<int> s_frontendCounter;
+ };
+ 
++#endif
++
+ }
 diff --git a/Source/WebCore/loader/ContentFilter.cpp b/Source/WebCore/loader/ContentFilter.cpp
 index a623b902f7..ff2dfd204c 100644
 --- a/Source/WebCore/loader/ContentFilter.cpp
@@ -1721,7 +4715,7 @@ index 8bd12ba1ab..a6372e3526 100644
  #endif
  
 diff --git a/Source/WebCore/page/EventHandler.cpp b/Source/WebCore/page/EventHandler.cpp
-index 6b75aeaace..5368290169 100644
+index 6b75aeaace..dd9658a497 100644
 --- a/Source/WebCore/page/EventHandler.cpp
 +++ b/Source/WebCore/page/EventHandler.cpp
 @@ -362,7 +362,14 @@ static inline ScrollGranularity NODELETE wheelGranularityToScrollGranularity(uns
@@ -1740,6 +4734,59 @@ index 6b75aeaace..5368290169 100644
  static bool shouldGesturesTriggerActive()
  {
      // If the platform we're on supports GestureTapDown and GestureTapCancel then we'll
+@@ -3081,8 +3088,15 @@ void EventHandler::updateMouseEventTargetNode(const AtomString& eventType, Node*
+         m_textRecognitionHoverTimer.restart();
+ #endif // ENABLE(IMAGE_ANALYSIS)
+ 
++#if !defined(WEBKIT_IOS6)
+     if (RefPtr page = frame->page())
+         protect(page->imageOverlayController())->elementUnderMouseDidChange(frame, m_elementUnderMouse);
++#else
++    // ImageOverlayController::elementUnderMouseDidChange has an empty body off
++    // Mac, and imageOverlayController() is the lazily-creating accessor, so this
++    // built the controller on the first mouse move and then called into nothing
++    // for every move after it.
++#endif
+ 
+     ASSERT_IMPLIES(m_elementUnderMouse, &m_elementUnderMouse->document() == frame->document());
+     ASSERT_IMPLIES(m_lastElementUnderMouse, &m_lastElementUnderMouse->document() == frame->document());
+@@ -3111,17 +3125,21 @@ void EventHandler::updateMouseEventTargetNode(const AtomString& eventType, Node*
+             for (RefPtr element = m_elementUnderMouse; element; element = element->parentElementInComposedTree())
+                 elementsUnderMouse.append(element);
+ 
+-            Vector enteredElementsChain = elementsUnderMouse;
+-            if (!leftElementsChain.isEmpty() && !enteredElementsChain.isEmpty() && leftElementsChain.last().ptr() == enteredElementsChain.last().get()) {
+-                size_t minHeight = std::min(leftElementsChain.size(), enteredElementsChain.size());
++            // The entered chain is the head of elementsUnderMouse; tracking its
++            // length is enough, and saves copying a vector of weak pointers -
++            // one ref count pair per ancestor - on every change of hovered
++            // element, which on a touch port is every tap.
++            size_t enteredElementsChainSize = elementsUnderMouse.size();
++            if (!leftElementsChain.isEmpty() && enteredElementsChainSize && leftElementsChain.last().ptr() == elementsUnderMouse.last().get()) {
++                size_t minHeight = std::min(leftElementsChain.size(), enteredElementsChainSize);
+                 size_t i;
+                 for (i = 0; i < minHeight; ++i) {
+-                    WeakPtr enteredElement = enteredElementsChain[enteredElementsChain.size() - i - 1];
++                    WeakPtr enteredElement = elementsUnderMouse[enteredElementsChainSize - i - 1];
+                     if (leftElementsChain[leftElementsChain.size() - i - 1].ptr() != enteredElement.get())
+                         break;
+                 }
+                 leftElementsChain.shrink(leftElementsChain.size() - i);
+-                enteredElementsChain.shrink(enteredElementsChain.size() - i);
++                enteredElementsChainSize -= i;
+             }
+ 
+             if (auto lastElementUnderMouse = m_lastElementUnderMouse)
+@@ -3135,7 +3153,8 @@ void EventHandler::updateMouseEventTargetNode(const AtomString& eventType, Node*
+             if (auto elementUnderMouse = m_elementUnderMouse)
+                 elementUnderMouse->dispatchMouseEvent(platformMouseEvent, eventNames.mouseoverEvent, 0, m_lastElementUnderMouse);
+ 
+-            for (auto& chain : enteredElementsChain | std::views::reverse) {
++            for (size_t i = enteredElementsChainSize; i > 0; --i) {
++                RefPtr chain = elementsUnderMouse[i - 1].get();
+                 if (!chain)
+                     continue;
+ 
 diff --git a/Source/WebCore/page/EventHandler.h b/Source/WebCore/page/EventHandler.h
 index 8c70d81cf6..9725b8324d 100644
 --- a/Source/WebCore/page/EventHandler.h
@@ -1791,23 +4838,308 @@ index 70bd1e3c03..7e3206a07e 100644
                  // No need for continuous corners if we're already going to clip.
                  useContinuousCorners = false;
 diff --git a/Source/WebCore/page/IntersectionObserver.cpp b/Source/WebCore/page/IntersectionObserver.cpp
-index 40909799b3..0c541ed773 100644
+index 40909799b3..88ef85b310 100644
 --- a/Source/WebCore/page/IntersectionObserver.cpp
 +++ b/Source/WebCore/page/IntersectionObserver.cpp
-@@ -744,6 +744,8 @@ auto IntersectionObserver::updateObservations(const Frame& hostFrame) -> NeedNot
+@@ -521,17 +521,9 @@ static FloatRect mainFrameViewToContents(const FrameView& targetFrameView, Float
+     return targetFrameView.viewToContents(convertFromRootView(targetFrameView, rect));
+ }
+ 
+-auto IntersectionObserver::computeIntersectionState(const IntersectionObserverRegistration& registration, FrameView& hostFrameView, Element& target, ApplyRootMargin applyRootMargin) const -> IntersectionObservationState
++auto IntersectionObserver::computeIntersectionRootState(FrameView& hostFrameView) const -> IntersectionRootState
+ {
+-    bool isFirstObservation = !registration.previousThresholdIndex;
+-
+-    // This is not set if the root is implicit (meaning the root is the main frame),
+-    // it's cross-origin with the target, and Site Isolation is enabled. In that case,
+-    // the renderer is in another process and can't be accessed.
+-    CheckedPtr<RenderBox> rootRenderer;
+-
+-    CheckedPtr<RenderElement> targetRenderer;
+-    IntersectionObservationState intersectionState;
++    IntersectionRootState rootState;
+ 
+     auto layoutViewportRectForIntersection = [&] {
+         if (m_includeObscuredInsets == IncludeObscuredInsets::Yes) {
+@@ -545,71 +537,88 @@ auto IntersectionObserver::computeIntersectionState(const IntersectionObserverRe
+         return hostFrameView.layoutViewportRect();
+     };
+ 
+-    auto computeRootBounds = [&]() {
+-        targetRenderer = target.renderer();
+-        if (!targetRenderer)
+-            return;
++    if (RefPtr root = this->root()) {
++        if (!root->renderer())
++            return rootState;
++
++        // Use RenderBox here rather than RenderBlock so explicit SVG roots
++        // (LegacyRenderSVGRoot and RenderSVGRoot are RenderReplaced) are accepted.
++        rootState.renderer = dynamicDowncast<RenderBox>(root->renderer());
++        if (!rootState.renderer)
++            return rootState;
++
++        rootState.canComputeIntersection = true;
++        // The per-target test below only lets a target through when the root is its containing
++        // block ancestor, which for a Document root means the target lives in that document.
++        // So "root() == &target.document()" is the same question as "is the root a Document",
++        // and that does not depend on the target.
++        if (is<Document>(*root))
++            rootState.bounds = layoutViewportRectForIntersection();
++        else if (rootState.renderer->hasNonVisibleOverflow())
++            rootState.bounds = rootState.renderer->paddingBoxRect();
++        else
++            rootState.bounds = { FloatPoint(), rootState.renderer->borderBoxSize() };
++    } else {
++        // This is not set if the root is implicit (meaning the root is the main frame),
++        // it's cross-origin with the target, and Site Isolation is enabled. In that case,
++        // the renderer is in another process and can't be accessed.
++        if (RefPtr hostLocalFrameView = dynamicDowncast<LocalFrameView>(hostFrameView))
++            rootState.renderer = hostLocalFrameView->renderView();
+ 
+-        if (root()) {
+-            if (!root()->renderer())
+-                return;
+-
+-            // Use RenderBox here rather than RenderBlock so explicit SVG roots
+-            // (LegacyRenderSVGRoot and RenderSVGRoot are RenderReplaced) are accepted.
+-            rootRenderer = dynamicDowncast<RenderBox>(root()->renderer());
+-            if (!rootRenderer)
+-                return;
+-
+-            auto isRootAncestorOfTarget = [&] {
+-                // containingBlock() skips the SVG boundary (the SVG root is a
+-                // RenderReplaced), so resolve an explicit SVG root via the target's SVG tree root.
+-                if (CheckedPtr legacySVGRoot = dynamicDowncast<LegacyRenderSVGRoot>(rootRenderer))
+-                    return SVGRenderSupport::findTreeRootObject(*targetRenderer) == legacySVGRoot;
+-                if (CheckedPtr svgRoot = dynamicDowncast<RenderSVGRoot>(rootRenderer))
+-                    return lineageOfType<RenderSVGRoot>(*targetRenderer).first() == svgRoot;
+-
+-                // isContainingBlockAncestorFor is only available on RenderBlock.
+-                CheckedPtr rootBlock = dynamicDowncast<RenderBlock>(rootRenderer);
+-                return rootBlock && rootBlock->isContainingBlockAncestorFor(*targetRenderer);
+-            };
+-
+-            if (!isRootAncestorOfTarget())
+-                return;
+-
+-            intersectionState.canComputeIntersection = true;
+-            if (root() == &target.document())
+-                intersectionState.rootBounds = layoutViewportRectForIntersection();
+-            else if (rootRenderer->hasNonVisibleOverflow())
+-                intersectionState.rootBounds = rootRenderer->paddingBoxRect();
+-            else
+-                intersectionState.rootBounds = { FloatPoint(), rootRenderer->borderBoxSize() };
+-
+-            return;
+-        }
++        rootState.canComputeIntersection = true;
++        rootState.bounds = layoutViewportRectForIntersection();
++    }
+ 
+-        if (RefPtr hostLocalFrameView = dynamicDowncast<LocalFrameView>(hostFrameView))
+-            rootRenderer = hostLocalFrameView->renderView();
++    rootState.boundsWithRootMargin = rootState.bounds;
++    // If applyRootMargin is Yes, the root and target frames are same-origin.
++    // Therefore the root renderer should be available, as the root is in the
++    // same process as the target (with or without Site Isolation)
++    auto rootUsedZoom = rootState.renderer ? Style::ZoomFactor { rootState.renderer->style().usedZoom() } : Style::ZoomFactor::none();
++    expandRootBoundsWithRootMargin(rootState.boundsWithRootMargin, scrollMarginBox(), rootUsedZoom);
++    expandRootBoundsWithRootMargin(rootState.boundsWithRootMargin, rootMarginBox(), rootUsedZoom);
+ 
+-        intersectionState.canComputeIntersection = true;
+-        intersectionState.rootBounds = layoutViewportRectForIntersection();
+-    };
++    return rootState;
++}
++
++auto IntersectionObserver::computeIntersectionState(const IntersectionObserverRegistration& registration, FrameView& hostFrameView, Element& target, ApplyRootMargin applyRootMargin, IntersectionRootState& rootState) const -> IntersectionObservationState
++{
++    bool isFirstObservation = !registration.previousThresholdIndex;
++
++    // rootState owns the checked reference for the whole pass, so this does not need its own.
++    RenderBox* rootRenderer = rootState.renderer.get();
++    CheckedPtr<RenderElement> targetRenderer;
++    IntersectionObservationState intersectionState;
++
++    if (rootState.canComputeIntersection) {
++        targetRenderer = target.renderer();
++        if (targetRenderer) {
++            if (root()) {
++                auto isRootAncestorOfTarget = [&] {
++                    // containingBlock() skips the SVG boundary (the SVG root is a
++                    // RenderReplaced), so resolve an explicit SVG root via the target's SVG tree root.
++                    if (CheckedPtr legacySVGRoot = dynamicDowncast<LegacyRenderSVGRoot>(rootRenderer))
++                        return SVGRenderSupport::findTreeRootObject(*targetRenderer) == legacySVGRoot;
++                    if (CheckedPtr svgRoot = dynamicDowncast<RenderSVGRoot>(rootRenderer))
++                        return lineageOfType<RenderSVGRoot>(*targetRenderer).first() == svgRoot;
++
++                    // isContainingBlockAncestorFor is only available on RenderBlock.
++                    CheckedPtr rootBlock = dynamicDowncast<RenderBlock>(rootRenderer);
++                    return rootBlock && rootBlock->isContainingBlockAncestorFor(*targetRenderer);
++                };
++
++                intersectionState.canComputeIntersection = isRootAncestorOfTarget();
++            } else
++                intersectionState.canComputeIntersection = true;
++        }
++    }
+ 
+-    computeRootBounds();
+     if (!intersectionState.canComputeIntersection) {
+         intersectionState.observationChanged = isFirstObservation || *registration.previousThresholdIndex != 0;
+         return intersectionState;
+     }
+ 
+-    if (applyRootMargin == ApplyRootMargin::Yes) {
+-        // If applyRootMargin is Yes, the root and target frames are same-origin.
+-        // Therefore the root renderer should be available, as the root is in the
+-        // same process as the target (with or without Site Isolation)
+-        ASSERT(rootRenderer);
+-        auto rootUsedZoom = rootRenderer ? Style::ZoomFactor { rootRenderer->style().usedZoom() } : Style::ZoomFactor::none();
+-
+-        expandRootBoundsWithRootMargin(intersectionState.rootBounds, scrollMarginBox(), rootUsedZoom);
+-        expandRootBoundsWithRootMargin(intersectionState.rootBounds, rootMarginBox(), rootUsedZoom);
+-    }
++    ASSERT_IMPLIES(applyRootMargin == ApplyRootMargin::Yes, rootRenderer);
++    intersectionState.rootBounds = applyRootMargin == ApplyRootMargin::Yes ? rootState.boundsWithRootMargin : rootState.bounds;
+ 
+     auto localTargetBounds = [&]() -> LayoutRect {
+         if (CheckedPtr renderBox = dynamicDowncast<RenderBox>(*targetRenderer))
+@@ -721,7 +730,10 @@ auto IntersectionObserver::computeIntersectionState(const IntersectionObserverRe
+ 
+     intersectionState.observationChanged = isFirstObservation || intersectionState.thresholdIndex != registration.previousThresholdIndex;
+     if (intersectionState.observationChanged) {
+-        intersectionState.absoluteRootBounds = rootLocalToAbsoluteRect(intersectionState.rootBounds);
++        auto& cachedAbsoluteRootBounds = applyRootMargin == ApplyRootMargin::Yes ? rootState.absoluteBoundsWithRootMargin : rootState.absoluteBounds;
++        if (!cachedAbsoluteRootBounds)
++            cachedAbsoluteRootBounds = rootLocalToAbsoluteRect(intersectionState.rootBounds);
++        intersectionState.absoluteRootBounds = *cachedAbsoluteRootBounds;
+ 
+         if (!intersectionState.absoluteTargetRect)
+             intersectionState.absoluteTargetRect = targetRenderer->localToAbsoluteQuad(FloatRect(localTargetBounds)).boundingBox();
+@@ -744,6 +756,17 @@ auto IntersectionObserver::updateObservations(const Frame& hostFrame) -> NeedNot
  
      // Iterate on a copy of m_observationTargets, in case something in the loop mutates it.
      auto observationTargets = m_observationTargets;
++    if (observationTargets.isEmptyIgnoringNullReferences())
++        return NeedNotify::No;
 +
++    auto rootState = computeIntersectionRootState(*hostFrameView);
++
++    RefPtr hostFrameSecurityOrigin = hostFrame.frameDocumentSecurityOrigin();
++    // Targets of one observer nearly always share a document, and the origin comparison is a
++    // string compare, so remember the answer for the document we last asked about.
++    const Document* lastSameOriginDocument = nullptr;
++    bool lastSameOriginResult = false;
 +
      for (Ref target : observationTargets) {
          // Per HTML spec, "update the rendering" step (which includes "run the update intersection
          // observations") should only occur for fully active documents. Hence skip updating the
+@@ -759,13 +782,19 @@ auto IntersectionObserver::updateObservations(const Frame& hostFrame) -> NeedNot
+         auto& registration = targetRegistrations[index];
+ 
+         bool isSameOriginObservation = [&] () {
+-            if (RefPtr hostFrameSecurityOrigin = hostFrame.frameDocumentSecurityOrigin())
+-                return protect(target->document().securityOrigin())->isSameOriginDomain(*hostFrameSecurityOrigin);
++            if (!hostFrameSecurityOrigin)
++                return false;
++
++            auto& targetDocument = target->document();
++            if (lastSameOriginDocument == &targetDocument)
++                return lastSameOriginResult;
+ 
+-            return false;
++            lastSameOriginDocument = &targetDocument;
++            lastSameOriginResult = protect(targetDocument.securityOrigin())->isSameOriginDomain(*hostFrameSecurityOrigin);
++            return lastSameOriginResult;
+         }();
+         auto applyRootMargin = isSameOriginObservation ? ApplyRootMargin::Yes : ApplyRootMargin::No;
+-        auto intersectionState = computeIntersectionState(registration, *hostFrameView, target, applyRootMargin);
++        auto intersectionState = computeIntersectionState(registration, *hostFrameView, target, applyRootMargin, rootState);
+ 
+         if (intersectionState.observationChanged) {
+             if (intersectionState.isIntersecting) {
+diff --git a/Source/WebCore/page/IntersectionObserver.h b/Source/WebCore/page/IntersectionObserver.h
+index 5dc74daa93..75636752f0 100644
+--- a/Source/WebCore/page/IntersectionObserver.h
++++ b/Source/WebCore/page/IntersectionObserver.h
+@@ -49,6 +49,7 @@ class Document;
+ class Element;
+ class FrameView;
+ class IntersectionObserverEntry;
++class RenderBox;
+ 
+ struct IntersectionObserverRegistration {
+     WeakPtr<IntersectionObserver> observer;
+@@ -145,8 +146,23 @@ private:
+         bool observationChanged { false };
+     };
+ 
++    // Everything about the root that does not depend on which target is being tested. It is the
++    // same for every target of one observer, so updateObservations() computes it once per pass
++    // instead of once per target.
++    struct IntersectionRootState {
++        CheckedPtr<RenderBox> renderer;
++        FloatRect bounds;
++        FloatRect boundsWithRootMargin;
++        // Filled in on first use: mapping the root bounds to absolute coordinates walks the
++        // root's ancestor chain and gives the same answer for every target.
++        std::optional<FloatRect> absoluteBounds;
++        std::optional<FloatRect> absoluteBoundsWithRootMargin;
++        bool canComputeIntersection { false };
++    };
++
+     enum class ApplyRootMargin : bool { No, Yes };
+-    IntersectionObservationState computeIntersectionState(const IntersectionObserverRegistration&, FrameView&, Element& target, ApplyRootMargin) const;
++    IntersectionRootState computeIntersectionRootState(FrameView&) const;
++    IntersectionObservationState computeIntersectionState(const IntersectionObserverRegistration&, FrameView&, Element& target, ApplyRootMargin, IntersectionRootState&) const;
+ 
+     Type m_type { Type::Local };
+ 
 diff --git a/Source/WebCore/page/LocalFrameView.cpp b/Source/WebCore/page/LocalFrameView.cpp
-index 816c6d856d..218641deae 100644
+index 816c6d856d..9f34a1ea5d 100644
 --- a/Source/WebCore/page/LocalFrameView.cpp
 +++ b/Source/WebCore/page/LocalFrameView.cpp
-@@ -5851,6 +5851,15 @@ void LocalFrameView::paintContents(GraphicsContext& context, const IntRect& dirt
+@@ -5475,6 +5475,14 @@ bool LocalFrameView::shouldSuspendScrollAnimations() const
+ 
+ void LocalFrameView::notifyAllFramesThatContentAreaWillPaint() const
+ {
++#if defined(WEBKIT_IOS6)
++    // The only thing on the far end of contentAreaWillPaint() is the hook that
++    // flashes Mac's overlay scrollbars; every other ScrollbarsController leaves
++    // it as an empty virtual. Getting there once per rendering update walked
++    // every rendered subframe and every scrollable area of every one of them,
++    // and scrollbarsController() builds a controller for each area it is asked
++    // about. UIKit owns scrolling and scroll indicators on this port.
++#else
+     notifyScrollableAreasThatContentAreaWillPaint();
+ 
+     for (RefPtr child = m_frame->tree().firstRenderedChild(); child; child = child->tree().traverseNextRendered(m_frame.ptr())) {
+@@ -5484,10 +5492,14 @@ void LocalFrameView::notifyAllFramesThatContentAreaWillPaint() const
+         if (RefPtr frameView = localChild->view())
+             frameView->notifyScrollableAreasThatContentAreaWillPaint();
+     }
++#endif
+ }
+ 
+ void LocalFrameView::notifyScrollableAreasThatContentAreaWillPaint() const
+ {
++#if defined(WEBKIT_IOS6)
++    // See notifyAllFramesThatContentAreaWillPaint().
++#else
+     RefPtr page = m_frame->page();
+     if (!page)
+         return;
+@@ -5503,6 +5515,7 @@ void LocalFrameView::notifyScrollableAreasThatContentAreaWillPaint() const
+         if (!is<ScrollView>(scrollableArea))
+             scrollableArea->contentAreaWillPaint();
+     }
++#endif
+ }
+ 
+ void LocalFrameView::updateScrollCorner()
+@@ -5851,6 +5864,15 @@ void LocalFrameView::paintContents(GraphicsContext& context, const IntRect& dirt
  
  void LocalFrameView::paintContents(GraphicsContext& context, const IntRect& dirtyRect, Node* subtreePaintRoot, SecurityOriginPaintPolicy securityOriginPaintPolicy, RegionContext* regionContext)
  {
@@ -1823,7 +5155,7 @@ index 816c6d856d..218641deae 100644
  #ifndef NDEBUG
      bool fillWithWarningColor = [&] {
          if (m_frame->document()->printing())
-@@ -6125,7 +6134,7 @@ void LocalFrameView::checkAndDispatchDidReachVisuallyNonEmptyState()
+@@ -6125,7 +6147,7 @@ void LocalFrameView::checkAndDispatchDidReachVisuallyNonEmptyState()
              return true;
  
          // FIXME: We should also ignore renderers with non-final style.
@@ -1832,7 +5164,7 @@ index 816c6d856d..218641deae 100644
              return false;
  
          auto finishedParsingMainDocument = m_frame->loader().stateMachine().committedFirstRealDocumentLoad()
-@@ -6701,12 +6710,28 @@ bool LocalFrameView::updateFixedPositionLayoutRect()
+@@ -6701,12 +6723,28 @@ bool LocalFrameView::updateFixedPositionLayoutRect()
      if (!page || !page->chrome().client().fetchCustomFixedPositionLayoutRect(newRect))
          return false;
  
@@ -2174,6 +5506,287 @@ index 3def801240..68b19b6e17 100644
  
  #if ENABLE(VIDEO)
      for (auto& mediaElement : HTMLMediaElement::allMediaElements())
+diff --git a/Source/WebCore/page/Page.cpp b/Source/WebCore/page/Page.cpp
+index c139698d10..1969e14dab 100644
+--- a/Source/WebCore/page/Page.cpp
++++ b/Source/WebCore/page/Page.cpp
+@@ -2227,6 +2227,32 @@ void Page::syncLocalFrameInfoToRemote()
+     });
+ }
+ 
++#if defined(WEBKIT_IOS6)
++static void collectRenderableDocuments(const Frame& mainFrame, Vector<Ref<Document>, 8>& documents)
++{
++    for (RefPtr frame = &mainFrame; frame; frame = frame->tree().traverseNext()) {
++        RefPtr localFrame = dynamicDowncast<LocalFrame>(*frame);
++        if (!localFrame)
++            continue;
++        RefPtr document = localFrame->document();
++        if (!document)
++            continue;
++        if (document->renderingIsSuppressedForViewTransition())
++            continue;
++        if (!document->visualUpdatesAllowed())
++            continue;
++        documents.append(document.releaseNonNull());
++    }
++}
++
++static inline bool documentIsStillRenderable(Document& document, const Page& page)
++{
++    return document.page() == &page
++        && !document.renderingIsSuppressedForViewTransition()
++        && document.visualUpdatesAllowed();
++}
++#endif
++
+ // https://html.spec.whatwg.org/multipage/webappapis.html#update-the-rendering
+ void Page::updateRendering()
+ {
+@@ -2254,9 +2280,33 @@ void Page::updateRendering()
+ 
+     layoutIfNeeded();
+ 
+-    auto runProcessingStep = [&](RenderingUpdateStep step, NOESCAPE const Function<void(Document&)>& perDocumentFunction) {
++#if defined(WEBKIT_IOS6)
++    // Upstream walks the whole frame tree, downcasts every frame and builds a
++    // fresh Vector<Ref<Document>> once per step - about twenty times per update,
++    // 350-650 updates a minute - and materialises each step's lambda as a
++    // WTF::Function, which is a heap allocation and an indirect call per step
++    // because WTF::Function has no inline storage. The set of documents is
++    // collected once here and the per-document predicate the walk applies is
++    // re-checked per step, so a document that a step detaches or suppresses is
++    // still skipped by the steps that follow. A document created *during* the
++    // update is picked up by the next update rather than by the remaining steps
++    // of this one; the only documents that can appear mid-update are the initial
++    // empty documents of just-inserted iframes, which have nothing for any step
++    // to do.
++    Vector<Ref<Document>, 8> renderableDocuments;
++    collectRenderableDocuments(mainFrame(), renderableDocuments);
++#endif
++
++    auto runProcessingStep = [&](RenderingUpdateStep step, auto&& perDocumentFunction) {
+         m_renderingUpdateRemainingSteps.last().remove(step);
+-        forEachRenderableDocument(perDocumentFunction);
++#if defined(WEBKIT_IOS6)
++        for (auto& document : renderableDocuments) {
++            if (documentIsStillRenderable(document, *this))
++                perDocumentFunction(document.get());
++        }
++#else
++        forEachRenderableDocument(std::forward<decltype(perDocumentFunction)>(perDocumentFunction));
++#endif
+     };
+ 
+     runProcessingStep(RenderingUpdateStep::RestoreScrollPositionAndViewState, [] (Document& document) {
+@@ -2270,7 +2320,8 @@ void Page::updateRendering()
+ #endif
+ 
+     // Timestamps should not change while serving the rendering update steps.
+-    Vector<WeakPtr<Document, WeakPtrImplWithEventTargetData>> initialDocuments;
++    // The inline capacity keeps this off the heap: it is rebuilt on every update.
++    Vector<WeakPtr<Document, WeakPtrImplWithEventTargetData>, 8> initialDocuments;
+     forEachDocument([&initialDocuments] (Document& document) {
+         protect(document.window())->freezeNowTimestamp();
+         initialDocuments.append(document);
+@@ -2342,9 +2393,18 @@ void Page::updateRendering()
+     });
+ 
+     // https://drafts.csswg.org/scroll-animations-1/#event-loop
++#if defined(WEBKIT_IOS6)
++    // Same set of documents the timestamp freeze above walked for, minus any the
++    // steps in between detached - no second walk of the frame tree, no Function.
++    for (auto& weakDocument : initialDocuments) {
++        if (RefPtr document = weakDocument.get())
++            document->updateStaleScrollTimelines();
++    }
++#else
+     forEachDocument([] (Document& document) {
+         document.updateStaleScrollTimelines();
+     });
++#endif
+ 
+     runProcessingStep(RenderingUpdateStep::FocusFixup, [&] (Document& document) {
+         if (RefPtr focusedElement = document.focusedElement()) {
+@@ -2415,9 +2475,27 @@ void Page::doAfterUpdateRendering()
+     // Code here should do once-per-frame work that needs to be done before painting, and requires
+     // layout to be up-to-date. It should not run script, trigger layout, or dirty layout.
+ 
+-    auto runProcessingStep = [&](RenderingUpdateStep step, NOESCAPE const Function<void(Document&)>& perDocumentFunction) {
++#if defined(WEBKIT_IOS6)
++    // See updateRendering(): one walk for the whole tail of the update instead of
++    // one per step, and no WTF::Function allocation per step.
++    Vector<Ref<Document>, 8> renderableDocuments;
++    collectRenderableDocuments(mainFrame(), renderableDocuments);
++#endif
++
++    auto forEachRenderable = [&](auto&& perDocumentFunction) {
++#if defined(WEBKIT_IOS6)
++        for (auto& document : renderableDocuments) {
++            if (documentIsStillRenderable(document, *this))
++                perDocumentFunction(document.get());
++        }
++#else
++        forEachRenderableDocument(std::forward<decltype(perDocumentFunction)>(perDocumentFunction));
++#endif
++    };
++
++    auto runProcessingStep = [&](RenderingUpdateStep step, auto&& perDocumentFunction) {
+         m_renderingUpdateRemainingSteps.last().remove(step);
+-        forEachRenderableDocument(perDocumentFunction);
++        forEachRenderable(std::forward<decltype(perDocumentFunction)>(perDocumentFunction));
+     };
+ 
+     runProcessingStep(RenderingUpdateStep::CursorUpdate, [] (Document& document) {
+@@ -2433,11 +2511,11 @@ void Page::doAfterUpdateRendering()
+         document.enqueueEventTimingEntriesIfNeeded();
+     });
+ 
+-    forEachRenderableDocument([] (Document& document) {
++    forEachRenderable([] (Document& document) {
+         document.selection().updateAppearanceAfterUpdatingRendering();
+     });
+ 
+-    forEachRenderableDocument([] (Document& document) {
++    forEachRenderable([] (Document& document) {
+         document.updateHighlightPositions();
+     });
+ 
+@@ -2448,13 +2526,13 @@ void Page::doAfterUpdateRendering()
+ #endif
+ 
+ #if ENABLE(APP_HIGHLIGHTS)
+-    forEachRenderableDocument([timestamp = m_lastRenderingUpdateTimestamp] (Document& document) {
++    forEachRenderable([timestamp = m_lastRenderingUpdateTimestamp] (Document& document) {
+         document.restoreUnrestoredAppHighlights(timestamp);
+     });
+ #endif
+ 
+ #if ENABLE(VIDEO)
+-    forEachRenderableDocument([] (Document& document) {
++    forEachRenderable([] (Document& document) {
+         document.updateTextTrackRepresentationImageIfNeeded();
+     });
+ #endif
+@@ -2487,7 +2565,7 @@ void Page::doAfterUpdateRendering()
+         if (CheckedPtr axObjectCache = existingAXObjectCache())
+             axObjectCache->onAccessibilityPaintStarted();
+ 
+-        forEachRenderableDocument([] (Document& document) {
++        forEachRenderable([] (Document& document) {
+             document.updateAccessibilityObjectRegions();
+         });
+ 
+@@ -2506,7 +2584,7 @@ void Page::doAfterUpdateRendering()
+ 
+     m_renderingUpdateRemainingSteps.last().remove(RenderingUpdateStep::PrepareCanvasesForDisplayOrFlush);
+ 
+-    forEachRenderableDocument([] (Document& document) {
++    forEachRenderable([] (Document& document) {
+         document.prepareCanvasesForDisplayOrFlushIfNeeded();
+     });
+ 
+@@ -2526,8 +2604,15 @@ void Page::doAfterUpdateRendering()
+ 
+     computeSampledPageTopColorIfNecessary();
+ 
++#if defined(WEBKIT_IOS6)
++    // One process, one Page, no remote frames: the setting cannot be on here,
++    // and this walks every local frame and builds a map of layout info per child
++    // when it is.
++    ASSERT(!settings().siteIsolationEnabled());
++#else
+     if (settings().siteIsolationEnabled())
+         syncLocalFrameInfoToRemote();
++#endif
+ }
+ 
+ void Page::finalizeRenderingUpdate(OptionSet<FinalizeRenderingUpdateFlags> flags)
+@@ -4535,6 +4620,17 @@ RenderingUpdateScheduler* Page::existingRenderingUpdateScheduler()
+ 
+ void Page::forEachDocumentFromMainFrame(const Frame& mainFrame, NOESCAPE const Function<void(Document&)>& functor)
+ {
++    // The overwhelmingly common shape is a single local frame with no children:
++    // the gathering Vector exists only so the functor cannot invalidate the walk,
++    // and with one document a protecting Ref does the same job for free.
++    if (!mainFrame.tree().firstChild()) {
++        if (RefPtr localMainFrame = dynamicDowncast<LocalFrame>(mainFrame)) {
++            if (RefPtr document = localMainFrame->document())
++                functor(*document);
++        }
++        return;
++    }
++
+     Vector<Ref<Document>, 8> documents;
+     for (RefPtr frame = mainFrame; frame; frame = frame->tree().traverseNext()) {
+         RefPtr localFrame = dynamicDowncast<LocalFrame>(*frame);
+@@ -4585,8 +4681,20 @@ bool Page::findMatchingLocalDocument(NOESCAPE const Function<bool(Document&)>& f
+ 
+ void Page::forEachRenderableDocument(NOESCAPE const Function<void(Document&)>& functor) const
+ {
++    Ref mainFrame = this->mainFrame();
++    if (!mainFrame->tree().firstChild()) {
++        RefPtr localMainFrame = dynamicDowncast<LocalFrame>(mainFrame.get());
++        if (!localMainFrame)
++            return;
++        RefPtr document = localMainFrame->document();
++        if (!document || document->renderingIsSuppressedForViewTransition() || !document->visualUpdatesAllowed())
++            return;
++        functor(*document);
++        return;
++    }
++
+     Vector<Ref<Document>, 8> documents;
+-    for (RefPtr frame = mainFrame(); frame; frame = frame->tree().traverseNext()) {
++    for (RefPtr frame = mainFrame.ptr(); frame; frame = frame->tree().traverseNext()) {
+         RefPtr localFrame = dynamicDowncast<LocalFrame>(*frame);
+         if (!localFrame)
+             continue;
+@@ -4616,8 +4724,17 @@ void Page::forEachMediaElement(NOESCAPE const Function<void(HTMLMediaElement&)>&
+ 
+ void Page::forEachLocalFrame(NOESCAPE const Function<void(LocalFrame&)>& functor)
+ {
+-    Vector<Ref<LocalFrame>> frames;
+-    for (RefPtr frame = mainFrame(); frame; frame = frame->tree().traverseNext()) {
++    Ref mainFrame = this->mainFrame();
++    if (!mainFrame->tree().firstChild()) {
++        if (RefPtr localMainFrame = dynamicDowncast<LocalFrame>(mainFrame.get()))
++            functor(*localMainFrame);
++        return;
++    }
++
++    // Inline capacity: this vector exists only to hold the frames alive across
++    // the functor, and it was allocating on the heap for every call.
++    Vector<Ref<LocalFrame>, 8> frames;
++    for (RefPtr frame = mainFrame.ptr(); frame; frame = frame->tree().traverseNext()) {
+         if (RefPtr localFrame = dynamicDowncast<LocalFrame>(*frame))
+             frames.append(localFrame.releaseNonNull());
+     }
+@@ -4628,9 +4745,23 @@ void Page::forEachLocalFrame(NOESCAPE const Function<void(LocalFrame&)>& functor
+ 
+ void Page::forEachWindowEventLoop(NOESCAPE const Function<void(WindowEventLoop&)>& functor)
+ {
++    // One frame means one event loop, and the hash set below allocates its table
++    // on the heap. This runs after every opportunistic task.
++    Ref mainFrame = this->mainFrame();
++    if (!mainFrame->tree().firstChild()) {
++        RefPtr localMainFrame = dynamicDowncast<LocalFrame>(mainFrame.get());
++        if (!localMainFrame)
++            return;
++        if (RefPtr document = localMainFrame->document()) {
++            Ref eventLoop = document->windowEventLoop();
++            functor(eventLoop);
++        }
++        return;
++    }
++
+     HashSet<Ref<WindowEventLoop>> windowEventLoops;
+     RefPtr<WindowEventLoop> lastEventLoop;
+-    for (RefPtr frame = mainFrame(); frame; frame = frame->tree().traverseNext()) {
++    for (RefPtr frame = mainFrame.ptr(); frame; frame = frame->tree().traverseNext()) {
+         RefPtr localFrame = dynamicDowncast<LocalFrame>(*frame);
+         if (!localFrame)
+             continue;
 diff --git a/Source/WebCore/page/PointerCaptureController.cpp b/Source/WebCore/page/PointerCaptureController.cpp
 index a066648964..128db5815d 100644
 --- a/Source/WebCore/page/PointerCaptureController.cpp
@@ -2208,6 +5821,73 @@ index a066648964..128db5815d 100644
          if (platformTouchEvent.isPotentialTap())
              return protect(currentTarget->document())->quirks().shouldDispatchPointerOutAndLeaveAfterHandlingSyntheticClick();
  #endif
+diff --git a/Source/WebCore/page/RenderingUpdateScheduler.cpp b/Source/WebCore/page/RenderingUpdateScheduler.cpp
+index 06e9a596c3..bb53499bf2 100644
+--- a/Source/WebCore/page/RenderingUpdateScheduler.cpp
++++ b/Source/WebCore/page/RenderingUpdateScheduler.cpp
+@@ -65,7 +65,7 @@ void RenderingUpdateScheduler::adjustRenderingUpdateFrequency()
+     } else
+         m_useTimer = true;
+ 
+-    if (m_refreshTimer) {
++    if (isTimerActive()) {
+         clearScheduled();
+         scheduleRenderingUpdate();
+     }
+@@ -96,21 +96,28 @@ void RenderingUpdateScheduler::scheduleRenderingUpdate()
+ 
+ bool RenderingUpdateScheduler::isScheduled() const
+ {
+-    return m_refreshTimer || DisplayRefreshMonitorClient::isScheduled();
++    return isTimerActive() || DisplayRefreshMonitorClient::isScheduled();
+ }
+     
+ void RenderingUpdateScheduler::startTimer(Seconds delay)
+ {
+     LOG_WITH_STREAM(EventLoop, stream << "RenderingUpdateScheduler for page " << m_page.ptr() << " startTimer(" << delay << ")");
+ 
+-    ASSERT(!m_refreshTimer);
+-    m_refreshTimer = makeUnique<Timer>(*this, &RenderingUpdateScheduler::displayRefreshFired);
++    ASSERT(!isTimerActive());
++    if (!m_refreshTimer)
++        m_refreshTimer = makeUnique<Timer>(*this, &RenderingUpdateScheduler::displayRefreshFired);
+     m_refreshTimer->startOneShot(delay);
+ }
+ 
+ void RenderingUpdateScheduler::clearScheduled()
+ {
+-    m_refreshTimer = nullptr;
++    if (m_refreshTimer)
++        m_refreshTimer->stop();
++}
++
++bool RenderingUpdateScheduler::isTimerActive() const
++{
++    return m_refreshTimer && m_refreshTimer->isActive();
+ }
+ 
+ DisplayRefreshMonitorFactory* RenderingUpdateScheduler::displayRefreshMonitorFactory() const
+diff --git a/Source/WebCore/page/RenderingUpdateScheduler.h b/Source/WebCore/page/RenderingUpdateScheduler.h
+index 27245cb297..031e28e3b4 100644
+--- a/Source/WebCore/page/RenderingUpdateScheduler.h
++++ b/Source/WebCore/page/RenderingUpdateScheduler.h
+@@ -60,12 +60,16 @@ private:
+     DisplayRefreshMonitorFactory* displayRefreshMonitorFactory() const final;
+ 
+     bool NODELETE isScheduled() const;
++    bool isTimerActive() const;
+     void startTimer(Seconds);
+     void clearScheduled();
+ 
+     void triggerRenderingUpdate();
+ 
+     WeakRef<Page> m_page;
++    // Kept alive between frames: the scheduler arms this once per frame on the
++    // fallback path, and destroying it each time meant an allocation and a free
++    // per frame, plus a fresh ThreadTimerHeapItem for the timer heap.
+     std::unique_ptr<Timer> m_refreshTimer;
+     unsigned m_rescheduledRenderingUpdateCount { 0 };
+     bool m_useTimer { false };
 diff --git a/Source/WebCore/page/UserContentController.cpp b/Source/WebCore/page/UserContentController.cpp
 index c2a2cd7b57..74e72dde6e 100644
 --- a/Source/WebCore/page/UserContentController.cpp

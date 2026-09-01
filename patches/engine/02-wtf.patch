@@ -53,6 +53,25 @@ index 688bafa332..715219d345 100644
 +#endif
 +
  WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+diff --git a/Source/WTF/wtf/Atomics.h b/Source/WTF/wtf/Atomics.h
+index 14a4467d8a..9a64f5ee66 100644
+--- a/Source/WTF/wtf/Atomics.h
++++ b/Source/WTF/wtf/Atomics.h
+@@ -78,6 +78,14 @@ struct Atomic {
+     ALWAYS_INLINE bool compareExchangeWeak(T expected, T desired, std::memory_order order = std::memory_order_seq_cst)
+     {
+         T expectedOrActual = expected;
++#if defined(WEBKIT_IOS6)
++        // A weak CAS that fails tells the caller nothing except "retry", and every caller
++        // in this tree either loops with a relaxed load or falls into a slow path that
++        // re-reads with its own ordering. Asking for an acquire failure order makes clang
++        // emit a dmb ish on the failure edge, which on Cortex-A9 costs more than the CAS.
++        if (order == std::memory_order_acquire || order == std::memory_order_acq_rel)
++            return value.compare_exchange_weak(expectedOrActual, desired, order, std::memory_order_relaxed);
++#endif
+         return value.compare_exchange_weak(expectedOrActual, desired, order);
+     }
+ 
 diff --git a/Source/WTF/wtf/AvailableMemory.cpp b/Source/WTF/wtf/AvailableMemory.cpp
 index dda9eac9d4..d335da710b 100644
 --- a/Source/WTF/wtf/AvailableMemory.cpp
@@ -74,6 +93,609 @@ index dda9eac9d4..d335da710b 100644
 +#elif PLATFORM(IOS_FAMILY)
      task_vm_info_data_t vmInfo;
      mach_msg_type_number_t vmSize = TASK_VM_INFO_COUNT;
+ 
+diff --git a/Source/WTF/wtf/FastMalloc.cpp b/Source/WTF/wtf/FastMalloc.cpp
+index 7dea132dd7..29e64a226a 100644
+--- a/Source/WTF/wtf/FastMalloc.cpp
++++ b/Source/WTF/wtf/FastMalloc.cpp
+@@ -330,6 +330,48 @@ bool isFastMallocEnabled()
+     return bmalloc::api::isEnabled();
+ }
+ 
++#if defined(WEBKIT_IOS6) && USE(SYSTEM_MALLOC) && !ENABLE(MALLOC_HEAP_BREAKDOWN)
++
++void* fastMalloc(size_t size)
++{
++    ASSERT_IS_WITHIN_LIMIT(size);
++    return systemMallocOrCrash(size);
++}
++
++void* fastZeroedMalloc(size_t size)
++{
++    ASSERT_IS_WITHIN_LIMIT(size);
++    return systemZeroedMallocOrCrash(size);
++}
++
++TryMallocReturnValue tryFastZeroedMalloc(size_t size)
++{
++    FAIL_IF_EXCEEDS_LIMIT(size);
++    return ::calloc(1, size);
++}
++
++void* fastCalloc(size_t numElements, size_t elementSize)
++{
++    ASSERT_IS_WITHIN_LIMIT(numElements * elementSize);
++    void* result = ::calloc(numElements, elementSize);
++    if (!result) [[unlikely]]
++        CRASH();
++    return result;
++}
++
++void* fastRealloc(void* object, size_t size)
++{
++    ASSERT_IS_WITHIN_LIMIT(size);
++    return systemReallocOrCrash(object, size);
++}
++
++void fastFree(void* object)
++{
++    ::free(object);
++}
++
++#else
++
+ void* fastMalloc(size_t size)
+ {
+     ASSERT_IS_WITHIN_LIMIT(size);
+@@ -399,6 +441,8 @@ void fastFree(void* object)
+ #endif
+ }
+ 
++#endif // defined(WEBKIT_IOS6) && USE(SYSTEM_MALLOC) && !ENABLE(MALLOC_HEAP_BREAKDOWN)
++
+ size_t fastMallocSize(const void* p)
+ {
+ #if BENABLE(MALLOC_SIZE)
+@@ -447,6 +491,94 @@ void* tryFastAlignedMalloc(size_t alignment, size_t size)
+     return result;
+ }
+ 
++#if defined(WEBKIT_IOS6) && USE(SYSTEM_MALLOC) && !ENABLE(MALLOC_HEAP_BREAKDOWN)
++
++TryMallocReturnValue tryFastMalloc(size_t size)
++{
++    FAIL_IF_EXCEEDS_LIMIT(size);
++    return ::malloc(size);
++}
++
++TryMallocReturnValue tryFastCalloc(size_t numElements, size_t elementSize)
++{
++    FAIL_IF_EXCEEDS_LIMIT(numElements * elementSize);
++    return ::calloc(numElements, elementSize);
++}
++
++TryMallocReturnValue tryFastRealloc(void* object, size_t newSize)
++{
++    FAIL_IF_EXCEEDS_LIMIT(newSize);
++    return ::realloc(object, newSize);
++}
++
++void* fastCompactMalloc(size_t size)
++{
++    ASSERT_IS_WITHIN_LIMIT(size);
++    return systemMallocOrCrash(size);
++}
++
++void* fastCompactZeroedMalloc(size_t size)
++{
++    ASSERT_IS_WITHIN_LIMIT(size);
++    return systemZeroedMallocOrCrash(size);
++}
++
++TryMallocReturnValue tryFastCompactZeroedMalloc(size_t size)
++{
++    FAIL_IF_EXCEEDS_LIMIT(size);
++    return ::calloc(1, size);
++}
++
++void* fastCompactCalloc(size_t numElements, size_t elementSize)
++{
++    ASSERT_IS_WITHIN_LIMIT(numElements * elementSize);
++    void* result = ::calloc(numElements, elementSize);
++    if (!result) [[unlikely]]
++        CRASH();
++    return result;
++}
++
++void* fastCompactRealloc(void* object, size_t size)
++{
++    ASSERT_IS_WITHIN_LIMIT(size);
++    return systemReallocOrCrash(object, size);
++}
++
++TryMallocReturnValue tryFastCompactMalloc(size_t size)
++{
++    FAIL_IF_EXCEEDS_LIMIT(size);
++    return ::malloc(size);
++}
++
++void* fastCompactAlignedMalloc(size_t alignment, size_t size)
++{
++    ASSERT_IS_WITHIN_LIMIT(size);
++    void* result = bmalloc_aligned_alloc_compat(alignment, size);
++    if (!result) [[unlikely]]
++        CRASH();
++    return result;
++}
++
++void* tryFastCompactAlignedMalloc(size_t alignment, size_t size)
++{
++    FAIL_IF_EXCEEDS_LIMIT(size);
++    return bmalloc_aligned_alloc_compat(alignment, size);
++}
++
++TryMallocReturnValue tryFastCompactCalloc(size_t numElements, size_t elementSize)
++{
++    FAIL_IF_EXCEEDS_LIMIT(numElements * elementSize);
++    return ::calloc(numElements, elementSize);
++}
++
++TryMallocReturnValue tryFastCompactRealloc(void* object, size_t newSize)
++{
++    FAIL_IF_EXCEEDS_LIMIT(newSize);
++    return ::realloc(object, newSize);
++}
++
++#else
++
+ TryMallocReturnValue tryFastMalloc(size_t size)
+ {
+     FAIL_IF_EXCEEDS_LIMIT(size);
+@@ -587,6 +719,8 @@ TryMallocReturnValue tryFastCompactRealloc(void* object, size_t newSize)
+     return result;
+ }
+ 
++#endif // defined(WEBKIT_IOS6) && USE(SYSTEM_MALLOC) && !ENABLE(MALLOC_HEAP_BREAKDOWN)
++
+ void releaseFastMallocFreeMemoryForThisThread()
+ {
+     bmalloc::api::scavengeThisThread();
+diff --git a/Source/WTF/wtf/FastMalloc.h b/Source/WTF/wtf/FastMalloc.h
+index 3b444e02ad..bd6cf1d42a 100644
+--- a/Source/WTF/wtf/FastMalloc.h
++++ b/Source/WTF/wtf/FastMalloc.h
+@@ -231,9 +231,55 @@ template<typename T, typename U> inline bool operator==(const FastAllocator<T>&,
+ 
+ struct FastCompactMalloc;
+ 
++#if defined(WEBKIT_IOS6) && USE(SYSTEM_MALLOC) && !ENABLE(MALLOC_HEAP_BREAKDOWN)
++
++ALWAYS_INLINE void* systemMallocOrCrash(size_t size)
++{
++    void* result = ::malloc(size);
++    if (!result) [[unlikely]]
++        CRASH();
++    return result;
++}
++
++ALWAYS_INLINE void* systemZeroedMallocOrCrash(size_t size)
++{
++    void* result = ::calloc(1, size);
++    if (!result) [[unlikely]]
++        CRASH();
++    return result;
++}
++
++ALWAYS_INLINE void* systemReallocOrCrash(void* p, size_t size)
++{
++    void* result = ::realloc(p, size);
++    if (!result) [[unlikely]]
++        CRASH();
++    return result;
++}
++
++struct FastMalloc {
++    static void* malloc(size_t size) { return systemMallocOrCrash(size); }
++    static void* tryMalloc(size_t size) { return ::malloc(size); }
++    static void* zeroedMalloc(size_t size) { return systemZeroedMallocOrCrash(size); }
++    static void* tryZeroedMalloc(size_t size) { return ::calloc(1, size); }
++    static void* realloc(void* p, size_t size) { return systemReallocOrCrash(p, size); }
++    static void* tryRealloc(void* p, size_t size) { return ::realloc(p, size); }
++    static void free(void* p) { ::free(p); }
++    static void fastFree(void* p) { ::free(p); }
++
++    static constexpr ALWAYS_INLINE size_t nextCapacity(size_t capacity)
++    {
++        return std::max(capacity + capacity / 2, capacity + 1);
++    }
++
++    using CompactMalloc = FastCompactMalloc;
++};
++
++#else
++
+ struct FastMalloc {
+     static void* malloc(size_t size) { return fastMalloc(size); }
+-    
++
+     static void* tryMalloc(size_t size)
+     {
+         auto result = tryFastMalloc(size);
+@@ -264,7 +310,7 @@ struct FastMalloc {
+             return realResult;
+         return nullptr;
+     }
+-    
++
+     static void free(void* p) { fastFree(p); }
+ 
+     static void fastFree(void* p) { ::WTF::fastFree(p); }
+@@ -277,12 +323,34 @@ struct FastMalloc {
+     using CompactMalloc = FastCompactMalloc;
+ };
+ 
++#endif
++
+ struct FastAlignedMalloc {
+     static void* alignedMalloc(size_t alignment, size_t size) { return fastAlignedMalloc(alignment, size); }
+     static void* tryAlignedMalloc(size_t alignment, size_t size) { return tryFastAlignedMalloc(alignment, size); }
+     static void free(void* p) { fastFree(p); }
+ };
+ 
++#if defined(WEBKIT_IOS6) && USE(SYSTEM_MALLOC) && !ENABLE(MALLOC_HEAP_BREAKDOWN)
++
++struct FastCompactMalloc {
++    static void* malloc(size_t size) { return systemMallocOrCrash(size); }
++    static void* tryMalloc(size_t size) { return ::malloc(size); }
++    static void* zeroedMalloc(size_t size) { return systemZeroedMallocOrCrash(size); }
++    static void* tryZeroedMalloc(size_t size) { return ::calloc(1, size); }
++    static void* realloc(void* p, size_t size) { return systemReallocOrCrash(p, size); }
++    static void* tryRealloc(void* p, size_t size) { return ::realloc(p, size); }
++    static void free(void* p) { ::free(p); }
++    static void fastFree(void* p) { ::free(p); }
++
++    static constexpr ALWAYS_INLINE size_t nextCapacity(size_t capacity)
++    {
++        return std::max(capacity + capacity / 2, capacity + 1);
++    }
++};
++
++#else
++
+ struct FastCompactMalloc {
+     static void* malloc(size_t size) { return fastCompactMalloc(size); }
+ 
+@@ -327,6 +395,8 @@ struct FastCompactMalloc {
+     }
+ };
+ 
++#endif
++
+ template<typename T>
+ struct FastFree {
+     static_assert(std::is_trivially_destructible<T>::value);
+@@ -457,6 +527,14 @@ using WTF::tryFastCompactMalloc;
+ using WTF::tryFastCompactZeroedMalloc;
+ using WTF::fastCompactAlignedMalloc;
+ 
++#if defined(WEBKIT_IOS6) && USE(SYSTEM_MALLOC) && !ENABLE(MALLOC_HEAP_BREAKDOWN)
++#define WTF_FAST_ALLOCATED_NEW(size) ::WTF::systemMallocOrCrash(size)
++#define WTF_FAST_ALLOCATED_DELETE(p) ::free(p)
++#else
++#define WTF_FAST_ALLOCATED_NEW(size) ::WTF::fastMalloc(size)
++#define WTF_FAST_ALLOCATED_DELETE(p) ::WTF::fastFree(p)
++#endif
++
+ #define WTF_DEPRECATED_MAKE_FAST_ALLOCATED_IMPL(_type) \
+     static_assert(!WTF::usesTZoneHeap<_type>(), "Decendents of TZONE_ALLOCATED classes must also be TZONE_ALLOCATED"); \
+     \
+@@ -465,22 +543,22 @@ using WTF::fastCompactAlignedMalloc;
+     \
+     void* operator new(size_t size) \
+     { \
+-        return ::WTF::fastMalloc(size); \
++        return WTF_FAST_ALLOCATED_NEW(size); \
+     } \
+     \
+     void operator delete(void* p) \
+     { \
+-        ::WTF::fastFree(p); \
++        WTF_FAST_ALLOCATED_DELETE(p); \
+     } \
+     \
+     void* operator new[](size_t size) \
+     { \
+-        return ::WTF::fastMalloc(size); \
++        return WTF_FAST_ALLOCATED_NEW(size); \
+     } \
+     \
+     void operator delete[](void* p) \
+     { \
+-        ::WTF::fastFree(p); \
++        WTF_FAST_ALLOCATED_DELETE(p); \
+     } \
+     void* operator new(size_t, NotNullTag, void* location) \
+     { \
+@@ -489,7 +567,7 @@ using WTF::fastCompactAlignedMalloc;
+     } \
+     static void freeAfterDestruction(void* p) \
+     { \
+-        ::WTF::fastFree(p); \
++        WTF_FAST_ALLOCATED_DELETE(p); \
+     } \
+     using WTFIsFastMallocAllocated = int; \
+ 
+@@ -502,22 +580,22 @@ using WTF::fastCompactAlignedMalloc;
+     \
+     void* operator new(size_t size) \
+     { \
+-        return ::WTF::fastCompactMalloc(size); \
++        return WTF_FAST_ALLOCATED_NEW(size); \
+     } \
+     \
+     void operator delete(void* p) \
+     { \
+-        ::WTF::fastFree(p); \
++        WTF_FAST_ALLOCATED_DELETE(p); \
+     } \
+     \
+     void* operator new[](size_t size) \
+     { \
+-        return ::WTF::fastCompactMalloc(size); \
++        return WTF_FAST_ALLOCATED_NEW(size); \
+     } \
+     \
+     void operator delete[](void* p) \
+     { \
+-        ::WTF::fastFree(p); \
++        WTF_FAST_ALLOCATED_DELETE(p); \
+     } \
+     void* operator new(size_t, NotNullTag, void* location) \
+     { \
+@@ -526,7 +604,7 @@ using WTF::fastCompactAlignedMalloc;
+     } \
+     static void freeAfterDestruction(void* p) \
+     { \
+-        ::WTF::fastFree(p); \
++        WTF_FAST_ALLOCATED_DELETE(p); \
+     } \
+     using WTFIsFastMallocAllocated = int; \
+ 
+diff --git a/Source/WTF/wtf/HashFunctions.h b/Source/WTF/wtf/HashFunctions.h
+index 8c633ff782..703b9905ea 100644
+--- a/Source/WTF/wtf/HashFunctions.h
++++ b/Source/WTF/wtf/HashFunctions.h
+@@ -30,6 +30,44 @@
+ namespace WTF {
+     // integer hash function
+ 
++#if defined(WEBKIT_IOS6)
++
++    // A 64x64->128 multiply costs four umull plus carry propagation on armv7, and every
++    // pointer and integer key in the engine goes through this function. Two 32-bit
++    // multiplies with the same avalanche quality in the low bits is what the table
++    // actually needs, since the index is taken as `hash & sizeMask`.
++    ALWAYS_INLINE unsigned intHash(uint32_t key)
++    {
++        key ^= key >> 16;
++        key *= 0x7feb352dU;
++        key ^= key >> 15;
++        key *= 0x846ca68bU;
++        key ^= key >> 16;
++        return key;
++    }
++
++    ALWAYS_INLINE unsigned intHash(uint64_t key)
++    {
++        return intHash(static_cast<uint32_t>(key) ^ static_cast<uint32_t>(key >> 32));
++    }
++
++    ALWAYS_INLINE unsigned intHash(uint8_t key8)
++    {
++        return intHash(static_cast<uint32_t>(key8));
++    }
++
++    ALWAYS_INLINE unsigned intHash(uint16_t key16)
++    {
++        return intHash(static_cast<uint32_t>(key16));
++    }
++
++    ALWAYS_INLINE unsigned pairIntHash(unsigned key1, unsigned key2)
++    {
++        return intHash(key1 * 277951225U + key2 * 95187966U);
++    }
++
++#else
++
+     // rapidhash "mum" mixer.
+     // Keep in sync with AssemblyHelpers::rapidHashMix64 and FTL rapidHashMix64 code as we need to use the same hash function.
+     inline unsigned intHash(uint64_t key)
+@@ -68,6 +106,8 @@ namespace WTF {
+         return highBits;
+     }
+ 
++#endif
++
+     template<typename T> struct IntHash {
+         static unsigned hash(T key) { return intHash(static_cast<typename SizedUnsignedTrait<sizeof(T)>::Type>(key)); }
+         static bool equal(T a, T b) { return a == b; }
+diff --git a/Source/WTF/wtf/HashTable.h b/Source/WTF/wtf/HashTable.h
+index 6267a45500..d6b460afef 100644
+--- a/Source/WTF/wtf/HashTable.h
++++ b/Source/WTF/wtf/HashTable.h
+@@ -573,9 +573,32 @@ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(HashTable);
+         void deleteWeakNullEntries();
+ 
+         static constexpr unsigned computeBestTableSize(unsigned keyCount);
+-        bool shouldExpand() const { return HashTableSizePolicy::shouldExpand(keyCount() + deletedCount(), tableSize()); }
++
++        bool shouldExpand() const
++        {
++            ASSERT(m_table);
++            const unsigned* metadata = reinterpret_cast_ptr<const unsigned*>(m_table);
++            unsigned countAndDeleted = metadata[keyCountOffset] + metadata[deletedCountOffset];
++            unsigned size = metadata[tableSizeOffset];
++#if defined(WEBKIT_IOS6)
++            if (size <= maxSmallTableCapacity)
++                return countAndDeleted >= size - (size >> 2);
++            return countAndDeleted >= (size >> 1);
++#else
++            return HashTableSizePolicy::shouldExpand(countAndDeleted, size);
++#endif
++        }
++
+         bool mustRehashInPlace() const { return keyCount() * minLoad < tableSize() * 2; }
+-        bool shouldShrink() const { return keyCount() * minLoad < tableSize() && tableSize() > KeyTraits::minimumTableSize; }
++
++        bool shouldShrink() const
++        {
++            if (!m_table)
++                return false;
++            const unsigned* metadata = reinterpret_cast_ptr<const unsigned*>(m_table);
++            unsigned size = metadata[tableSizeOffset];
++            return metadata[keyCountOffset] * minLoad < size && size > KeyTraits::minimumTableSize;
++        }
+         ValueType* expand(ValueType* entry = nullptr);
+         void shrink() { rehash(tableSize() / 2, nullptr); }
+         void shrinkToBestSize();
+@@ -617,10 +640,12 @@ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(HashTable);
+ 
+         unsigned tableSize() const { return m_table ? reinterpret_cast_ptr<unsigned*>(m_table)[tableSizeOffset] : 0; }
+         void setTableSize(unsigned size) const { ASSERT(m_table); reinterpret_cast_ptr<unsigned*>(m_table)[tableSizeOffset] = size; }
+-        unsigned tableSizeMask() const { ASSERT(m_table); return m_table ? reinterpret_cast_ptr<unsigned*>(m_table)[tableSizeMaskOffset] : 0; }
++        unsigned tableSizeMask() const { ASSERT(m_table); return reinterpret_cast_ptr<unsigned*>(m_table)[tableSizeMaskOffset]; }
+         void setTableSizeMask(unsigned mask) { ASSERT(m_table); reinterpret_cast_ptr<unsigned*>(m_table)[tableSizeMaskOffset] = mask; }
+         unsigned keyCount() const { return m_table ? reinterpret_cast_ptr<unsigned*>(m_table)[keyCountOffset] : 0; }
+         void setKeyCount(unsigned count) const { ASSERT(m_table); reinterpret_cast_ptr<unsigned*>(m_table)[keyCountOffset] = count; }
++        void adjustKeyCount(int delta) const { ASSERT(m_table); reinterpret_cast_ptr<unsigned*>(m_table)[keyCountOffset] += delta; }
++        void adjustDeletedCount(int delta) const { ASSERT(m_table); reinterpret_cast_ptr<unsigned*>(m_table)[deletedCountOffset] += delta; }
+         unsigned deletedCount() const { ASSERT(m_table); return reinterpret_cast_ptr<unsigned*>(m_table)[deletedCountOffset]; }
+         void setDeletedCount(unsigned count) const { ASSERT(m_table); reinterpret_cast_ptr<unsigned*>(m_table)[deletedCountOffset] = count; }
+ 
+@@ -928,12 +953,12 @@ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(HashTable);
+         if (deletedEntry) {
+             initializeBucket(*deletedEntry);
+             entry = deletedEntry;
+-            setDeletedCount(deletedCount() - 1);
++            adjustDeletedCount(-1);
+         }
+ 
+         HashTranslator::translate(*entry, std::forward<T>(key), functor);
+         validateKey<shouldValidateKey>(*entry);
+-        setKeyCount(keyCount() + 1);
++        adjustKeyCount(1);
+         
+         if (shouldExpand())
+             entry = expand(entry);
+@@ -965,12 +990,12 @@ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(HashTable);
+         
+         if (isDeletedBucket(*entry)) {
+             initializeBucket(*entry);
+-            setDeletedCount(deletedCount() - 1);
++            adjustDeletedCount(-1);
+         }
+ 
+         HashTranslator::translate(*entry, std::forward<T>(key), functor, h);
+         validateKey<shouldValidateKey>(*entry);
+-        setKeyCount(keyCount() + 1);
++        adjustKeyCount(1);
+ 
+         if (shouldExpand())
+             entry = expand(entry);
+@@ -1064,8 +1089,8 @@ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(HashTable);
+ #endif
+ 
+         deleteBucket(*pos);
+-        setDeletedCount(deletedCount() + 1);
+-        setKeyCount(keyCount() - 1);
++        adjustDeletedCount(1);
++        adjustKeyCount(-1);
+ 
+         if (shouldShrink())
+             shrink();
+@@ -1152,8 +1177,8 @@ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(HashTable);
+             ++removedBucketCount;
+         }
+         if (removedBucketCount) {
+-            setDeletedCount(deletedCount() + removedBucketCount);
+-            setKeyCount(keyCount() - removedBucketCount);
++            adjustDeletedCount(static_cast<int>(removedBucketCount));
++            adjustKeyCount(-static_cast<int>(removedBucketCount));
+         }
+ 
+         internalCheckTableConsistency();
+@@ -1185,8 +1210,8 @@ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(HashTable);
+             ++removedBucketCount;
+         }
+         if (removedBucketCount) {
+-            setDeletedCount(deletedCount() + removedBucketCount);
+-            setKeyCount(keyCount() - removedBucketCount);
++            adjustDeletedCount(static_cast<int>(removedBucketCount));
++            adjustKeyCount(-static_cast<int>(removedBucketCount));
+         }
+ 
+         if (shouldShrink())
+@@ -1342,7 +1367,7 @@ DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(HashTable);
+             if (isWeakNullBucket(oldEntry)) {
+                 ASSERT(std::addressof(oldEntry) != entry);
+                 oldEntry.~ValueType();
+-                setKeyCount(keyCount() - 1);
++                adjustKeyCount(-1);
+                 continue;
+             }
+ 
+diff --git a/Source/WTF/wtf/LockAlgorithmInlines.h b/Source/WTF/wtf/LockAlgorithmInlines.h
+index 348dd958f5..7bbcf14386 100644
+--- a/Source/WTF/wtf/LockAlgorithmInlines.h
++++ b/Source/WTF/wtf/LockAlgorithmInlines.h
+@@ -94,7 +94,15 @@ void LockAlgorithm<LockType, isHeldBit, hasParkedBit, Hooks>::lockSlow(Atomic<Lo
+     // wasting memory bandwidth, etc.) depending on the details. But since
+     // those factors are harder to frame neatly I'm leaving them to this
+     // appendix.
+-#if CPU(ARM64) && OS(MACOS)
++#if defined(WEBKIT_IOS6)
++    // Two in-order cores at 800 MHz: a sched_yield syscall costs more than the critical
++    // sections this lock protects, and the generic path below yields on every one of its
++    // 40 spins. Poll with the cheap YIELD hint instead and park after a handful of
++    // rounds, since with only two cores the holder is usually descheduled, not running.
++    static constexpr unsigned spinLimit = 16;
++    static constexpr unsigned nopCount = 8;
++    static constexpr unsigned yieldInterval = 8;
++#elif CPU(ARM64) && OS(MACOS)
+     static constexpr unsigned spinLimit = 80;
+     static constexpr unsigned nopCount = 8;
+     static constexpr unsigned yieldInterval = 16;
+@@ -115,8 +123,15 @@ void LockAlgorithm<LockType, isHeldBit, hasParkedBit, Hooks>::lockSlow(Atomic<Lo
+     unsigned spinCount = 0;
+     
+     for (;;) {
++#if defined(WEBKIT_IOS6)
++        // The seq_cst load costs a dmb ish on every trip round the spin loop. Nothing is
++        // decided by this read on its own: the compare-exchange below re-validates it and
++        // carries the acquire.
++        LockType currentValue = lock.load(std::memory_order_relaxed);
++#else
+         LockType currentValue = lock.load();
+-        
++#endif
++
+         // We allow ourselves to barge in.
+         if (!(currentValue & isHeldBit)) {
+             if (lock.compareExchangeWeak(currentValue, Hooks::lockHook(currentValue | isHeldBit)))
+@@ -133,8 +148,13 @@ void LockAlgorithm<LockType, isHeldBit, hasParkedBit, Hooks>::lockSlow(Atomic<Lo
+             // without having depressed our own priority beforehand.
+             if (!(spinCount % yieldInterval))
+                 Thread::yield();
+-            for (unsigned i = 0; i < nopCount; i++)
++            for (unsigned i = 0; i < nopCount; i++) {
++#if defined(WEBKIT_IOS6)
++                __asm__ volatile("yield");
++#else
+                 simde_mm_pause();
++#endif
++            }
+             continue;
+         }
  
 diff --git a/Source/WTF/wtf/MallocCommon.cpp b/Source/WTF/wtf/MallocCommon.cpp
 index d211ae00be..ded2995225 100644
@@ -637,6 +1259,143 @@ index 0c16afbd6f..5048af7c15 100644
 +#undef USE_MEDIAPARSERD
 +#define USE_MEDIAPARSERD 0
 +#endif
+diff --git a/Source/WTF/wtf/Vector.h b/Source/WTF/wtf/Vector.h
+index 6c82548160..e62f67b3b7 100644
+--- a/Source/WTF/wtf/Vector.h
++++ b/Source/WTF/wtf/Vector.h
+@@ -60,14 +60,50 @@ enum class NulloptBehavior : bool { Ignore, Abort };
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
++#if defined(WEBKIT_IOS6)
++
++// Most vector copies in this engine are a handful of bytes. A call into memcpy costs more
++// in prologue and dispatch than the copy itself at those sizes, and unaligned word loads
++// and stores are legal on this core, so copy the short cases inline and word-wise.
++ALWAYS_INLINE void vectorCopyBytes(void* destination, const void* source, size_t bytes)
++{
++    if (bytes >= 32) {
++        memcpy(destination, source, bytes);
++        return;
++    }
++    auto* to = static_cast<uint8_t*>(destination);
++    auto* from = static_cast<const uint8_t*>(source);
++    while (bytes >= 4) {
++        uint32_t word;
++        __builtin_memcpy(&word, from, sizeof(word));
++        __builtin_memcpy(to, &word, sizeof(word));
++        to += 4;
++        from += 4;
++        bytes -= 4;
++    }
++    while (bytes) {
++        *to++ = *from++;
++        --bytes;
++    }
++}
++
++#define WTF_VECTOR_COPY_BYTES(destination, source, bytes) ::WTF::vectorCopyBytes(destination, source, bytes)
++
++#else
++
++#define WTF_VECTOR_COPY_BYTES(destination, source, bytes) memcpy(destination, source, bytes)
++
++#endif
++
+ template<typename T>
+ struct VectorCopier {
+     template<typename U, std::size_t Extent>
+     static void uninitializedCopy(std::span<const U, Extent> src, std::span<T> dst)
+     {
+-        if constexpr (std::is_trivially_copyable_v<T> && std::is_trivially_default_constructible_v<T> && std::same_as<T, U>)
+-            memcpySpan(dst, src);
+-        else {
++        if constexpr (std::is_trivially_copyable_v<T> && std::is_trivially_default_constructible_v<T> && std::same_as<T, U>) {
++            RELEASE_ASSERT(dst.size() >= src.size());
++            WTF_VECTOR_COPY_BYTES(static_cast<void*>(dst.data()), static_cast<const void*>(src.data()), src.size_bytes());
++        } else {
+             for (size_t i = 0; i < src.size(); ++i)
+                 new (NotNull, &dst[i]) T(src[i]);
+         }
+@@ -119,7 +155,7 @@ struct VectorTypeOperations
+     static void move(T* src, T* srcEnd, T* dst)
+     {
+         if constexpr (VectorTraits<T>::canMoveWithMemcpy)
+-            memcpy(static_cast<void*>(dst), static_cast<void*>(const_cast<T*>(src)), reinterpret_cast<const char*>(srcEnd) - reinterpret_cast<const char*>(src));
++            WTF_VECTOR_COPY_BYTES(static_cast<void*>(dst), static_cast<const void*>(src), static_cast<size_t>(reinterpret_cast<const char*>(srcEnd) - reinterpret_cast<const char*>(src)));
+         else {
+             while (src != srcEnd) {
+                 new (NotNull, dst) T(WTF::move(*src));
+@@ -162,9 +198,10 @@ struct VectorTypeOperations
+     template<std::size_t Extent>
+     static void uninitializedCopy(std::span<const T, Extent> src, std::span<T> dst)
+     {
+-        if constexpr (VectorTraits<T>::canCopyWithMemcpy)
+-            memcpySpan(asMutableByteSpan(dst), asByteSpan(src));
+-        else {
++        if constexpr (VectorTraits<T>::canCopyWithMemcpy) {
++            RELEASE_ASSERT(dst.size() >= src.size());
++            WTF_VECTOR_COPY_BYTES(static_cast<void*>(dst.data()), static_cast<const void*>(src.data()), src.size_bytes());
++        } else {
+             for (size_t i = 0; i < src.size(); ++i)
+                 new (NotNull, &dst[i]) T(src[i]);
+         }
+@@ -173,9 +210,10 @@ struct VectorTypeOperations
+     template<typename U, std::size_t Extent>
+     static void uninitializedMove(std::span<U, Extent> source, std::span<T> destination)
+     {
+-        if constexpr (std::same_as<T, U> && std::is_trivially_copyable_v<T>)
+-            memcpySpan(destination, source);
+-        else {
++        if constexpr (std::same_as<T, U> && std::is_trivially_copyable_v<T>) {
++            RELEASE_ASSERT(destination.size() >= source.size());
++            WTF_VECTOR_COPY_BYTES(static_cast<void*>(destination.data()), static_cast<const void*>(source.data()), source.size_bytes());
++        } else {
+             for (size_t i = 0; i < source.size(); ++i)
+                 new (NotNull, std::addressof(destination[i])) T(WTF::move(source[i]));
+         }
+@@ -238,7 +276,9 @@ public:
+             if (!newBuffer) [[unlikely]]
+                 return false;
+         }
+-        m_capacity = sizeToAllocate / sizeof(T);
++        // isValidCapacityForVector<T>() has already bounded newCapacity, so the product is
++        // exact and dividing it back out is the identity.
++        m_capacity = newCapacity;
+         m_buffer = newBuffer;
+         return true;
+     }
+@@ -257,7 +297,7 @@ public:
+         if (newCapacity > std::numeric_limits<size_t>::max() / sizeof(T))
+             CRASH();
+         size_t sizeToAllocate = newCapacity * sizeof(T);
+-        m_capacity = sizeToAllocate / sizeof(T);
++        m_capacity = newCapacity;
+         m_buffer = static_cast<T*>(Malloc::realloc(m_buffer, sizeToAllocate));
+     }
+ 
+@@ -1399,6 +1439,21 @@ bool Vector<T, inlineCapacity, OverflowHandler, minCapacity, Malloc>::reserveCap
+     static_assert(action == FailureAction::Crash || action == FailureAction::Report);
+     if (newCapacity <= capacity())
+         return true;
++
++#if defined(WEBKIT_IOS6)
++    // Growing a memcpy-movable buffer through realloc lets the system allocator extend
++    // the block in place, or move the pages instead of copying them, and it saves the
++    // separate malloc / copy / free round trip that the generic path always pays.
++    if constexpr (action == FailureAction::Crash) {
++        if (Base::shouldReallocateBuffer(newCapacity) && isValidCapacityForVector<T>(newCapacity)) {
++            asanSetBufferSizeToFullCapacity();
++            Base::reallocateBuffer(newCapacity);
++            asanSetInitialBufferSizeTo(size());
++            return true;
++        }
++    }
++#endif
++
+     T* oldBuffer = begin();
+     T* oldEnd = end();
+ 
 diff --git a/Source/WTF/wtf/cf/RunLoopCF.cpp b/Source/WTF/wtf/cf/RunLoopCF.cpp
 index c4488bac66..68433c05bf 100644
 --- a/Source/WTF/wtf/cf/RunLoopCF.cpp
@@ -1053,3 +1812,189 @@ index ca44751e7d..70b4dceddc 100644
  #else // OS(DARWIN)
  #define MAP_EXECUTABLE_FOR_JIT 0
  #define MAP_EXECUTABLE_FOR_JIT_WITH_JIT_CAGE 0
+diff --git a/Source/WTF/wtf/text/StringImpl.cpp b/Source/WTF/wtf/text/StringImpl.cpp
+index a56e837fc6..93ab527f03 100644
+--- a/Source/WTF/wtf/text/StringImpl.cpp
++++ b/Source/WTF/wtf/text/StringImpl.cpp
+@@ -752,7 +752,30 @@ template<StringImpl::CaseConvertType type, typename CharacterType>
+ ALWAYS_INLINE Ref<StringImpl> StringImpl::convertASCIICase(StringImpl& impl, std::span<const CharacterType> data)
+ {
+     size_t failingIndex;
+-    for (size_t i = 0; i < data.size(); ++i) {
++    size_t scanStart = 0;
++
++#if defined(WEBKIT_IOS6)
++    // Scan four Latin-1 units per word instead of one. For bytes below 0x80 neither the
++    // add nor the subtract below can carry or borrow across a byte lane, so
++    // (b + 0x80 - low) & (high + 0x80 - b) & 0x80 is exactly "low <= b <= high" per lane.
++    // Words holding a byte at or above 0x80 fall back to the per-character test.
++    if constexpr (sizeof(CharacterType) == 1) {
++        constexpr uint32_t lowBias = type == CaseConvertType::Lower ? 0x3f3f3f3fU : 0x1f1f1f1fU;
++        constexpr uint32_t highBias = type == CaseConvertType::Lower ? 0xdadadadaU : 0xfafafafaU;
++        size_t count = data.size();
++        size_t index = 0;
++        for (; index + 4 <= count; index += 4) {
++            uint32_t word = unalignedLoad<uint32_t>(&data[index]);
++            if (word & 0x80808080U)
++                break;
++            if ((word + lowBias) & (highBias - word) & 0x80808080U)
++                break;
++        }
++        scanStart = index;
++    }
++#endif
++
++    for (size_t i = scanStart; i < data.size(); ++i) {
+         CharacterType character = data[i];
+         if constexpr (type == CaseConvertType::Lower) {
+             if (isASCIIUpper(character)) [[unlikely]] {
+diff --git a/Source/WTF/wtf/text/StringImpl.h b/Source/WTF/wtf/text/StringImpl.h
+index 35732c8b2d..1d8aa42f94 100644
+--- a/Source/WTF/wtf/text/StringImpl.h
++++ b/Source/WTF/wtf/text/StringImpl.h
+@@ -429,7 +429,29 @@ public:
+     {
+         static_assert(sizeof(char16_t) == sizeof(uint16_t));
+         static_assert(sizeof(Latin1Character) == sizeof(uint8_t));
++#if defined(WEBKIT_IOS6)
++        // The generic upconvert is a byte-at-a-time loop on everything but arm64. For the
++        // short copies that dominate here, a word load and two word stores move four
++        // characters per round; longer runs stay on the generic loop, which the compiler
++        // can turn into NEON widening moves.
++        RELEASE_ASSERT(destination.size() >= source.size());
++        size_t count = source.size();
++        if (count >= 32)
++            return copyElements(spanReinterpretCast<uint16_t>(destination), source);
++        size_t index = 0;
++        for (; index + 4 <= count; index += 4) {
++            uint32_t bytes = unalignedLoad<uint32_t>(&source[index]);
++            uint32_t low = (bytes & 0x000000ffU) | ((bytes & 0x0000ff00U) << 8);
++            uint32_t high = ((bytes >> 16) & 0x000000ffU) | ((bytes & 0xff000000U) >> 8);
++            unalignedStore<uint32_t>(&destination[index], low);
++            unalignedStore<uint32_t>(&destination[index + 2], high);
++        }
++        for (; index < count; ++index)
++            destination[index] = source[index];
++        return;
++#else
+         return copyElements(spanReinterpretCast<uint16_t>(destination), source);
++#endif
+     }
+ 
+     ALWAYS_INLINE static void copyCharacters(std::span<Latin1Character> destination, std::span<const char16_t> source)
+@@ -440,7 +462,25 @@ public:
+         for (auto character : source)
+             ASSERT(isLatin1(character));
+ #endif
++#if defined(WEBKIT_IOS6)
++        RELEASE_ASSERT(destination.size() >= source.size());
++        size_t count = source.size();
++        if (count >= 32)
++            return copyElements(destination, spanReinterpretCast<const uint16_t>(source));
++        size_t index = 0;
++        for (; index + 4 <= count; index += 4) {
++            uint32_t first = unalignedLoad<uint32_t>(&source[index]);
++            uint32_t second = unalignedLoad<uint32_t>(&source[index + 2]);
++            uint32_t packed = (first & 0x000000ffU) | ((first >> 8) & 0x0000ff00U)
++                | ((second & 0x000000ffU) << 16) | ((second >> 16) << 24);
++            unalignedStore<uint32_t>(&destination[index], packed);
++        }
++        for (; index < count; ++index)
++            destination[index] = static_cast<Latin1Character>(source[index]);
++        return;
++#else
+         return copyElements(destination, spanReinterpretCast<const uint16_t>(source));
++#endif
+     }
+ 
+     // Some string features, like reference counting and the atomicity flag, are not
+@@ -801,7 +841,33 @@ inline std::strong_ordering codePointCompare(std::span<const CharacterType1> cha
+     auto* characters2Ptr = characters2.data();
+     size_t position = 0;
+ 
+-#if CPU(REGISTER64) && !CPU(NEEDS_ALIGNED_ACCESS) && CPU(LITTLE_ENDIAN)
++#if defined(WEBKIT_IOS6) && CPU(LITTLE_ENDIAN)
++    // armv7 has no 64-bit register but does allow unaligned word loads, so the same
++    // trick works with a 32-bit chunk: four Latin-1 units or two UTF-16 units per
++    // compare instead of one, and the first differing chunk is ordered by reversing
++    // the bytes (Latin-1) or rotating the halves (UTF-16) into big-endian order.
++    if constexpr (sizeof(CharacterType1) == sizeof(CharacterType2) && (sizeof(CharacterType1) == 1 || sizeof(CharacterType1) == 2)) {
++        constexpr size_t stride = sizeof(uint32_t) / sizeof(CharacterType1);
++        for (; position + (stride - 1) < commonLength;) {
++            auto lhs = unalignedLoad<uint32_t>(characters1Ptr);
++            auto rhs = unalignedLoad<uint32_t>(characters2Ptr);
++            if (lhs != rhs) {
++                if constexpr (sizeof(CharacterType1) == 1)
++                    return (flipBytes(lhs) > flipBytes(rhs)) ? std::strong_ordering::greater : std::strong_ordering::less;
++                else {
++                    auto rotate16 = [](uint32_t value) ALWAYS_INLINE_LAMBDA {
++                        return (value << 16) | (value >> 16);
++                    };
++                    return (rotate16(lhs) > rotate16(rhs)) ? std::strong_ordering::greater : std::strong_ordering::less;
++                }
++            }
++
++            characters1Ptr += stride;
++            characters2Ptr += stride;
++            position += stride;
++        }
++    }
++#elif CPU(REGISTER64) && !CPU(NEEDS_ALIGNED_ACCESS) && CPU(LITTLE_ENDIAN)
+     if constexpr (sizeof(CharacterType1) == sizeof(CharacterType2) && (sizeof(CharacterType1) == 1 || sizeof(CharacterType1) == 2)) {
+         using ChunkType = std::conditional_t<sizeof(CharacterType1) == 1, uint32_t, uint64_t>;
+         constexpr size_t stride = sizeof(ChunkType) / sizeof(CharacterType1);
+@@ -1231,7 +1297,14 @@ inline StringImpl::StringImpl(CreateSymbolTag)
+ 
+ template<typename T> inline size_t StringImpl::allocationSize(Checked<size_t> tailElementCount)
+ {
++#if defined(WEBKIT_IOS6)
++    // isValidLength<T>() bounds the element count so that this product plus the header
++    // always fits in size_t, and every caller checks it first, so the overflow-checked
++    // multiply and add here can never fire.
++    return tailOffset<T>() + tailElementCount.value() * sizeof(T);
++#else
+     return tailOffset<T>() + tailElementCount * sizeof(T);
++#endif
+ }
+ 
+ template<typename CharacterType>
+diff --git a/Source/WTF/wtf/text/StringView.h b/Source/WTF/wtf/text/StringView.h
+index e518948c3f..151f3848e1 100644
+--- a/Source/WTF/wtf/text/StringView.h
++++ b/Source/WTF/wtf/text/StringView.h
+@@ -466,16 +466,17 @@ inline StringView::StringView(const StringImpl* string LIFETIME_BOUND)
+ 
+ inline StringView::StringView(const String& string LIFETIME_BOUND)
+ {
+-    setUnderlyingString(string.impl());
+-    if (!string.impl()) {
++    SUPPRESS_UNCOUNTED_LOCAL auto* impl = string.impl();
++    setUnderlyingString(impl);
++    if (!impl) {
+         clear();
+         return;
+     }
+-    if (string.is8Bit()) {
+-        initialize(string.span8());
++    if (impl->is8Bit()) {
++        initialize(impl->span8());
+         return;
+     }
+-    initialize(string.span16());
++    initialize(impl->span16());
+ }
+ 
+ inline StringView::StringView(const AtomString& atomString LIFETIME_BOUND)
+diff --git a/Source/WTF/wtf/text/WTFString.h b/Source/WTF/wtf/text/WTFString.h
+index ccd5126dda..5c49d37ba3 100644
+--- a/Source/WTF/wtf/text/WTFString.h
++++ b/Source/WTF/wtf/text/WTFString.h
+@@ -118,7 +118,7 @@ public:
+ 
+     bool is8Bit() const { return !m_impl || m_impl->is8Bit(); }
+ 
+-    unsigned sizeInBytes() const { return m_impl ? m_impl->length() * (is8Bit() ? sizeof(Latin1Character) : sizeof(char16_t)) : 0; }
++    unsigned sizeInBytes() const { return m_impl ? m_impl->length() * (m_impl->is8Bit() ? sizeof(Latin1Character) : sizeof(char16_t)) : 0; }
+ 
+     WTF_EXPORT_PRIVATE CString ascii() const;
+     WTF_EXPORT_PRIVATE CString latin1() const;

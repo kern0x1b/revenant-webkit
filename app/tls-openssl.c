@@ -390,6 +390,7 @@ OSStatus ourSSLHandshake(SSLContextRef context)
     return errSSLClosedAbort;
 }
 
+
 OSStatus ourSSLRead(SSLContextRef context, void *data, size_t length, size_t *processed)
 {
     Session *session = sessionFor(context, false);

@@ -120,6 +120,70 @@ index 8175de8e81..4d3eda8863 100644
      ASSERT(needsLayout());
  
      if (relayoutChildren == RelayoutChildren::No && simplifiedLayout())
+diff --git a/Source/WebCore/rendering/RenderBox.cpp b/Source/WebCore/rendering/RenderBox.cpp
+index 0c5c0cc9ba..41f8283d47 100644
+--- a/Source/WebCore/rendering/RenderBox.cpp
++++ b/Source/WebCore/rendering/RenderBox.cpp
+@@ -1372,7 +1372,11 @@ LayoutSize RenderBox::cachedSizeForOverflowClip() const
+ 
+ bool RenderBox::applyCachedClipAndScrollPosition(RepaintRects& rects, const RenderLayerModelObject* container, VisibleRectContext context) const
+ {
+-    flipForWritingMode(rects);
++    // Every one of the three flips below re-reads the style to ask the same question. Ask once;
++    // for a non-flipped writing mode all three become nothing at all.
++    const bool blockFlipped = writingMode().isBlockFlipped();
++    if (blockFlipped)
++        flipForWritingMode(rects);
+ 
+     if (context.options.contains(VisibleRectContext::Option::ApplyCompositedContainerScrolls) || this != container || !usesCompositedScrolling())
+         rects.moveBy(-scrollPosition()); // For overflow:auto/scroll/hidden.
+@@ -1380,7 +1384,8 @@ bool RenderBox::applyCachedClipAndScrollPosition(RepaintRects& rects, const Rend
+     // Do not clip scroll layer contents to reduce the number of repaints while scrolling.
+     if ((!context.options.contains(VisibleRectContext::Option::ApplyCompositedClips) && usesCompositedScrolling())
+         || (!context.options.contains(VisibleRectContext::Option::ApplyContainerClip) && this == container)) {
+-        flipForWritingMode(rects);
++        if (blockFlipped)
++            flipForWritingMode(rects);
+         return true;
+     }
+ 
+@@ -1412,7 +1417,8 @@ bool RenderBox::applyCachedClipAndScrollPosition(RepaintRects& rects, const Rend
+     else
+         intersects = rects.intersect(clipRect);
+ 
+-    flipForWritingMode(rects);
++    if (blockFlipped)
++        flipForWritingMode(rects);
+     return intersects;
+ }
+ 
+@@ -2690,8 +2696,12 @@ auto RenderBox::computeVisibleRectsInContainer(const RepaintRects& rects, const
+     // physical when we hit a repaint container boundary. Therefore the final rect returned is always in the
+     // physical coordinate space of the container.
+     const Style::ComputedStyle& styleToUse = style();
+-    // Paint offset cache is only valid for root-relative, non-fixed position repainting
+-    if (view().frameView().layoutContext().isPaintOffsetCacheEnabled() && !container && styleToUse.position() != PositionType::Fixed && !context.options.contains(VisibleRectContext::Option::UseEdgeInclusiveIntersection))
++    // Paint offset cache is only valid for root-relative, non-fixed position repainting.
++    // Reaching the layout context is three dependent loads and a call; the three tests that can
++    // rule the fast path out are already in registers, so they go first. This runs once per
++    // ancestor on every visible-rect walk.
++    if (!container && styleToUse.position() != PositionType::Fixed && !context.options.contains(VisibleRectContext::Option::UseEdgeInclusiveIntersection)
++        && view().frameView().layoutContext().isPaintOffsetCacheEnabled())
+         return computeVisibleRectsUsingPaintOffset(rects);
+ 
+     auto adjustedRects = rects;
+@@ -2723,8 +2733,9 @@ auto RenderBox::computeVisibleRectsInContainer(const RepaintRects& rects, const
+     auto locationOffset = this->locationOffset();
+ 
+     // FIXME: This is needed as long as RenderWidget snaps to integral size/position.
+-    // is<RenderReplaced>() is a fast bit check, is<RenderWidget>() is a virtual function call.
+-    if (is<RenderReplaced>(this) && is<RenderWidget>(this)) {
++    // isRenderWidget() is a bit check that already includes the replaced test the comment here
++    // used to guard with, so asking twice buys nothing.
++    if (isRenderWidget()) {
+         LayoutSize flooredLocationOffset = flooredIntSize(locationOffset);
+         adjustedRects.expand(locationOffset - flooredLocationOffset);
+         locationOffset = flooredLocationOffset;
 diff --git a/Source/WebCore/rendering/RenderElement.cpp b/Source/WebCore/rendering/RenderElement.cpp
 index 0ebe778d06..c73ccb039a 100644
 --- a/Source/WebCore/rendering/RenderElement.cpp
@@ -138,6 +202,86 @@ index 0ebe778d06..c73ccb039a 100644
      // FIXME: Should change RenderView so it can use initializeStyle too.
      // If we do that, we can assert m_hasInitializedStyle unconditionally,
      // and remove the check of m_hasInitializedStyle below too.
+diff --git a/Source/WebCore/rendering/RenderGeometryMap.cpp b/Source/WebCore/rendering/RenderGeometryMap.cpp
+index 3243d8e685..bd27bb8137 100644
+--- a/Source/WebCore/rendering/RenderGeometryMap.cpp
++++ b/Source/WebCore/rendering/RenderGeometryMap.cpp
+@@ -103,7 +103,7 @@ FloatPoint RenderGeometryMap::mapToContainer(const FloatPoint& p, const RenderLa
+     FloatPoint rendererMappedResult = m_mapping.last().m_renderer->localToAbsolute(p, m_mapCoordinatesFlags);
+ #endif
+ 
+-    if (!hasFixedPositionStep() && !hasTransformStep() && !hasNonUniformStep() && (!container || (m_mapping.size() && container == m_mapping[0].m_renderer))) {
++    if (canMapWithOffsetOnly(container)) {
+         result = p;
+         result.move(m_accumulatedOffset);
+         ASSERT(m_accumulatedOffsetMightBeSaturated || areEssentiallyEqual(rendererMappedResult, result));
+@@ -121,7 +121,7 @@ FloatQuad RenderGeometryMap::mapToContainer(const FloatRect& rect, const RenderL
+ {
+     FloatQuad result;
+     
+-    if (!hasFixedPositionStep() && !hasTransformStep() && !hasNonUniformStep() && (!container || (m_mapping.size() && container == m_mapping[0].m_renderer))) {
++    if (canMapWithOffsetOnly(container)) {
+         result = rect;
+         result.move(m_accumulatedOffset);
+     } else {
+@@ -148,17 +148,15 @@ void RenderGeometryMap::pushMappingsToAncestor(const RenderElement* rendererArg,
+ static bool NODELETE canMapBetweenRenderersViaLayers(const RenderLayerModelObject& renderer, const RenderLayerModelObject& ancestor)
+ {
+     for (const RenderElement* current = &renderer; ; current = current->parent()) {
+-        const Style::ComputedStyle& style = current->style();
+-        if (current->isFixedPositioned() || style.writingMode().isBlockFlipped())
++        // The bitfield tests all read one word of the RenderObject we have just touched;
++        // reaching into the style is a second cache line, so it goes last.
++        if (current->isFixedPositioned()
++            || current->hasTransformOrPerspective()
++            || current->isRenderFragmentedFlow()
++            || current->isLegacyRenderSVGRoot())
+             return false;
+ 
+-        if (current->hasTransformOrPerspective())
+-            return false;
+-        
+-        if (current->isRenderFragmentedFlow())
+-            return false;
+-
+-        if (current->isLegacyRenderSVGRoot())
++        if (current->style().writingMode().isBlockFlipped())
+             return false;
+ 
+         if (current == &ancestor)
+diff --git a/Source/WebCore/rendering/RenderGeometryMap.h b/Source/WebCore/rendering/RenderGeometryMap.h
+index c7734b830e..48498d3eb9 100644
+--- a/Source/WebCore/rendering/RenderGeometryMap.h
++++ b/Source/WebCore/rendering/RenderGeometryMap.h
+@@ -81,6 +81,14 @@ public:
+ 
+     FloatRect absoluteRect(const FloatRect& rect) const
+     {
++        // Going through mapToContainer() here would build a four-point quad out of an
++        // axis-aligned rect and then take its bounding box again. Callers of this are in
++        // the compositing walk, where the mapping is a plain offset almost every time.
++        if (canMapWithOffsetOnly(nullptr)) {
++            FloatRect result = rect;
++            result.move(m_accumulatedOffset);
++            return result;
++        }
+         return mapToContainer(rect, nullptr).boundingBox();
+     }
+ 
+@@ -117,6 +125,13 @@ private:
+     bool hasTransformStep() const { return m_transformedStepsCount; }
+     bool hasFixedPositionStep() const { return m_fixedStepsCount; }
+ 
++    bool canMapWithOffsetOnly(const RenderLayerModelObject* container) const
++    {
++        if (m_nonUniformStepsCount | m_transformedStepsCount | m_fixedStepsCount)
++            return false;
++        return !container || (m_mapping.size() && container == m_mapping[0].m_renderer);
++    }
++
+     typedef Vector<RenderGeometryMapStep, 32> RenderGeometryMapSteps;
+ 
+     size_t m_insertionPosition { notFound };
 diff --git a/Source/WebCore/rendering/RenderGrid.cpp b/Source/WebCore/rendering/RenderGrid.cpp
 index fdd748a27c..7f8ec62110 100644
 --- a/Source/WebCore/rendering/RenderGrid.cpp
@@ -204,6 +348,139 @@ index fdd748a27c..7f8ec62110 100644
          }();
          // Checking the logical-height of a grid item isn't enough. Setting an override logical-height
          // changes the definiteness, resulting in percentages to resolve differently.
+diff --git a/Source/WebCore/rendering/RenderLayer.cpp b/Source/WebCore/rendering/RenderLayer.cpp
+index a68147ea21..61a22232ef 100644
+--- a/Source/WebCore/rendering/RenderLayer.cpp
++++ b/Source/WebCore/rendering/RenderLayer.cpp
+@@ -2577,6 +2577,10 @@ RenderLayer* RenderLayer::clippingRootForPainting() const
+     if (paintsIntoProvidedBacking())
+         return backingProviderLayer();
+ 
++    // The setting cannot change while we walk, and reaching it is renderer -> document -> settings
++    // on every step of every walk. calculateLayerBounds() does one of these walks per layer.
++    const bool backfaceVisibilityInteroperability = renderer().settings().css3DTransformBackfaceVisibilityInteroperabilityEnabled();
++
+     const RenderLayer* current = this;
+     while (current) {
+         if (current->isRenderViewLayer())
+@@ -2587,7 +2591,7 @@ RenderLayer* RenderLayer::clippingRootForPainting() const
+         if (current->transform() || compositedWithOwnBackingStore(*current))
+             return const_cast<RenderLayer*>(current);
+ 
+-        if (renderer().settings().css3DTransformBackfaceVisibilityInteroperabilityEnabled() && current->participatesInPreserve3D() && current->renderer().style().backfaceVisibility() == BackfaceVisibility::Hidden)
++        if (backfaceVisibilityInteroperability && current->participatesInPreserve3D() && current->renderer().style().backfaceVisibility() == BackfaceVisibility::Hidden)
+             return const_cast<RenderLayer*>(current);
+ 
+         if (current->paintsIntoProvidedBacking())
+@@ -2805,22 +2809,25 @@ static inline const RenderLayer* accumulateOffsetTowardsAncestor(const RenderLay
+     const auto& renderer = layer->renderer();
+     auto position = renderer.style().position();
+ 
+-    // FIXME: Positioning of out-of-flow(fixed, absolute) elements collected in a RenderFragmentedFlow
+-    // may need to be revisited in a future patch.
+-    // If the fixed renderer is inside a RenderFragmentedFlow, we should not compute location using localToAbsolute,
+-    // since localToAbsolute maps the coordinates from named flow to regions coordinates and regions can be
+-    // positioned in a completely different place in the viewport (RenderView).
+-    if (position == PositionType::Fixed && (!ancestorLayer || ancestorLayer == renderer.view().layer())) {
+-        // If the fixed layer's container is the root, just add in the offset of the view. We can obtain this by calling
+-        // localToAbsolute() on the RenderView.
+-        location.moveBy(LayoutPoint(renderer.localToAbsolute({ }, MapCoordinatesMode::IsFixed)));
+-        return ancestorLayer;
+-    }
+-
+-    // For the fixed positioned elements inside a render flow thread, we should also skip the code path below
+-    // Otherwise, for the case of ancestorLayer == rootLayer and fixed positioned element child of a transformed
+-    // element in render flow thread, we will hit the fixed positioned container before hitting the ancestor layer.
++    // Three separate blocks below asked the same question; the answer is no for nearly every
++    // layer, and this runs once per level of every coordinate conversion.
+     if (position == PositionType::Fixed) {
++        // FIXME: Positioning of out-of-flow(fixed, absolute) elements collected in a RenderFragmentedFlow
++        // may need to be revisited in a future patch.
++        // If the fixed renderer is inside a RenderFragmentedFlow, we should not compute location using localToAbsolute,
++        // since localToAbsolute maps the coordinates from named flow to regions coordinates and regions can be
++        // positioned in a completely different place in the viewport (RenderView).
++        if (!ancestorLayer || ancestorLayer == renderer.view().layer()) {
++            // If the fixed layer's container is the root, just add in the offset of the view. We can obtain this by calling
++            // localToAbsolute() on the RenderView.
++            location.moveBy(LayoutPoint(renderer.localToAbsolute({ }, MapCoordinatesMode::IsFixed)));
++            return ancestorLayer;
++        }
++
++        // For the fixed positioned elements inside a render flow thread, we should also skip the code path below
++        // Otherwise, for the case of ancestorLayer == rootLayer and fixed positioned element child of a transformed
++        // element in render flow thread, we will hit the fixed positioned container before hitting the ancestor layer.
++
+         // For a fixed layers, we need to walk up to the root to see if there's a fixed position container
+         // (e.g. a transformed layer). It's an error to call offsetFromAncestor() across a layer with a transform,
+         // so we should always find the ancestor at or before we find the fixed position container, if
+@@ -2850,9 +2857,7 @@ static inline const RenderLayer* accumulateOffsetTowardsAncestor(const RenderLay
+             location.move(fixedContainerCoords - ancestorCoords);
+             return foundAncestor ? ancestorLayer : fixedPositionContainerLayer;
+         }
+-    }
+ 
+-    if (position == PositionType::Fixed) {
+         ASSERT(ancestorLayer);
+         if (ancestorLayer == renderer.view().layer()) {
+             // Add location in flow thread coordinates.
+@@ -5501,21 +5506,8 @@ LayoutRect RenderLayer::localBoundingBox(OptionSet<CalculateLayerBoundsFlag> fla
+     // (3) Floats.  When a layer has overhanging floats that it paints, we need to make sure to include these overhanging floats
+     // as part of our bounding box.  We do this because we are the responsible layer for both hit testing and painting those
+     // floats.
+-    LayoutRect result;
+-    if (CheckedPtr renderInline = dynamicDowncast<RenderInline>(renderer()); renderInline && renderer().isInline())
+-        result = renderInline->linesVisualOverflowBoundingBox();
+-    else if (CheckedPtr modelObject = dynamicDowncast<RenderSVGModelObject>(renderer()))
+-        result = modelObject->visualOverflowRectEquivalent();
+-    else if (CheckedPtr tableRow = dynamicDowncast<RenderTableRow>(renderer())) {
+-        // Our bounding box is just the union of all of our cells' border/overflow rects.
+-        for (RenderTableCell* cell = tableRow->firstCell(); cell; cell = cell->nextCell()) {
+-            LayoutRect bbox = cell->borderBoxRect();
+-            result.unite(bbox);
+-            LayoutRect overflowRect = tableRow->visualOverflowRect();
+-            if (bbox != overflowRect)
+-                result.unite(overflowRect);
+-        }
+-    } else {
++    auto boxBoundingBox = [&] {
++        LayoutRect result;
+         RenderBox* box = renderBox();
+         ASSERT(box);
+         if (!(flags & DontConstrainForMask) && box->hasMask()) {
+@@ -5535,7 +5527,32 @@ LayoutRect RenderLayer::localBoundingBox(OptionSet<CalculateLayerBoundsFlag> fla
+             result.setWidth(std::max(result.width(), frameView->contentsWidth() - result.x()));
+             result.setHeight(std::max(result.height(), frameView->contentsHeight() - result.y()));
+         }
+-    }
++        return result;
++    };
++
++    // Nearly every layer owns a plain box, and a plain box can be none of the three special cases:
++    // RenderTableRow is the only box among them, and neither RenderInline nor RenderSVGModelObject
++    // is one. So one type test here stands in for three.
++    if (renderer().isRenderBox() && !renderer().isRenderTableRow())
++        return boxBoundingBox();
++
++    LayoutRect result;
++    if (CheckedPtr renderInline = dynamicDowncast<RenderInline>(renderer()); renderInline && renderer().isInline())
++        result = renderInline->linesVisualOverflowBoundingBox();
++    else if (CheckedPtr modelObject = dynamicDowncast<RenderSVGModelObject>(renderer()))
++        result = modelObject->visualOverflowRectEquivalent();
++    else if (CheckedPtr tableRow = dynamicDowncast<RenderTableRow>(renderer())) {
++        // Our bounding box is just the union of all of our cells' border/overflow rects.
++        for (RenderTableCell* cell = tableRow->firstCell(); cell; cell = cell->nextCell()) {
++            LayoutRect bbox = cell->borderBoxRect();
++            result.unite(bbox);
++            LayoutRect overflowRect = tableRow->visualOverflowRect();
++            if (bbox != overflowRect)
++                result.unite(overflowRect);
++        }
++    } else
++        result = boxBoundingBox();
++
+     return result;
+ }
+ 
 diff --git a/Source/WebCore/rendering/RenderLayerBacking.cpp b/Source/WebCore/rendering/RenderLayerBacking.cpp
 index 7aeda963c2..de59abc57b 100644
 --- a/Source/WebCore/rendering/RenderLayerBacking.cpp
@@ -255,7 +532,7 @@ index e85fa7aef1..43f5a3caa6 100644
  
      FloatRect backgroundBoxForSimpleContainerPainting() const;
 diff --git a/Source/WebCore/rendering/RenderLayerCompositor.cpp b/Source/WebCore/rendering/RenderLayerCompositor.cpp
-index 155de4b982..82c7071fb4 100644
+index 155de4b982..4696b13b9d 100644
 --- a/Source/WebCore/rendering/RenderLayerCompositor.cpp
 +++ b/Source/WebCore/rendering/RenderLayerCompositor.cpp
 @@ -24,6 +24,7 @@
@@ -266,7 +543,57 @@ index 155de4b982..82c7071fb4 100644
  #include "RenderLayerCompositor.h"
  
  #include "AsyncScrollingCoordinator.h"
-@@ -710,7 +711,15 @@ bool RenderLayerCompositor::updateCompositingPolicy()
+@@ -182,16 +183,19 @@ struct RenderLayerCompositor::CompositingState {
+ 
+     void updateWithDescendantStateAndLayer(const CompositingState& childState, const RenderLayer& layer, const RenderLayer* ancestorLayer, const OverlapExtent& layerExtent, bool isUnchangedSubtree = false)
+     {
++        // Asked five times below, and this runs once per layer of the paint-order tree.
++        const bool layerIsComposited = layer.isComposited();
++
+         // Subsequent layers in the parent stacking context also need to composite.
+-        subtreeIsCompositing |= childState.subtreeIsCompositing | layer.isComposited();
++        subtreeIsCompositing |= childState.subtreeIsCompositing | layerIsComposited;
+         if (!isUnchangedSubtree)
+             fullPaintOrderTraversalRequired |= childState.fullPaintOrderTraversalRequired;
+ 
+         // Turn overlap testing off for later layers if it's already off, or if we have an animating transform.
+         // Note that if the layer clips its descendants, there's no reason to propagate the child animation to the parent layers. That's because
+         // we know for sure the animation is contained inside the clipping rectangle, which is already added to the overlap map.
+-        auto canReenableOverlapTesting = [&layer] {
+-            return layer.isComposited() && RenderLayerCompositor::clipsCompositingDescendants(layer);
++        auto canReenableOverlapTesting = [&layer, layerIsComposited] {
++            return layerIsComposited && RenderLayerCompositor::clipsCompositingDescendants(layer);
+         };
+         if ((!childState.testingOverlap && !canReenableOverlapTesting()) || layerExtent.knownToBeHaveExtentUncertainty())
+             testingOverlap = false;
+@@ -201,7 +205,7 @@ struct RenderLayerCompositor::CompositingState {
+                 return true;
+             if (!ancestorLayer)
+                 return false;
+-            if (!layer.isComposited())
++            if (!layerIsComposited)
+                 return false;
+             if (!layer.renderer().isOutOfFlowPositioned())
+                 return false;
+@@ -212,14 +216,14 @@ struct RenderLayerCompositor::CompositingState {
+ 
+         hasCompositedNonContainedDescendants = computeHasCompositedNonContainedDescendants();
+ 
+-        if ((layer.isComposited() && layer.hasBlendMode()) || (layer.hasNotIsolatedCompositedBlendingDescendants() && !layer.isolatesCompositedBlending()))
++        if ((layerIsComposited && layer.hasBlendMode()) || (layer.hasNotIsolatedCompositedBlendingDescendants() && !layer.isolatesCompositedBlending()))
+             hasNotIsolatedCompositedBlendingDescendants = true;
+ 
+-        if ((layer.isComposited() && layer.hasBackdropFilter()) || (layer.hasBackdropFilterDescendantsWithoutRoot() && !layer.isBackdropRoot()))
++        if ((layerIsComposited && layer.hasBackdropFilter()) || (layer.hasBackdropFilterDescendantsWithoutRoot() && !layer.isBackdropRoot()))
+             hasBackdropFilterDescendantsWithoutRoot = true;
+ 
+ #if HAVE(CORE_MATERIAL)
+-        if (layer.isComposited() && layer.hasAppleVisualEffectRequiringBackdropFilter())
++        if (layerIsComposited && layer.hasAppleVisualEffectRequiringBackdropFilter())
+             hasBackdropFilterDescendantsWithoutRoot = true;
+ #endif
+     }
+@@ -710,7 +714,15 @@ bool RenderLayerCompositor::updateCompositingPolicy()
  
      static auto cachedMemoryPolicy = WTF::MemoryUsagePolicy::Unrestricted;
      bool nowUnderMemoryPressure = isCurrentlyUnderMemoryPressureOrWarning();
@@ -283,7 +610,7 @@ index 155de4b982..82c7071fb4 100644
  
      if (cachedIsUnderMemoryPressureOrWarning != nowUnderMemoryPressure) {
          cachedMemoryPolicy = MemoryPressureHandler::singleton().currentMemoryUsagePolicy();
-@@ -1040,10 +1049,70 @@ static std::optional<ScrollingNodeID> frameHostingNodeForFrame(LocalFrame& frame
+@@ -1040,10 +1052,70 @@ static std::optional<ScrollingNodeID> frameHostingNodeForFrame(LocalFrame& frame
  // Returns true on a successful update.
  bool RenderLayerCompositor::updateCompositingLayers(CompositingUpdateType updateType, RenderLayer* updateRootArg)
  {
@@ -354,7 +681,7 @@ index 155de4b982..82c7071fb4 100644
  #if ENABLE(TREE_DEBUGGING)
      if (compositingLogEnabled())
          showPaintOrderTree(m_renderView.layer());
-@@ -1243,6 +1312,25 @@ bool RenderLayerCompositor::allowBackingStoreDetachingForFixedPosition(RenderLay
+@@ -1243,6 +1315,25 @@ bool RenderLayerCompositor::allowBackingStoreDetachingForFixedPosition(RenderLay
          fixedLayoutRect = frameView->rectForFixedPositionLayout();
  
      bool allowDetaching = !fixedLayoutRect.intersects(absoluteBounds);
@@ -380,7 +707,114 @@ index 155de4b982..82c7071fb4 100644
      LOG_WITH_STREAM(Compositing, stream << "RenderLayerCompositor (layer " << &layer << ") allowsBackingStoreDetaching - absoluteBounds " << absoluteBounds << " layoutViewportRect " << fixedLayoutRect << ", allowDetaching " << allowDetaching);
      return allowDetaching;
  }
-@@ -4125,16 +4213,28 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
+@@ -1279,7 +1370,8 @@ void RenderLayerCompositor::computeCompositingRequirements(RenderLayer* ancestor
+     unsigned treeDepth = 0;
+ #endif
+ 
+-    layer.updateDescendantDependentFlags();
++    // updateLayerListsIfNeeded() starts by calling updateDescendantDependentFlags(); calling it
++    // here as well is one more out-of-line call per layer for nothing.
+     layer.updateLayerListsIfNeeded();
+ 
+     if (!layer.hasDescendantNeedingCompositingRequirementsTraversal()
+@@ -1312,6 +1404,15 @@ void RenderLayerCompositor::computeCompositingRequirements(RenderLayer* ancestor
+ 
+     OverlapExtent layerExtent;
+ 
++    // Asked at up to three points below, and nothing this traversal does to the layer can change
++    // the answer: it reads self-painting, skipped-content and fragmented-flow state only.
++    std::optional<bool> canBeCompositedResult;
++    auto layerCanBeComposited = [&] {
++        if (!canBeCompositedResult)
++            canBeCompositedResult = canBeComposited(layer);
++        return *canBeCompositedResult;
++    };
++
+     // Use the fact that we're composited as a hint to check for an animating transform.
+     // FIXME: Maybe needsToBeComposited() should return a bitmask of reasons, to avoid the need to recompute things.
+     if (willBeComposited && !layer.isRenderViewLayer())
+@@ -1321,7 +1422,7 @@ void RenderLayerCompositor::computeCompositingRequirements(RenderLayer* ancestor
+     overlapMap.geometryMap().pushMappingsToAncestor(&layer, ancestorLayer, respectTransforms);
+ 
+     InlineWeakPtr<RenderLayer> providedBackingLayer;
+-    if (!willBeComposited && compositingState.subtreeIsCompositing && canBeComposited(layer)) {
++    if (!willBeComposited && compositingState.subtreeIsCompositing && layerCanBeComposited()) {
+         if (auto* provider = backingSharingState.backingProviderCandidateForLayer(layer, *this, overlapMap, layerExtent)) {
+             provider->sharingLayers.add(layer);
+             LOG_WITH_STREAM(Compositing, stream << TextStream::Repeat(treeDepth * 2, ' ') << " " << &layer << " can share with " << backingSharingState.backingProviderCandidates());
+@@ -1352,7 +1453,7 @@ void RenderLayerCompositor::computeCompositingRequirements(RenderLayer* ancestor
+         layer.setIndirectCompositingReason(compositingReason);
+ 
+     // Check if the computed indirect reason will force the layer to become composited.
+-    if (!willBeComposited && layer.mustCompositeForIndirectReasons() && canBeComposited(layer)) {
++    if (!willBeComposited && layer.mustCompositeForIndirectReasons() && layerCanBeComposited()) {
+         LOG_WITH_STREAM(Compositing, stream << TextStream::Repeat(treeDepth * 2, ' ') << "layer " << &layer << " compositing for indirect reason " << layer.indirectCompositingReason() << " (was sharing: " << !!providedBackingLayer << ")");
+         willBeComposited = true;
+         providedBackingLayer = nullptr;
+@@ -1495,7 +1596,7 @@ void RenderLayerCompositor::computeCompositingRequirements(RenderLayer* ancestor
+         layer.setNeedsCompositingConfigurationUpdate();
+ 
+     // Now check for reasons to become composited that depend on the state of descendant layers.
+-    if (!willBeComposited && canBeComposited(layer)) {
++    if (!willBeComposited && layerCanBeComposited()) {
+         layer.update3DTransformedDescendantStatus();
+         auto indirectReason = computeIndirectCompositingReason(layer, currentState.subtreeIsCompositing, layer.has3DTransformedDescendant(), !!providedBackingLayer);
+         if (indirectReason != IndirectCompositingReason::None) {
+@@ -1578,7 +1679,8 @@ void RenderLayerCompositor::traverseUnchangedSubtree(RenderLayer* ancestorLayer,
+     unsigned treeDepth = 0;
+ #endif
+ 
+-    layer.updateDescendantDependentFlags();
++    // updateLayerListsIfNeeded() starts by calling updateDescendantDependentFlags(); calling it
++    // here as well is one more out-of-line call per layer for nothing.
+     layer.updateLayerListsIfNeeded();
+ 
+     ASSERT(!compositingState.fullPaintOrderTraversalRequired);
+@@ -1707,7 +1809,8 @@ void RenderLayerCompositor::collectViewTransitionNewContentLayers(RenderLayer& l
+ 
+ void RenderLayerCompositor::updateBackingAndHierarchy(RenderLayer& layer, Vector<Ref<GraphicsLayer>>& childLayersOfEnclosingLayer, UpdateBackingTraversalState& traversalState, ScrollingTreeState& scrollingTreeState, OptionSet<UpdateLevel> updateLevel)
+ {
+-    layer.updateDescendantDependentFlags();
++    // updateLayerListsIfNeeded() starts by calling updateDescendantDependentFlags(); calling it
++    // here as well is one more out-of-line call per layer for nothing.
+     layer.updateLayerListsIfNeeded();
+ 
+     bool layerNeedsUpdate = !updateLevel.isEmpty();
+@@ -2601,10 +2704,8 @@ void RenderLayerCompositor::computeExtent(const LayerOverlapMap& overlapMap, con
+     if (extent.extentComputed)
+         return;
+ 
+-    auto markExtentAsComputed = WTF::makeScopeExit([&]() {
+-        extent.extentComputed = true;
+-    });
+-
++    // Nothing below returns early, so the flag can just be set at the end rather than through a
++    // scope guard, which the compiler has to keep alive across the whole body.
+     LayoutRect layerBounds;
+     if (extent.hasTransformAnimation)
+         extent.animationCausesExtentUncertainty = !layer.getOverlapBoundsIncludingChildrenAccountingForTransformAnimations(layerBounds);
+@@ -2637,6 +2738,8 @@ void RenderLayerCompositor::computeExtent(const LayerOverlapMap& overlapMap, con
+         // rect that covers all the locations that the fixed element could move to.
+         extent.bounds = m_renderView.frameView().fixedScrollableAreaBoundsInflatedForScrolling(extent.bounds);
+     }
++
++    extent.extentComputed = true;
+ }
+ 
+ enum class AncestorTraversal { Continue, Stop };
+@@ -2747,9 +2850,9 @@ void RenderLayerCompositor::addToOverlapMap(LayerOverlapMap& overlapMap, const R
+     if (layer.isRenderViewLayer())
+         return;
+ 
++    // computeClippedOverlapBounds() has already computed the clipping scopes.
+     auto clippedBounds = computeClippedOverlapBounds(overlapMap, layer, extent);
+-
+-    computeClippingScopes(layer, extent);
++    ASSERT(extent.clippingScopesComputed);
+     overlapMap.add(layer, clippedBounds, extent.clippingScopes);
+ }
+ 
+@@ -4125,16 +4228,28 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
  
      auto position = renderer.style().position();
      bool isFixed = renderer.isFixedPositioned();
@@ -410,7 +844,7 @@ index 155de4b982..82c7071fb4 100644
  
      if (isSticky)
          return isAsyncScrollableStickyLayer(layer);
-@@ -4149,10 +4249,17 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
+@@ -4149,10 +4264,17 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
  
      // Don't promote fixed position elements that are descendants of a non-view container, e.g. transformed elements.
      // They will stay fixed wrt the container rather than the enclosing frame.
@@ -428,7 +862,7 @@ index 155de4b982..82c7071fb4 100644
  
      bool paintsContent = layer.isVisuallyNonEmpty() || layer.hasVisibleDescendant();
      if (!paintsContent) {
-@@ -4160,6 +4267,7 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
+@@ -4160,6 +4282,7 @@ bool RenderLayerCompositor::requiresCompositingForPosition(RenderLayerModelObjec
          return false;
      }
  
@@ -436,7 +870,7 @@ index 155de4b982..82c7071fb4 100644
      // Scroll-adjusted boxes can be scrolled into view, so don't check viewport intersection on them.
      if (!layer.anchorScrollAdjustment() && !fixedLayerIntersectsViewport(layer)) {
          queryData.nonCompositedForPositionReason = RenderLayer::NotCompositedForBoundsOutOfView;
-@@ -5469,7 +5577,11 @@ FixedPositionViewportConstraints RenderLayerCompositor::computeFixedViewportCons
+@@ -5469,7 +5592,11 @@ FixedPositionViewportConstraints RenderLayerCompositor::computeFixedViewportCons
  
      FixedPositionViewportConstraints constraints;
      constraints.setLayerPositionAtLastLayout(scrollingNodeLayer->position());
@@ -448,7 +882,7 @@ index 155de4b982..82c7071fb4 100644
      constraints.setAlignmentOffset(scrollingNodeLayer->pixelAlignmentOffset());
  
      const Style::ComputedStyle& style = layer.renderer().style();
-@@ -5517,7 +5629,11 @@ StickyPositionViewportConstraints RenderLayerCompositor::computeStickyViewportCo
+@@ -5517,7 +5644,11 @@ StickyPositionViewportConstraints RenderLayerCompositor::computeStickyViewportCo
      StickyPositionViewportConstraints constraints;
      renderer.computeStickyPositionConstraints(constraints, renderer.constrainingRectForStickyPosition());
  
@@ -477,6 +911,30 @@ index ca7dca0392..f38ebe13f6 100644
  #if PLATFORM(IOS_FAMILY) && ENABLE(WEBKIT_OVERFLOW_SCROLLING_CSS_PROPERTY)
      return isVisible && scrollsOverflow() && renderer.style().overflowScrolling() == Style::WebkitOverflowScrolling::Touch;
  #else
+diff --git a/Source/WebCore/rendering/RenderObject.cpp b/Source/WebCore/rendering/RenderObject.cpp
+index ff0473f215..c6f8fc82f7 100644
+--- a/Source/WebCore/rendering/RenderObject.cpp
++++ b/Source/WebCore/rendering/RenderObject.cpp
+@@ -1669,14 +1669,13 @@ static inline RenderElement* containerForElement(const RenderObject& renderer, c
+     // containingBlock() skips to the non-anonymous containing block.
+     // This does mean that computeOutOfFlowPositionedLogicalWidth and computeOutOfFlowPositionedLogicalHeight have to use container().
+     // FIXME: See https://bugs.webkit.org/show_bug.cgi?id=270977 for RenderLineBreak special treatment.
+-    if (!is<RenderElement>(renderer) || isAnyOf<RenderText, RenderLineBreak>(renderer))
+-        return renderer.parent();
+-
++    // One type test where there were three: RenderText is not a RenderElement, so the null check
++    // covers it, and RenderLineBreak has its own type bit. Every step of every ancestor walk that
++    // maps a rect comes through here.
+     auto* renderElement = dynamicDowncast<RenderElement>(renderer);
+-    if (!renderElement) {
+-        ASSERT_NOT_REACHED();
++    if (!renderElement || renderer.isRenderLineBreak())
+         return renderer.parent();
+-    }
++
+     auto updateRepaintContainerSkippedFlagIfApplicable = [&] {
+         if (!repaintContainerSkipped)
+             return;
 diff --git a/Source/WebCore/rendering/RenderObject.h b/Source/WebCore/rendering/RenderObject.h
 index 5a31631201..bd102e65eb 100644
 --- a/Source/WebCore/rendering/RenderObject.h
@@ -570,6 +1028,291 @@ index 5e79415d04..b78335fdf3 100644
      UIColor *color = wtfObjCMsgSend<UIColor *>(PAL::getUIColorClassSingleton(), systemColorInformation.selector);
      if (!color)
          return std::nullopt;
+diff --git a/Source/WebCore/style/ElementRuleCollector.cpp b/Source/WebCore/style/ElementRuleCollector.cpp
+index 3ed18cf07c..2cfabc224e 100644
+--- a/Source/WebCore/style/ElementRuleCollector.cpp
++++ b/Source/WebCore/style/ElementRuleCollector.cpp
+@@ -103,23 +103,37 @@ struct MatchRequest {
+ 
+ ElementRuleCollector::ElementRuleCollector(const Element& element, const ScopeRuleSets& ruleSets, SelectorMatchingState* selectorMatchingState, SelectorChecker::Mode mode)
+     : m_element(element)
++#if defined(WEBKIT_IOS6)
++    , m_authorStyle(&ruleSets.authorStyle())
++#else
+     , m_authorStyle(ruleSets.authorStyle())
++#endif
+     , m_userStyle(ruleSets.userStyle())
+     , m_userAgentMediaQueryStyle(ruleSets.userAgentMediaQueryStyle())
+     , m_dynamicViewTransitionsStyle(ruleSets.dynamicViewTransitionsStyle())
+     , m_selectorMatchingState(selectorMatchingState)
++#if ENABLE(CSS_SELECTOR_JIT)
++    , m_cssSelectorJITEnabled(element.document().settings().cssSelectorJITCompilerEnabled())
++#endif
++    , m_isForLink(element.isLink())
+     , m_mode(mode)
+-    , m_result(MatchResult::create(element.isLink()))
+ {
+     ASSERT(!m_selectorMatchingState || m_selectorMatchingState->selectorFilter.parentStackIsConsistent(element.parentNode()));
+ }
+ 
+ ElementRuleCollector::ElementRuleCollector(const Element& element, const RuleSet& authorStyle, SelectorMatchingState* selectorMatchingState, SelectorChecker::Mode mode)
+     : m_element(element)
++#if defined(WEBKIT_IOS6)
++    , m_authorStyle(&authorStyle)
++#else
+     , m_authorStyle(authorStyle)
++#endif
+     , m_selectorMatchingState(selectorMatchingState)
++#if ENABLE(CSS_SELECTOR_JIT)
++    , m_cssSelectorJITEnabled(element.document().settings().cssSelectorJITCompilerEnabled())
++#endif
++    , m_isForLink(element.isLink())
+     , m_mode(mode)
+-    , m_result(MatchResult::create(element.isLink()))
+ {
+     ASSERT(!m_selectorMatchingState || m_selectorMatchingState->selectorFilter.parentStackIsConsistent(element.parentNode()));
+ }
+@@ -127,12 +141,13 @@ ElementRuleCollector::ElementRuleCollector(const Element& element, const RuleSet
+ const MatchResult& ElementRuleCollector::matchResult() const
+ {
+     ASSERT(m_mode == SelectorChecker::Mode::ResolvingStyle);
+-    return m_result;
++    return result();
+ }
+ 
+ Ref<MatchResult> ElementRuleCollector::releaseMatchResult()
+ {
+-    return WTF::move(m_result);
++    result();
++    return m_result.releaseNonNull();
+ }
+ 
+ const Vector<Ref<const StyleRule>>& ElementRuleCollector::matchedRuleList() const
+@@ -174,7 +189,7 @@ void ElementRuleCollector::collectMatchingRules(DeclarationOrigin origin)
+ {
+     switch (origin) {
+     case DeclarationOrigin::Author: {
+-        MatchRequest matchRequest(m_authorStyle);
++        MatchRequest matchRequest(authorStyle());
+         collectMatchingRules(matchRequest);
+         if (isFirstMatchModeAndHasMatchedAnyRules())
+             return;
+@@ -228,8 +243,9 @@ void ElementRuleCollector::collectMatchingRules(const MatchRequest& matchRequest
+     if (shadowRoot && shadowRoot->mode() == ShadowRootMode::UserAgent)
+         collectMatchingUserAgentPartRules(matchRequest);
+ 
++    auto& document = element.document();
+     bool isHTMLElement = element.isHTMLElement();
+-    bool isCaseInsensitiveForHTML = isHTMLElement && element.document().isHTMLDocument();
++    bool isCaseInsensitiveForHTML = isHTMLElement && document.isHTMLDocument();
+     auto& ruleSet = matchRequest.ruleSet;
+ 
+     // We need to collect the rules for id, class, tag, and everything else into a buffer and
+@@ -265,10 +281,10 @@ void ElementRuleCollector::collectMatchingRules(const MatchRequest& matchRequest
+     if (matchesFocusVisiblePseudoClass(element))
+         collectMatchingRulesForList(ruleSet.focusVisiblePseudoClassRules(), matchRequest);
+ #if ENABLE(FULLSCREEN_API)
+-    if (auto* fullscreen = element.document().fullscreenIfExists(); fullscreen && fullscreen->isFullscreen())
++    if (auto* fullscreen = document.fullscreenIfExists(); fullscreen && fullscreen->isFullscreen())
+         collectMatchingRulesForList(ruleSet.fullscreenPseudoClassRules(), matchRequest);
+ #endif
+-    if (&element == element.document().documentElement())
++    if (&element == document.documentElement())
+         collectMatchingRulesForList(ruleSet.rootElementRules(), matchRequest);
+     collectMatchingRulesForList(ruleSet.tagRules(element.localName(), isCaseInsensitiveForHTML), matchRequest);
+     collectMatchingRulesForList(ruleSet.universalRules(), matchRequest);
+@@ -287,13 +303,14 @@ void ElementRuleCollector::collectMatchingRules(const MatchRequest& matchRequest
+ 
+ Vector<MatchedProperties>& ElementRuleCollector::declarationsForOrigin(DeclarationOrigin declarationOrigin)
+ {
++    auto& matchResult = result();
+     switch (declarationOrigin) {
+-    case DeclarationOrigin::UserAgent: return m_result->userAgentDeclarations;
+-    case DeclarationOrigin::User: return m_result->userDeclarations;
+-    case DeclarationOrigin::Author: return m_result->authorDeclarations;
++    case DeclarationOrigin::UserAgent: return matchResult.userAgentDeclarations;
++    case DeclarationOrigin::User: return matchResult.userDeclarations;
++    case DeclarationOrigin::Author: return matchResult.authorDeclarations;
+     }
+     ASSERT_NOT_REACHED();
+-    return m_result->authorDeclarations;
++    return matchResult.authorDeclarations;
+ }
+ 
+ void ElementRuleCollector::sortAndTransferMatchedRules(DeclarationOrigin declarationOrigin)
+@@ -582,7 +599,7 @@ inline bool ElementRuleCollector::ruleMatches(const RuleData& ruleData, unsigned
+ 
+ #if ENABLE(CSS_SELECTOR_JIT)
+     auto& compiledSelector = ruleData.compiledSelector();
+-    const bool compilerEnabled = element().document().settings().cssSelectorJITCompilerEnabled();
++    const bool compilerEnabled = m_cssSelectorJITEnabled;
+ 
+     if (compilerEnabled) {
+         if (compiledSelector.status == SelectorCompilationStatus::NotCompiled)
+@@ -641,21 +658,30 @@ inline bool ElementRuleCollector::ruleMatches(const RuleData& ruleData, unsigned
+ 
+ void ElementRuleCollector::collectMatchingRulesForListSlow(const RuleSet::RuleDataVector& rules, const MatchRequest& matchRequest)
+ {
++    // All of these are fixed for the whole list but were re-read through two levels of indirection on
++    // every rule. This loop runs over every rule in every bucket that an element hashes into.
++    const bool hasPseudoElementRequest = !!m_pseudoElementRequest;
++    const auto* selectorFilter = m_selectorMatchingState ? &m_selectorMatchingState->selectorFilter : nullptr;
++    const bool hasContainerQueries = matchRequest.ruleSet.hasContainerQueries();
++    const bool hasScopeRules = matchRequest.ruleSet.hasScopeRules();
++    const bool shouldIncludeEmptyRules = m_shouldIncludeEmptyRules;
++    const bool stopsAtFirstMatch = m_mode == SelectorChecker::Mode::StyleInvalidation;
++
+     for (auto& ruleData : rules) {
+         if (!ruleData.isEnabled()) [[unlikely]]
+             continue;
+ 
+-        if (!ruleData.canMatchPseudoElement() && m_pseudoElementRequest)
++        if (!ruleData.canMatchPseudoElement() && hasPseudoElementRequest)
+             continue;
+ 
+-        if (m_selectorMatchingState && m_selectorMatchingState->selectorFilter.fastRejectSelector(ruleData.descendantSelectorIdentifierHashes()))
++        if (selectorFilter && selectorFilter->fastRejectSelector(ruleData.descendantSelectorIdentifierHashes()))
+             continue;
+ 
+-        if (matchRequest.ruleSet.hasContainerQueries() && !containerQueriesMatch(ruleData, matchRequest))
++        if (hasContainerQueries && !containerQueriesMatch(ruleData, matchRequest))
+             continue;
+ 
+         std::optional<Vector<ScopingRootWithDistance>> scopingRoots;
+-        if (matchRequest.ruleSet.hasScopeRules()) {
++        if (hasScopeRules) {
+             auto [result, roots] = scopeRulesMatch(ruleData, matchRequest);
+             if (!result)
+                 continue;
+@@ -665,7 +691,7 @@ void ElementRuleCollector::collectMatchingRulesForListSlow(const RuleSet::RuleDa
+         auto& rule = ruleData.styleRule();
+ 
+         // If the rule has no properties to apply, then ignore it in the non-debug mode.
+-        if (rule.properties().isEmpty() && !m_shouldIncludeEmptyRules)
++        if (rule.properties().isEmpty() && !shouldIncludeEmptyRules)
+             continue;
+ 
+         auto addRuleIfMatches = [&] (const ScopingRootWithDistance* scopingRootWithDistance = nullptr) {
+@@ -678,14 +704,14 @@ void ElementRuleCollector::collectMatchingRulesForListSlow(const RuleSet::RuleDa
+         if (scopingRoots) {
+             for (auto& scopingRoot : *scopingRoots) {
+                 addRuleIfMatches(&scopingRoot);
+-                if (isFirstMatchModeAndHasMatchedAnyRules())
++                if (stopsAtFirstMatch && !m_matchedRules.isEmpty())
+                     return;
+             }
+             continue;
+         }
+ 
+         addRuleIfMatches();
+-        if (isFirstMatchModeAndHasMatchedAnyRules())
++        if (stopsAtFirstMatch && !m_matchedRules.isEmpty())
+             return;
+     }
+ }
+@@ -887,7 +913,7 @@ std::pair<bool, std::optional<Vector<ElementRuleCollector::ScopingRootWithDistan
+     return { true, WTF::move(scopingRoots) };
+ }
+ 
+-static inline bool NODELETE compareRules(MatchedRule r1, MatchedRule r2)
++static inline bool NODELETE compareRules(const MatchedRule& r1, const MatchedRule& r2)
+ {
+     // For normal properties the earlier scope wins. This may be reversed by !important which is handled when resolving cascade.
+     if (r1.styleScopeOrdinal != r2.styleScopeOrdinal)
+@@ -984,16 +1010,17 @@ void ElementRuleCollector::addMatchedProperties(MatchedProperties&& matchedPrope
+         // It might also be beneficial to overwrite the previous declaration (insteading of appending) if it affects the same exact properties.
+         return;
+     }
++    auto& matchResult = result();
+     if (matchedProperties.isStartingStyle == IsStartingStyle::Yes)
+-        m_result->hasStartingStyle = true;
++        matchResult.hasStartingStyle = true;
+ 
+-    if (matchedProperties.isCacheable == IsCacheable::Partially && !m_result->isCompletelyNonCacheable) {
++    if (matchedProperties.isCacheable == IsCacheable::Partially && !matchResult.isCompletelyNonCacheable) {
+         for (auto property : matchedProperties.properties.get())
+-            m_result->nonCacheablePropertyIds.append(property.id());
++            matchResult.nonCacheablePropertyIds.append(property.id());
+     }
+     if (matchedProperties.isCacheable == IsCacheable::No) {
+-        m_result->isCompletelyNonCacheable = true;
+-        m_result->nonCacheablePropertyIds.clear();
++        matchResult.isCompletelyNonCacheable = true;
++        matchResult.nonCacheablePropertyIds.clear();
+     }
+ 
+     declarations.append(WTF::move(matchedProperties));
+@@ -1001,9 +1028,9 @@ void ElementRuleCollector::addMatchedProperties(MatchedProperties&& matchedPrope
+ 
+ void ElementRuleCollector::addAuthorKeyframeRules(const StyleRuleKeyframe& keyframe)
+ {
+-    ASSERT(m_result->authorDeclarations.isEmpty());
++    ASSERT(result().authorDeclarations.isEmpty());
+     auto propertyAllowlist = m_pseudoElementRequest ? propertyAllowlistForPseudoElement(m_pseudoElementRequest->type()) : PropertyAllowlist::None;
+-    m_result->authorDeclarations.append({ keyframe.properties(), SelectorChecker::MatchAll, propertyAllowlist });
++    result().authorDeclarations.append({ keyframe.properties(), SelectorChecker::MatchAll, propertyAllowlist });
+ }
+ 
+ }
+diff --git a/Source/WebCore/style/ElementRuleCollector.h b/Source/WebCore/style/ElementRuleCollector.h
+index be79fa2df2..d7c78deadf 100644
+--- a/Source/WebCore/style/ElementRuleCollector.h
++++ b/Source/WebCore/style/ElementRuleCollector.h
+@@ -118,25 +118,52 @@ private:
+     void addMatchedProperties(MatchedProperties&&, DeclarationOrigin);
+ 
+     const Element& element() const { return m_element.get(); }
++#if defined(WEBKIT_IOS6)
++    const RuleSet& authorStyle() const { return *m_authorStyle; }
++#else
++    const RuleSet& authorStyle() const { return m_authorStyle.get(); }
++#endif
+ 
+     const Ref<const Element> m_element;
++#if defined(WEBKIT_IOS6)
++    // RuleSet is ThreadSafeRefCounted: holding these as Refs costs eight atomic read-modify-writes
++    // (two of them with a barrier) per element resolved. The rule sets are owned by the resolver,
++    // which outlives every collector.
++    const RuleSet* m_authorStyle;
++    const RuleSet* m_userStyle { nullptr };
++    const RuleSet* m_userAgentMediaQueryStyle { nullptr };
++    const RuleSet* m_dynamicViewTransitionsStyle { nullptr };
++#else
+     Ref<const RuleSet> m_authorStyle;
+     RefPtr<const RuleSet> m_userStyle;
+     RefPtr<const RuleSet> m_userAgentMediaQueryStyle;
+     RefPtr<const RuleSet> m_dynamicViewTransitionsStyle;
++#endif
+     SelectorMatchingState* m_selectorMatchingState;
++#if ENABLE(CSS_SELECTOR_JIT)
++    const bool m_cssSelectorJITEnabled;
++#endif
+ 
+     bool m_shouldIncludeEmptyRules { false };
+     bool m_isPrintStyle { false };
++    const bool m_isForLink { false };
+     std::optional<PseudoElementRequest> m_pseudoElementRequest { };
+     const SelectorChecker::Mode m_mode { SelectorChecker::Mode::ResolvingStyle };
+ 
+     Vector<MatchedRule, 64> m_matchedRules;
+     size_t m_matchedRuleTransferIndex { 0 };
+ 
+-    // Output.
++    // Output. Style invalidation and rule collection never touch the result, so it is only allocated
++    // once something is actually put in it.
++    MatchResult& result() const
++    {
++        if (!m_result)
++            m_result = MatchResult::create(m_isForLink);
++        return *m_result;
++    }
++
+     Vector<Ref<const StyleRule>> m_matchedRuleList;
+-    Ref<MatchResult> m_result;
++    mutable RefPtr<MatchResult> m_result;
+     Relations m_styleRelations;
+     EnumSet<PseudoElementType> m_matchedPseudoElements;
+ };
 diff --git a/Source/WebCore/style/MatchResultCache.cpp b/Source/WebCore/style/MatchResultCache.cpp
 index c04080b1dc..575e435ec1 100644
 --- a/Source/WebCore/style/MatchResultCache.cpp
@@ -672,40 +1415,451 @@ index 95ef0a0596..82a0af34bd 100644
      constexpr size_t maximumSize = 1024;
  #else
      constexpr size_t maximumSize = 16 * 1024;
-diff --git a/Source/WebCore/style/RuleSet.cpp b/Source/WebCore/style/RuleSet.cpp
-index 7d30f4bba2..bb247f4484 100644
---- a/Source/WebCore/style/RuleSet.cpp
-+++ b/Source/WebCore/style/RuleSet.cpp
-@@ -672,6 +672,29 @@ static inline void shrinkMapVectorsToFit(RuleSet::AtomRuleMap& map)
+diff --git a/Source/WebCore/style/RuleData.cpp b/Source/WebCore/style/RuleData.cpp
+index af64e7f1d3..7e6164d2c2 100644
+--- a/Source/WebCore/style/RuleData.cpp
++++ b/Source/WebCore/style/RuleData.cpp
+@@ -87,6 +87,11 @@ static inline MatchBasedOnRuleHash NODELETE computeMatchBasedOnRuleHash(const CS
  
- void RuleSet::shrinkToFit()
+ static inline PropertyAllowlist determinePropertyAllowlist(const CSSSelector& selector)
+ {
++    // The nested selector list scanned below is the one of `selector` itself, so its result does not
++    // depend on `component`. Compute it at most once instead of once per component.
++    bool selectorListScanned = false;
++    auto selectorListAllowlist = PropertyAllowlist::None;
++
+     for (const CSSSelector* component = &selector; component; component = component->precedingInComplexSelector()) {
+         if (component->match() == CSSSelector::Match::PseudoElement) {
+             switch (component->pseudoElement()) {
+@@ -114,13 +119,20 @@ static inline PropertyAllowlist determinePropertyAllowlist(const CSSSelector& se
+             }
+         }
+ 
+-        if (const auto* selectorList = selector.selectorList()) {
+-            for (auto& subSelector : *selectorList) {
+-                auto allowlistType = determinePropertyAllowlist(subSelector);
+-                if (allowlistType != PropertyAllowlist::None)
+-                    return allowlistType;
++        if (!selectorListScanned) {
++            selectorListScanned = true;
++            if (const auto* selectorList = selector.selectorList()) {
++                for (auto& subSelector : *selectorList) {
++                    auto allowlistType = determinePropertyAllowlist(subSelector);
++                    if (allowlistType != PropertyAllowlist::None) {
++                        selectorListAllowlist = allowlistType;
++                        break;
++                    }
++                }
+             }
+         }
++        if (selectorListAllowlist != PropertyAllowlist::None)
++            return selectorListAllowlist;
+     }
+     return PropertyAllowlist::None;
+ }
+@@ -128,16 +140,29 @@ static inline PropertyAllowlist determinePropertyAllowlist(const CSSSelector& se
+ RuleData::RuleData(const StyleRule& styleRule, unsigned selectorIndex, unsigned selectorListIndex, unsigned position, IsStartingStyle isStartingStyle)
+     : m_styleRuleWithSelectorIndex(&styleRule, static_cast<uint16_t>(selectorIndex))
+     , m_selectorListIndex(selectorListIndex)
+-    , m_matchBasedOnRuleHash(std::to_underlying(computeMatchBasedOnRuleHash(selector())))
+-    , m_canMatchPseudoElement(complexSelectorCanMatchPseudoElement(selector()))
+-    , m_propertyAllowlist(std::to_underlying(determinePropertyAllowlist(selector())))
++    , m_matchBasedOnRuleHash(0)
++    , m_canMatchPseudoElement(false)
++    , m_propertyAllowlist(std::to_underlying(PropertyAllowlist::None))
+     , m_isStartingStyle(std::to_underlying(isStartingStyle))
+     , m_isEnabled(true)
+     , m_position(position)
+-    , m_descendantSelectorIdentifierHashes(SelectorFilter::collectHashes(selector()))
+ {
+     ASSERT(m_position == position);
+     ASSERT(this->selectorIndex() == selectorIndex);
++
++    auto& selector = styleRule.selectorList().selectorAt(selectorIndex);
++
++    m_matchBasedOnRuleHash = std::to_underlying(computeMatchBasedOnRuleHash(selector));
++
++    bool canMatchPseudoElement = complexSelectorCanMatchPseudoElement(selector);
++    m_canMatchPseudoElement = canMatchPseudoElement;
++    // determinePropertyAllowlist can only return something other than None when the complex selector
++    // contains a pseudo-element, and it walks a subset of what complexSelectorCanMatchPseudoElement
++    // walks. So for the vast majority of rules the whole walk is known to be pointless.
++    if (canMatchPseudoElement)
++        m_propertyAllowlist = std::to_underlying(determinePropertyAllowlist(selector));
++
++    m_descendantSelectorIdentifierHashes = SelectorFilter::collectHashes(selector);
+ }
+ 
+ } // namespace Style
+diff --git a/Source/WebCore/style/RuleFeature.cpp b/Source/WebCore/style/RuleFeature.cpp
+index e2e9de80a7..db21dd7ea9 100644
+--- a/Source/WebCore/style/RuleFeature.cpp
++++ b/Source/WebCore/style/RuleFeature.cpp
+@@ -350,8 +350,9 @@ void RuleFeatureSet::recursivelyCollectFeaturesFromSelector(SelectorFeatures& se
+         } else if (selector->match() == CSSSelector::Match::Class)
+             selectorFeatures.classes.append({ selector, matchElement, context.isNegation, scopeSourcesForFeature() });
+         else if (selector->isAttributeSelector()) {
+-            attributeLowercaseLocalNamesInRules.add(selector->attribute().localNameLowercase());
+-            attributeLocalNamesInRules.add(selector->attribute().localName());
++            auto& attribute = selector->attribute();
++            attributeLowercaseLocalNamesInRules.add(attribute.localNameLowercase());
++            attributeLocalNamesInRules.add(attribute.localName());
+             selectorFeatures.attributes.append({ selector, matchElement, context.isNegation, scopeSourcesForFeature() });
+         } else if (selector->match() == CSSSelector::Match::PseudoElement) {
+             // Don't put anything here as selectors that differ by pseudo-element only are collected only once.
+@@ -447,8 +448,11 @@ static PseudoClassInvalidationKey makePseudoClassInvalidationKey(CSSSelector::Ps
+         if (simpleSelector->match() == CSSSelector::Match::Tag)
+             tagName = simpleSelector->tagLowercaseLocalName();
+ 
+-        if (simpleSelector->isAttributeSelector() && !unlikelyToHaveSelectorForAttribute(simpleSelector->attribute().localNameLowercase()))
+-            attributeName = simpleSelector->attribute().localNameLowercase();
++        if (simpleSelector->isAttributeSelector()) {
++            auto& lowercaseName = simpleSelector->attribute().localNameLowercase();
++            if (!unlikelyToHaveSelectorForAttribute(lowercaseName))
++                attributeName = lowercaseName;
++        }
+     }
+     if (!attributeName.isEmpty())
+         return makePseudoClassInvalidationKey(pseudoClass, InvalidationKeyType::Attribute, attributeName);
+@@ -464,7 +468,14 @@ static PseudoClassInvalidationKey makePseudoClassInvalidationKey(CSSSelector::Ps
+ 
+ void RuleFeatureSet::collectFeatures(CollectionContext& collectionContext, const RuleData& ruleData, const Vector<Ref<const StyleRuleScope>>& scopeRules)
  {
 +#if defined(WEBKIT_IOS6)
-+    {
-+        size_t singles = 0, total = 0;
-+        auto tally = [&](const AtomRuleMap& map) {
-+            for (auto& entry : map) {
-+                total++;
-+                if (entry.value && entry.value->size() == 1)
-+                    singles++;
-+            }
-+        };
-+        tally(m_idRules);
-+        tally(m_classRules);
-+        tally(m_attributeLocalNameRules);
-+        tally(m_attributeLowercaseLocalNameRules);
-+        tally(m_tagLocalNameRules);
-+        tally(m_tagLowercaseLocalNameRules);
-+        tally(m_userAgentPartRules);
-+        tally(m_namedPseudoElementRules);
-+        if (total > 200)
-+            fprintf(stderr, "[ruleset] keys=%zu singleRuleKeys=%zu classKeys=%u idKeys=%u\n",
-+                total, singles, m_classRules.size(), m_idRules.size());
-+    }
++    // Called once per selector of every rule of every sheet. With the web thread in play isMainThread()
++    // is an exported call that reaches pthread_self() and the web thread lock hook; the callers that
++    // reach here (RuleSetBuilder, invalidation rule sets) are main-thread-only by construction.
++    ASSERT(isMainThread());
++#else
+     RELEASE_ASSERT(isMainThread());
 +#endif
-     shrinkMapVectorsToFit(m_idRules);
-     shrinkMapVectorsToFit(m_classRules);
-     shrinkMapVectorsToFit(m_attributeLocalNameRules);
+ 
+     // Empty rules don't affect style so we never need to invalidate for them.
+     if (ruleData.styleRule().properties().isEmpty())
+@@ -535,7 +546,8 @@ void RuleFeatureSet::collectFeatures(CollectionContext& collectionContext, const
+ 
+     for (auto& entry : selectorFeatures.attributes) {
+         auto& [selector, matchElement, isNegation, scopeSources] = entry;
+-        auto& featureVector = *attributeRules.ensure(selector->attribute().localNameLowercase(), [] {
++        auto& lowercaseName = selector->attribute().localNameLowercase();
++        auto& featureVector = *attributeRules.ensure(lowercaseName, [] {
+             return makeUnique<RuleFeatureVector>();
+         }).iterator->value;
+ 
+@@ -548,14 +560,14 @@ void RuleFeatureSet::collectFeatures(CollectionContext& collectionContext, const
+         });
+ 
+         if (matchElement.relation == MatchElement::Relation::Host)
+-            attributesAffectingHost.add(selector->attribute().localNameLowercase());
++            attributesAffectingHost.add(lowercaseName);
+         setUsesRelation(matchElement.relation);
+     }
+ 
+     for (auto& entry : selectorFeatures.pseudoClasses) {
+         auto& [selector, matchElement, isNegation, scopeSources] = entry;
+         auto& featureVector = *pseudoClassRules.ensure(makePseudoClassInvalidationKey(selector->pseudoClass(), *selector), [] {
+-            return makeUnique<Vector<RuleFeature>>();
++            return makeUnique<RuleFeatureVector>();
+         }).iterator->value;
+ 
+         addToVector(featureVector, RuleFeature {
+@@ -630,10 +642,19 @@ void RuleFeatureSet::add(const RuleFeatureSet& other)
+     }
+ 
+     auto addMap = [&](auto& map, auto& otherMap) {
++        if (otherMap.isEmpty())
++            return;
++        if (map.isEmpty())
++            map.reserveInitialCapacity(otherMap.size());
+         for (auto& keyValuePair : otherMap) {
+-            map.ensure(keyValuePair.key, [] {
++            auto& vector = *map.ensure(keyValuePair.key, [] {
+                 return makeUnique<std::decay_t<decltype(*keyValuePair.value)>>();
+-            }).iterator->value->appendVector(*keyValuePair.value);
++            }).iterator->value;
++            // The merged set is shrunk right after this, and a fresh vector would otherwise round its
++            // capacity up to the growth minimum and then be reallocated to shrink it back down.
++            if (vector.isEmpty())
++                vector.reserveInitialCapacity(keyValuePair.value->size());
++            vector.appendVector(*keyValuePair.value);
+         }
+     };
+ 
+@@ -696,16 +717,23 @@ void RuleFeatureSet::clear()
+ 
+ void RuleFeatureSet::shrinkToFit()
+ {
+-    for (auto& rules : idRules.values())
+-        rules->shrinkToFit();
+-    for (auto& rules : classRules.values())
+-        rules->shrinkToFit();
+-    for (auto& rules : attributeRules.values())
+-        rules->shrinkToFit();
+-    for (auto& rules : pseudoClassRules.values())
+-        rules->shrinkToFit();
+-    for (auto& rules : hasPseudoClassRules.values())
+-        rules->shrinkToFit();
++    auto shrinkAll = [](auto& map) {
++        for (auto& rules : map.values()) {
++#if defined(WEBKIT_IOS6)
++            // Shrinking moves every RuleFeature (two selector lists each) into a fresh allocation.
++            // Doing that for thousands of buckets to reclaim a few entries each is not worth it.
++            if (rules->capacity() - rules->size() < 4)
++                continue;
++#endif
++            rules->shrinkToFit();
++        }
++    };
++
++    shrinkAll(idRules);
++    shrinkAll(classRules);
++    shrinkAll(attributeRules);
++    shrinkAll(pseudoClassRules);
++    shrinkAll(hasPseudoClassRules);
+ }
+ 
+ } // namespace Style
+diff --git a/Source/WebCore/style/RuleFeature.h b/Source/WebCore/style/RuleFeature.h
+index ee8a2bc7de..8446d8eda7 100644
+--- a/Source/WebCore/style/RuleFeature.h
++++ b/Source/WebCore/style/RuleFeature.h
+@@ -111,7 +111,9 @@ static_assert(sizeof(RuleFeature) <= 32, "RuleFeature is a frequently allocated
+ 
+ using PseudoClassInvalidationKey = std::tuple<unsigned, uint8_t, AtomString>;
+ 
+-using RuleFeatureVector = Vector<RuleFeature>;
++// Nearly every key holds one or two features; growing from 4 rather than from the default minimum of
++// 16 keeps the buckets close to their final size, so shrinkToFit() has almost nothing left to copy.
++using RuleFeatureVector = Vector<RuleFeature, 0, WTF::CrashOnOverflow, 4>;
+ 
+ struct SelectorDeduplicationKey {
+     SelectorDeduplicationKey(const CSSSelector&);
+@@ -169,10 +171,12 @@ private:
+     struct SelectorFeatures {
+         using InvalidationFeature = std::tuple<const CSSSelector*, MatchElement, IsNegation, Vector<const CSSSelector*>>;
+ 
+-        Vector<InvalidationFeature> ids;
+-        Vector<InvalidationFeature> classes;
+-        Vector<InvalidationFeature> attributes;
+-        Vector<InvalidationFeature> pseudoClasses;
++        // This is rebuilt for every rule in every sheet. Inline storage keeps the common rule from
++        // hitting the allocator at all; the default heap vector allocates 16 entries on first append.
++        Vector<InvalidationFeature, 2> ids;
++        Vector<InvalidationFeature, 4> classes;
++        Vector<InvalidationFeature, 2> attributes;
++        Vector<InvalidationFeature, 4> pseudoClasses;
+         Vector<InvalidationFeature> hasPseudoClasses;
+     };
+     struct RecursiveCollectionContext;
+diff --git a/Source/WebCore/style/RuleSet.cpp b/Source/WebCore/style/RuleSet.cpp
+index 7d30f4bba2..a2a9177051 100644
+--- a/Source/WebCore/style/RuleSet.cpp
++++ b/Source/WebCore/style/RuleSet.cpp
+@@ -76,11 +76,9 @@ void RuleSet::addToRuleSet(const AtomString& key, AtomRuleMap& map, const RuleDa
+     rules->append(ruleData);
+ }
+ 
+-static unsigned NODELETE rulesCountForName(const RuleSet::AtomRuleMap& map, const AtomString& name)
++static RuleSet::RuleDataVector* NODELETE rulesForName(const RuleSet::AtomRuleMap& map, const AtomString& name)
+ {
+-    if (const auto* rules = map.get(name))
+-        return rules->size();
+-    return 0;
++    return map.get(name);
+ }
+ 
+ // FIXME: Maybe we can unify both following functions
+@@ -186,6 +184,9 @@ void RuleSet::addRule(RuleData&& ruleData, CascadeLayerIdentifier cascadeLayerId
+ void RuleSet::addRuleToBucket(RuleData& ruleData)
+ {
+     unsigned classBucketSize = 0;
++    // Kept so the bucket the class rule lands in is looked up once instead of once for sizing and
++    // once for insertion. The vectors are heap allocated, so this stays valid across map growth.
++    RuleDataVector* classBucket = nullptr;
+     const CSSSelector* idSelector = nullptr;
+     const CSSSelector* tagSelector = nullptr;
+     const CSSSelector* classSelector = nullptr;
+@@ -220,11 +221,14 @@ void RuleSet::addRuleToBucket(RuleData& ruleData)
+                 auto& className = current->value();
+                 if (!classSelector) {
+                     classSelector = current;
+-                    classBucketSize = rulesCountForName(m_classRules, className);
++                    classBucket = rulesForName(m_classRules, className);
++                    classBucketSize = classBucket ? classBucket->size() : 0;
+                 } else if (classBucketSize) {
+-                    unsigned newClassBucketSize = rulesCountForName(m_classRules, className);
++                    auto* newClassBucket = rulesForName(m_classRules, className);
++                    unsigned newClassBucketSize = newClassBucket ? newClassBucket->size() : 0;
+                     if (newClassBucketSize < classBucketSize) {
+                         classSelector = current;
++                        classBucket = newClassBucket;
+                         classBucketSize = newClassBucketSize;
+                     }
+                 }
+@@ -425,13 +429,17 @@ void RuleSet::addRuleToBucket(RuleData& ruleData)
+     }
+ 
+     if (classSelector) {
+-        addToRuleSet(classSelector->value(), m_classRules, ruleData);
++        if (classBucket)
++            classBucket->append(ruleData);
++        else
++            addToRuleSet(classSelector->value(), m_classRules, ruleData);
+         return;
+     }
+ 
+     if (attributeSelector) {
+-        addToRuleSet(attributeSelector->attribute().localName(), m_attributeLocalNameRules, ruleData);
+-        addToRuleSet(attributeSelector->attribute().localNameLowercase(), m_attributeLowercaseLocalNameRules, ruleData);
++        auto& attribute = attributeSelector->attribute();
++        addToRuleSet(attribute.localName(), m_attributeLocalNameRules, ruleData);
++        addToRuleSet(attribute.localNameLowercase(), m_attributeLowercaseLocalNameRules, ruleData);
+         return;
+     }
+ 
+@@ -466,8 +474,9 @@ void RuleSet::addRuleToBucket(RuleData& ruleData)
+     }
+ 
+     if (tagSelector) {
+-        addToRuleSet(tagSelector->tagQName().localName(), m_tagLocalNameRules, ruleData);
+-        addToRuleSet(tagSelector->tagLowercaseLocalName(), m_tagLowercaseLocalNameRules, ruleData);
++        auto& tagQName = tagSelector->tagQName();
++        addToRuleSet(tagQName.localName(), m_tagLocalNameRules, ruleData);
++        addToRuleSet(tagQName.localNameLowercase(), m_tagLowercaseLocalNameRules, ruleData);
+         return;
+     }
+ 
+@@ -664,10 +673,26 @@ RuleSet::CollectedMediaQueryChanges RuleSet::evaluateDynamicMediaQueryRules(cons
+     return collectedChanges;
+ }
+ 
++#if defined(WEBKIT_IOS6)
++// Shrinking reallocates and copies the whole vector. With thousands of buckets that is thousands of
++// allocator round trips for, in most buckets, a few dozen bytes. Only pay it when there is something
++// to reclaim.
++template<typename VectorType> static inline void shrinkVectorIfWorthwhile(VectorType& vector)
++{
++    if (vector.capacity() - vector.size() >= 4)
++        vector.shrinkToFit();
++}
++#else
++template<typename VectorType> static inline void shrinkVectorIfWorthwhile(VectorType& vector)
++{
++    vector.shrinkToFit();
++}
++#endif
++
+ static inline void shrinkMapVectorsToFit(RuleSet::AtomRuleMap& map)
+ {
+     for (auto& vector : map.values())
+-        vector->shrinkToFit();
++        shrinkVectorIfWorthwhile(*vector);
+ }
+ 
+ void RuleSet::shrinkToFit()
+@@ -681,19 +706,19 @@ void RuleSet::shrinkToFit()
+     shrinkMapVectorsToFit(m_userAgentPartRules);
+     shrinkMapVectorsToFit(m_namedPseudoElementRules);
+ 
+-    m_linkPseudoClassRules.shrinkToFit();
++    shrinkVectorIfWorthwhile(m_linkPseudoClassRules);
+ #if ENABLE(VIDEO)
+-    m_cuePseudoRules.shrinkToFit();
++    shrinkVectorIfWorthwhile(m_cuePseudoRules);
+ #endif
+-    m_hostPseudoClassRules.shrinkToFit();
+-    m_slottedPseudoElementRules.shrinkToFit();
+-    m_partPseudoElementRules.shrinkToFit();
+-    m_focusPseudoClassRules.shrinkToFit();
+-    m_focusVisiblePseudoClassRules.shrinkToFit();
+-    m_fullscreenPseudoClassRules.shrinkToFit();
+-    m_rootElementRules.shrinkToFit();
+-    m_universalRules.shrinkToFit();
+-    m_universalPseudoElementRules.shrinkToFit();
++    shrinkVectorIfWorthwhile(m_hostPseudoClassRules);
++    shrinkVectorIfWorthwhile(m_slottedPseudoElementRules);
++    shrinkVectorIfWorthwhile(m_partPseudoElementRules);
++    shrinkVectorIfWorthwhile(m_focusPseudoClassRules);
++    shrinkVectorIfWorthwhile(m_focusVisiblePseudoClassRules);
++    shrinkVectorIfWorthwhile(m_fullscreenPseudoClassRules);
++    shrinkVectorIfWorthwhile(m_rootElementRules);
++    shrinkVectorIfWorthwhile(m_universalRules);
++    shrinkVectorIfWorthwhile(m_universalPseudoElementRules);
+ 
+     m_pageRules.shrinkToFit();
+     m_features.shrinkToFit();
+diff --git a/Source/WebCore/style/RuleSet.h b/Source/WebCore/style/RuleSet.h
+index a3e728be0d..afb8c09750 100644
+--- a/Source/WebCore/style/RuleSet.h
++++ b/Source/WebCore/style/RuleSet.h
+@@ -83,7 +83,10 @@ public:
+ 
+     ~RuleSet();
+ 
+-    typedef Vector<RuleData, 1> RuleDataVector;
++    // Most buckets hold a handful of rules. The default minimum capacity of 16 makes every bucket
++    // that outgrows the inline slot allocate 16 entries and then hand most of them back in
++    // shrinkToFit(); growing from 4 costs less allocator traffic and far less peak memory.
++    typedef Vector<RuleData, 1, WTF::CrashOnOverflow, 4> RuleDataVector;
+     typedef HashMap<AtomString, std::unique_ptr<RuleDataVector>> AtomRuleMap;
+ 
+     void addRule(const StyleRule&, unsigned selectorIndex, unsigned selectorListIndex);
+diff --git a/Source/WebCore/style/RuleSetBuilder.cpp b/Source/WebCore/style/RuleSetBuilder.cpp
+index 2d0799610d..13670c4bd2 100644
+--- a/Source/WebCore/style/RuleSetBuilder.cpp
++++ b/Source/WebCore/style/RuleSetBuilder.cpp
+@@ -100,6 +100,11 @@ void RuleSetBuilder::addRulesFromSheet(const StyleSheetContents& sheet, const MQ
+ 
+     m_mediaQueryCollector.collectDynamic = canUseDynamicMediaQueryEvaluation();
+ 
++    // The deduplication set takes one entry per selector of every rule. Sizing it from the sheet
++    // saves rehashing it from 16 entries all the way up while the rules are being added.
++    if (m_ruleSet && !m_featureCollectionContext.selectorDeduplicationSet.capacity() && sheet.ruleCount() > 16)
++        m_featureCollectionContext.selectorDeduplicationSet.reserveInitialCapacity(sheet.ruleCount());
++
+     if (m_mediaQueryCollector.pushAndEvaluate(sheetQuery))
+         addRulesFromSheetContents(sheet);
+     m_mediaQueryCollector.pop(sheetQuery);
+@@ -107,9 +112,25 @@ void RuleSetBuilder::addRulesFromSheet(const StyleSheetContents& sheet, const MQ
+ 
+ void RuleSetBuilder::addChildRules(const Vector<Ref<StyleRuleBase>>& rules)
+ {
++    // With no rule set this is the dynamic media query scan, which walks the sheet a second time.
++    // Rule types that addChildRule() drops on the floor in that mode are skipped here instead, so
++    // the scan no longer pays a refcount round trip and a call per style rule.
++    const bool isScanningForDynamicEvaluation = !m_ruleSet;
++
+     for (auto& rule : rules) {
+         if (requiresStaticMediaQueryEvaluation)
+             return;
++        if (isScanningForDynamicEvaluation) {
++            switch (rule->type()) {
++            case StyleRuleType::Style:
++            case StyleRuleType::StyleWithNesting:
++            case StyleRuleType::NestedDeclarations:
++            case StyleRuleType::Page:
++                continue;
++            default:
++                break;
++            }
++        }
+         addChildRule(rule);
+     }
+ }
+@@ -325,7 +346,13 @@ void RuleSetBuilder::addStyleRuleWithSelectorList(const CSSSelectorList& selecto
+     for (auto& selector : selectorList) {
+         RuleData ruleData(rule, selectorList.indexOfSelector(selector), selectorListIndex++, m_ruleSet->ruleCount(), m_isStartingStyle);
+         m_mediaQueryCollector.addRuleIfNeeded(ruleData);
++#if defined(WEBKIT_IOS6)
++        // RuleSet is ThreadSafeRefCounted, so protect() costs a pair of atomic read-modify-writes plus
++        // a barrier for every selector of every rule. The builder holds a strong reference throughout.
++        m_ruleSet->addRule(WTF::move(ruleData), m_currentCascadeLayerIdentifier, m_currentContainerQueryIdentifier, m_currentScopeIdentifier, &m_featureCollectionContext);
++#else
+         protect(m_ruleSet)->addRule(WTF::move(ruleData), m_currentCascadeLayerIdentifier, m_currentContainerQueryIdentifier, m_currentScopeIdentifier, &m_featureCollectionContext);
++#endif
+     }
+ }
+ 
 diff --git a/Source/WebCore/style/StyleAdjuster.cpp b/Source/WebCore/style/StyleAdjuster.cpp
 index b66fa33989..cc52cbe33d 100644
 --- a/Source/WebCore/style/StyleAdjuster.cpp
@@ -874,6 +2028,106 @@ index b66fa33989..cc52cbe33d 100644
      if (m_parentStyle.contentVisibility() != ContentVisibility::Hidden && m_element && ContainmentChecker { style, *m_element }.isSkippedContentRoot())
          style.setUsedContentVisibility(style.contentVisibility());
  
+diff --git a/Source/WebCore/style/StyleBuilder.cpp b/Source/WebCore/style/StyleBuilder.cpp
+index 362e44daa1..9c250f60d2 100644
+--- a/Source/WebCore/style/StyleBuilder.cpp
++++ b/Source/WebCore/style/StyleBuilder.cpp
+@@ -373,25 +373,49 @@ void Builder::applyProperty(CSSPropertyID id, CSSValue& value, SelectorChecker::
+ 
+     id = CSSProperty::resolveDirectionAwareProperty(id, style.writingMode());
+ 
+-    auto valueToApply = resolveSubstitutionFunctions(id, value);
++#if defined(WEBKIT_IOS6)
++    // Substitution is rare and taking a reference is not free: this runs for
++    // every declaration of every element, and the returned Ref costs a retain
++    // and a release each time even when nothing was substituted.
++    RefPtr<CSSValue> substitutedValue;
++    if (value.hasSubstitutionFunctions()) [[unlikely]]
++        substitutedValue = resolveSubstitutionFunctions(id, value);
++    CSSValue& valueToApply = substitutedValue ? *substitutedValue : value;
++#else
++    auto valueToApplyRef = resolveSubstitutionFunctions(id, value);
++    CSSValue& valueToApply = valueToApplyRef.get();
++#endif
+ 
+     if (m_state->positionTryFallback())
+         id = AnchorPositionEvaluator::resolvePositionTryFallbackProperty(id, style.writingMode(), *m_state->positionTryFallback());
+ 
+-    auto valueID = WebCore::valueID(valueToApply.get());
+-    auto valueType = [&] {
+-        if (valueID == CSSValueInherit)
+-            return ApplyValueType::Inherit;
+-        if (valueID == CSSValueInitial)
+-            return ApplyValueType::Initial;
+-        return ApplyValueType::Value;
+-    }();
++    auto valueID = WebCore::valueID(valueToApply);
++
++    // inherit, initial, unset, revert, revert-layer and revert-rule are the
++    // first six entries of the keyword table, so one range test decides whether
++    // any of the six comparisons below is worth making. A declaration that
++    // names a real value - which is nearly all of them - skips them.
++    bool isCSSWideKeyword = valueID >= CSSValueInherit && valueID <= CSSValueRevertRule;
+ 
+-    bool isUnset = valueID == CSSValueUnset;
+-    bool isRevert = valueID == CSSValueRevert;
+-    bool isRevertLayer = valueID == CSSValueRevertLayer;
+-    bool isRevertRule = valueID == CSSValueRevertRule;
+-    bool isAnyRevert = isRevert || isRevertLayer || isRevertRule;
++    auto valueType = ApplyValueType::Value;
++    bool isUnset = false;
++    bool isRevert = false;
++    bool isRevertLayer = false;
++    bool isRevertRule = false;
++    bool isAnyRevert = false;
++
++    if (isCSSWideKeyword) [[unlikely]] {
++        if (valueID == CSSValueInherit)
++            valueType = ApplyValueType::Inherit;
++        else if (valueID == CSSValueInitial)
++            valueType = ApplyValueType::Initial;
++
++        isUnset = valueID == CSSValueUnset;
++        isRevert = valueID == CSSValueRevert;
++        isRevertLayer = valueID == CSSValueRevertLayer;
++        isRevertRule = valueID == CSSValueRevertRule;
++        isAnyRevert = isRevert || isRevertLayer || isRevertRule;
++    }
+ 
+     if (isAnyRevert) {
+         // In @keyframes, 'revert-layer' and 'revert-rule' roll back the cascaded value to the author level.
+@@ -439,7 +463,7 @@ void Builder::applyProperty(CSSPropertyID id, CSSValue& value, SelectorChecker::
+     if (valueType == ApplyValueType::Inherit && !isInheritedProperty())
+         style.setHasExplicitlyInheritedProperties();
+ 
+-    if (RefPtr paintImageValue = dynamicDowncast<CSSPaintImageValue>(valueToApply.get())) {
++    if (RefPtr paintImageValue = dynamicDowncast<CSSPaintImageValue>(valueToApply)) {
+         auto name = toStyle(paintImageValue->name(), m_state).value;
+         if (RefPtr paintWorklet = const_cast<Document&>(m_state->document()).paintWorkletGlobalScopeForName(name)) {
+             Locker locker { paintWorklet->paintDefinitionLock() };
+@@ -451,11 +475,11 @@ void Builder::applyProperty(CSSPropertyID id, CSSValue& value, SelectorChecker::
+     }
+ 
+     if (id == CSSPropertySize && valueType == ApplyValueType::Value) [[unlikely]] {
+-        applyPageSizeDescriptor(valueToApply.get());
++        applyPageSizeDescriptor(valueToApply);
+         return;
+     }
+ 
+-    BuilderGenerated::applyProperty(id, m_state, valueToApply.get(), valueType);
++    BuilderGenerated::applyProperty(id, m_state, valueToApply, valueType);
+ 
+     if (!isAnyRevert)
+         m_state->disableNativeAppearanceIfNeeded(id, cascadeOrigin);
+@@ -466,7 +490,7 @@ void Builder::applyProperty(CSSPropertyID id, CSSValue& value, SelectorChecker::
+         // When this happens, the computed value is one of the following...
+         // Otherwise: Either the property’s inherited value or its initial value depending on whether the property
+         // is inherited or not, respectively, as if the property’s value had been specified as the unset keyword
+-        BuilderGenerated::applyProperty(id, m_state, valueToApply.get(), unsetValueType());
++        BuilderGenerated::applyProperty(id, m_state, valueToApply, unsetValueType());
+     }
+ }
+ 
 diff --git a/Source/WebCore/style/StyleDocumentScope.cpp b/Source/WebCore/style/StyleDocumentScope.cpp
 index 8931fd160b..07aa39bf04 100644
 --- a/Source/WebCore/style/StyleDocumentScope.cpp
@@ -898,8 +2152,46 @@ index 8931fd160b..07aa39bf04 100644
      auto previousAnchorPositions = WTF::move(m_anchorPositionsOnLastUpdate);
      m_anchorPositionsOnLastUpdate.clear();
  
+diff --git a/Source/WebCore/style/StyleInvalidator.cpp b/Source/WebCore/style/StyleInvalidator.cpp
+index 584490dc2b..829f18488f 100644
+--- a/Source/WebCore/style/StyleInvalidator.cpp
++++ b/Source/WebCore/style/StyleInvalidator.cpp
+@@ -602,6 +602,13 @@ void Invalidator::invalidateUserAgentParts(ShadowRoot& shadowRoot)
+ 
+ void Invalidator::invalidateInShadowTreeIfNeeded(Element& element)
+ {
++    // Every branch below is gated on one of these, and this runs for every element of the traversal.
++    if (!m_ruleInformation.hasUserAgentPartRules
++        && !m_ruleInformation.hasHostPseudoClassRulesMatchingInShadowTree
++        && !m_ruleInformation.hasCuePseudoElementRules
++        && !m_ruleInformation.hasPartPseudoElementRules)
++        return;
++
+     RefPtr shadowRoot = element.shadowRoot();
+     if (!shadowRoot)
+         return;
+diff --git a/Source/WebCore/style/StyleResolver.cpp b/Source/WebCore/style/StyleResolver.cpp
+index aeeffad777..4c5dc9b140 100644
+--- a/Source/WebCore/style/StyleResolver.cpp
++++ b/Source/WebCore/style/StyleResolver.cpp
+@@ -688,13 +688,13 @@ void Resolver::applyMatchedProperties(State& state, const MatchResult& matchResu
+ {
+     auto& style = *state.style();
+     auto& parentStyle = *state.parentStyle();
+-    Ref element = *state.element();
++    auto& element = *state.element();
+ 
+     unsigned cacheHash = MatchedDeclarationsCache::computeHash(matchResult, parentStyle.inheritedCustomProperties());
+ 
+     auto cacheResult = m_matchedDeclarationsCache.find(cacheHash, matchResult, parentStyle.inheritedCustomProperties(), parentStyle);
+ 
+-    auto hasUsableEntry = cacheResult && MatchedDeclarationsCache::isCacheable(element.get(), style, parentStyle);
++    auto hasUsableEntry = cacheResult && MatchedDeclarationsCache::isCacheable(element, style, parentStyle);
+     if (hasUsableEntry) {
+         auto& cacheEntry = cacheResult->entry;
+         bool inheritedEqual = cacheResult->inheritedEqual;
 diff --git a/Source/WebCore/style/StyleScope.cpp b/Source/WebCore/style/StyleScope.cpp
-index f1bbaf577b..aa5fc0629e 100644
+index f1bbaf577b..d34f48c6a6 100644
 --- a/Source/WebCore/style/StyleScope.cpp
 +++ b/Source/WebCore/style/StyleScope.cpp
 @@ -26,6 +26,7 @@
@@ -1001,7 +2293,15 @@ index f1bbaf577b..aa5fc0629e 100644
      if (hasPendingSheets())
          return;
  
-@@ -545,6 +586,43 @@ static void filterEnabledNonemptyCSSStyleSheets(Vector<Ref<CSSStyleSheet>>& resu
+@@ -529,6 +570,7 @@ Scope::StyleSheetChange Scope::analyzeStyleSheetChange(const Vector<Ref<CSSStyle
+ 
+ static void filterEnabledNonemptyCSSStyleSheets(Vector<Ref<CSSStyleSheet>>& result, const Vector<Ref<StyleSheet>>& sheets)
+ {
++    result.reserveCapacity(result.size() + sheets.size());
+     for (auto& sheet : sheets) {
+         RefPtr styleSheet = dynamicDowncast<CSSStyleSheet>(sheet.get());
+         if (!styleSheet)
+@@ -545,6 +587,43 @@ static void filterEnabledNonemptyCSSStyleSheets(Vector<Ref<CSSStyleSheet>>& resu
  
  void Scope::updateActiveStyleSheets(UpdateType updateType)
  {
@@ -1045,6 +2345,14 @@ index f1bbaf577b..aa5fc0629e 100644
      RELEASE_ASSERT(!m_isUpdatingStyleResolver);
      ASSERT(!m_pendingUpdate);
  
+@@ -673,6 +752,7 @@ bool Scope::activeStyleSheetsContains(const CSSStyleSheet& sheet) const
+         return false;
+ 
+     if (m_weakCopyOfActiveStyleSheetListForFastLookup.isEmpty()) {
++        m_weakCopyOfActiveStyleSheetListForFastLookup.reserveInitialCapacity(m_activeStyleSheets.size());
+         for (auto& activeStyleSheet : m_activeStyleSheets)
+             m_weakCopyOfActiveStyleSheetListForFastLookup.add(activeStyleSheet.get());
+     }
 diff --git a/Source/WebCore/style/StyleScope.h b/Source/WebCore/style/StyleScope.h
 index 8dcefcf638..251e37ad5b 100644
 --- a/Source/WebCore/style/StyleScope.h

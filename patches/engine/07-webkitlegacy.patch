@@ -6829,7 +6829,7 @@ index 8ee6eb1a6c..655ab1e730 100644
  
  #import <pal/cf/CoreMediaSoftLink.h>
 diff --git a/Source/WebKitLegacy/mac/WebView/WebView.mm b/Source/WebKitLegacy/mac/WebView/WebView.mm
-index 436f7c1ea5..6bb3f559c2 100644
+index 436f7c1ea5..2542e159ef 100644
 --- a/Source/WebKitLegacy/mac/WebView/WebView.mm
 +++ b/Source/WebKitLegacy/mac/WebView/WebView.mm
 @@ -199,6 +199,7 @@
@@ -6880,7 +6880,20 @@ index 436f7c1ea5..6bb3f559c2 100644
  #else
  #import "WebCaretChangeListener.h"
  #import "WebChromeClientIOS.h"
-@@ -1540,6 +1554,13 @@ static void WebKitInitializeGamepadProviderIfNecessary()
+@@ -568,6 +582,12 @@ _Pragma("clang diagnostic pop") \
+ static BOOL s_didSetCacheModel;
+ static WebCacheModel s_cacheModel = WebCacheModelDocumentViewer;
+ 
++#if defined(WEBKIT_IOS6)
++// Defined in LegacyTileCache.mm. Raised while a _dispatchTileDidDraw: perform is
++// in flight so the tile cache schedules one per pass instead of one per tile.
++extern "C" int g_webkitIOS6TileDidDrawPending;
++#endif
++
+ const auto WKLockdownModeEnabledKeyCFString = CFSTR(STRINGIZE_VALUE_OF(WKLockdownModeEnabled));
+ const auto LDMEnabledKey = CFSTR("LDMGlobalEnabled");
+ 
+@@ -1540,6 +1560,13 @@ static void WebKitInitializeGamepadProviderIfNecessary()
      _private->page = WebCore::Page::create(WTF::move(pageConfiguration));
      storageProvider->setPage(*_private->page);
  
@@ -6894,7 +6907,7 @@ index 436f7c1ea5..6bb3f559c2 100644
      _private->page->setGroupName(groupName);
  
  #if ENABLE(GEOLOCATION)
-@@ -1553,10 +1574,14 @@ static void WebKitInitializeGamepadProviderIfNecessary()
+@@ -1553,10 +1580,14 @@ static void WebKitInitializeGamepadProviderIfNecessary()
  #endif
  
      _private->inspectorController = LegacyWebPageInspectorController::create(*_private->page);
@@ -6909,7 +6922,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  #endif
  
      _private->page->setCanStartMedia([self window]);
-@@ -1795,6 +1820,13 @@ static void WebKitInitializeGamepadProviderIfNecessary()
+@@ -1795,6 +1826,13 @@ static void WebKitInitializeGamepadProviderIfNecessary()
      _private->page = WebCore::Page::create(WTF::move(pageConfiguration));
      storageProvider->setPage(*_private->page);
  
@@ -6923,7 +6936,7 @@ index 436f7c1ea5..6bb3f559c2 100644
      [self setSmartInsertDeleteEnabled:YES];
  
      // FIXME: <rdar://problem/6851451> Should respect preferences in fast path WebView initialization
-@@ -1824,10 +1856,14 @@ static void WebKitInitializeGamepadProviderIfNecessary()
+@@ -1824,10 +1862,14 @@ static void WebKitInitializeGamepadProviderIfNecessary()
      _private->page->setGroupName(groupName);
  
      _private->inspectorController = LegacyWebPageInspectorController::create(*_private->page);
@@ -6938,7 +6951,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  #endif
  
      [self _updateScreenScaleFromWindow];
-@@ -1854,6 +1890,90 @@ static void WebKitInitializeGamepadProviderIfNecessary()
+@@ -1854,6 +1896,90 @@ static void WebKitInitializeGamepadProviderIfNecessary()
      });
  }
  
@@ -7029,7 +7042,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  - (void)_replaceCurrentHistoryItem:(WebHistoryItem *)item
  {
      auto* frame = [self _mainCoreFrame];
-@@ -2168,11 +2288,13 @@ static NSMutableSet *knownPluginMIMETypes()
+@@ -2168,11 +2294,13 @@ static NSMutableSet *knownPluginMIMETypes()
      Class repClass = [[WebDataSource _repTypesAllowImageTypeOmission:YES] _webkit_objectForMIMEType:MIMEType];
  
  #if PLATFORM(IOS_FAMILY)
@@ -7044,7 +7057,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  #endif
          // Our optimization to avoid loading the plug-in DB and image types for the HTML case failed.
  
-@@ -2303,6 +2425,18 @@ static NSMutableSet *knownPluginMIMETypes()
+@@ -2303,8 +2431,25 @@ static NSMutableSet *knownPluginMIMETypes()
      return _private->page->renderTreeSize();
  }
  
@@ -7062,8 +7075,15 @@ index 436f7c1ea5..6bb3f559c2 100644
 +
  - (void)_dispatchTileDidDraw:(CALayer*)tile
  {
++#if defined(WEBKIT_IOS6)
++    // Lowered here so LegacyTileCache::drawLayer() can schedule the next one.
++    g_webkitIOS6TileDidDrawPending = 0;
++#endif
++
      id mailDelegate = [self _webMailDelegate];
-@@ -2428,7 +2562,9 @@ static bool fastDocumentTeardownEnabled()
+     if ([mailDelegate respondsToSelector:@selector(_webthread_webView:tileDidDraw:)]) {
+         [mailDelegate _webthread_webView:self tileDidDraw:tile];
+@@ -2428,7 +2573,9 @@ static bool fastDocumentTeardownEnabled()
      if (!_private || _private->closed)
          return;
  
@@ -7073,7 +7093,7 @@ index 436f7c1ea5..6bb3f559c2 100644
      _private->inspectorController->willDestroyPage(*_private->page);
  
      [[NSNotificationCenter defaultCenter] postNotificationName:WebViewWillCloseNotification object:self];
-@@ -2646,12 +2782,16 @@ ALLOW_DEPRECATED_DECLARATIONS_END
+@@ -2646,12 +2793,16 @@ ALLOW_DEPRECATED_DECLARATIONS_END
  #if ENABLE(REMOTE_INSPECTOR)
  + (void)_enableRemoteInspector
  {
@@ -7090,7 +7110,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  }
  
  + (void)_disableAutoStartRemoteInspector
-@@ -2661,22 +2801,36 @@ ALLOW_DEPRECATED_DECLARATIONS_END
+@@ -2661,22 +2812,36 @@ ALLOW_DEPRECATED_DECLARATIONS_END
  
  + (BOOL)_isRemoteInspectorEnabled
  {
@@ -7127,7 +7147,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  }
  
  - (void)setShowingInspectorIndication:(BOOL)showing
-@@ -2703,7 +2857,9 @@ ALLOW_DEPRECATED_DECLARATIONS_END
+@@ -2703,7 +2868,9 @@ ALLOW_DEPRECATED_DECLARATIONS_END
  - (void)_setHostApplicationProcessIdentifier:(pid_t)pid auditToken:(audit_token_t)auditToken
  {
      RetainPtr<CFDataRef> auditData = adoptCF(CFDataCreate(nullptr, (const UInt8*)&auditToken, sizeof(auditToken)));
@@ -7137,7 +7157,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  }
  #endif // PLATFORM(IOS_FAMILY)
  #endif // ENABLE(REMOTE_INSPECTOR)
-@@ -3741,6 +3897,16 @@ IGNORE_WARNINGS_END
+@@ -3741,6 +3908,16 @@ IGNORE_WARNINGS_END
      [self _locked_recursivelyPerformPlugInSelector:@selector(restorePluginsFromCache) inFrame:[self mainFrame]];
  }
  
@@ -7154,7 +7174,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  - (BOOL)_setMediaLayer:(CALayer*)layer forPluginView:(NSView*)pluginView
  {
      WebThreadLock();
-@@ -3920,6 +4086,14 @@ IGNORE_WARNINGS_END
+@@ -3920,6 +4097,14 @@ IGNORE_WARNINGS_END
  
      if (auto* mainFrame = core([self mainFrame]))
          mainFrame->view()->setCustomFixedPositionLayoutRect(newRect);
@@ -7169,7 +7189,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  }
  
  - (void)_setCustomFixedPositionLayoutRectInWebThread:(CGRect)rect synchronize:(BOOL)synchronize
-@@ -3981,7 +4155,7 @@ IGNORE_WARNINGS_END
+@@ -3981,7 +4166,7 @@ IGNORE_WARNINGS_END
  }
  #endif // PLATFORM(IOS_FAMILY)
  
@@ -7178,7 +7198,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  
  - (NSArray *)_touchEventRegions
  {
-@@ -4023,7 +4197,7 @@ IGNORE_WARNINGS_END
+@@ -4023,7 +4208,7 @@ IGNORE_WARNINGS_END
      }).autorelease();
  }
  
@@ -7187,7 +7207,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  
  // For backwards compatibility with the WebBackForwardList API, we honor both
  // a per-WebView and a per-preferences setting for whether to use the back/forward cache.
-@@ -4271,7 +4445,15 @@ IGNORE_WARNINGS_END
+@@ -4271,7 +4456,15 @@ IGNORE_WARNINGS_END
  {
      if (_private && _private->page)
  #if PLATFORM(IOS_FAMILY)
@@ -7204,7 +7224,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  #else
          _private->page->focusController().setActive([[self window] _hasKeyAppearance]);
  #endif
-@@ -4384,6 +4566,60 @@ IGNORE_WARNINGS_END
+@@ -4384,6 +4577,60 @@ IGNORE_WARNINGS_END
      viewGroup->userContentController().removeAllUserContent();
  }
  
@@ -7265,7 +7285,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  - (void)_forceRepaintForTesting
  {
      [self _updateRendering];
-@@ -4747,10 +4983,12 @@ IGNORE_WARNINGS_END
+@@ -4747,10 +4994,12 @@ IGNORE_WARNINGS_END
      if (WebNodeHighlight *currentHighlight = [self currentNodeHighlight])
          [currentHighlight setNeedsDisplay];
  
@@ -7278,7 +7298,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  }
  
  - (BOOL)_wantsTelephoneNumberParsing
-@@ -8586,6 +8824,19 @@ FORWARD(toggleUnderline)
+@@ -8586,6 +8835,19 @@ FORWARD(toggleUnderline)
      // Don't shrink a big disk cache, since that would cause churn.
      nsurlCacheDiskCapacity = std::max(nsurlCacheDiskCapacity, [nsurlCache diskCapacity]);
  
@@ -7298,7 +7318,7 @@ index 436f7c1ea5..6bb3f559c2 100644
      auto& memoryCache = WebCore::MemoryCache::singleton();
      memoryCache.setCapacities(cacheMinDeadCapacity, cacheMaxDeadCapacity, cacheTotalCapacity);
      memoryCache.setDeadDecodedDataDeletionInterval(deadDecodedDataDeletionInterval);
-@@ -8617,6 +8868,13 @@ FORWARD(toggleUnderline)
+@@ -8617,6 +8879,13 @@ FORWARD(toggleUnderline)
      return s_cacheModel;
  }
  
@@ -7312,7 +7332,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  #if !PLATFORM(IOS_FAMILY)
  - (void)_openFrameInNewWindowFromMenu:(NSMenuItem *)sender
  {
-@@ -8839,10 +9097,21 @@ FORWARD(toggleUnderline)
+@@ -8839,10 +9108,21 @@ FORWARD(toggleUnderline)
  - (BOOL)_flushCompositingChanges
  {
      auto* frame = [self _mainCoreFrame];
@@ -7337,7 +7357,7 @@ index 436f7c1ea5..6bb3f559c2 100644
  }
  
  #if PLATFORM(IOS_FAMILY)
-@@ -9869,6 +10138,27 @@ void WebInstallMemoryPressureHandler(void)
+@@ -9869,6 +10149,27 @@ void WebInstallMemoryPressureHandler(void)
          static std::once_flag onceFlag;
          std::call_once(onceFlag, [] {
              auto& memoryPressureHandler = MemoryPressureHandler::singleton();
@@ -7365,7 +7385,7 @@ index 436f7c1ea5..6bb3f559c2 100644
              memoryPressureHandler.setLowMemoryHandler([] (Critical critical, Synchronous synchronous) {
  #if PLATFORM(IOS_FAMILY)
                  WebThreadRun(^{
-@@ -9879,6 +10169,14 @@ void WebInstallMemoryPressureHandler(void)
+@@ -9879,6 +10180,14 @@ void WebInstallMemoryPressureHandler(void)
  #endif
              });
              memoryPressureHandler.install();
@@ -7495,7 +7515,7 @@ index 339cbcda1a..e1d86f957c 100644
  - (BOOL)windowOcclusionDetectionEnabled;
  - (void)setWindowOcclusionDetectionEnabled:(BOOL)flag;
 diff --git a/Source/WebKitLegacy/mac/WebView/WebViewRenderingUpdateScheduler.mm b/Source/WebKitLegacy/mac/WebView/WebViewRenderingUpdateScheduler.mm
-index 11819b3734..855e4a150a 100644
+index 11819b3734..42127d79c2 100644
 --- a/Source/WebKitLegacy/mac/WebView/WebViewRenderingUpdateScheduler.mm
 +++ b/Source/WebKitLegacy/mac/WebView/WebViewRenderingUpdateScheduler.mm
 @@ -25,6 +25,10 @@
@@ -7541,5 +7561,26 @@ index 11819b3734..855e4a150a 100644
 +#endif
 +
      m_renderingUpdateRunLoopObserver->schedule();
+ }
+ 
+@@ -99,6 +121,20 @@ void WebViewRenderingUpdateScheduler::didCompleteRenderingUpdateDisplay()
+ 
+ void WebViewRenderingUpdateScheduler::schedulePostRenderingUpdate()
+ {
++#if defined(WEBKIT_IOS6)
++    // Same reason as scheduleRenderingUpdate(): this observer's body opens with
++    // WebThreadLock(), and it is scheduled from a CoreAnimation post-commit
++    // handler that runs on whichever thread committed. Bound to the main run
++    // loop it makes the interface take the web lock once per frame for work that
++    // belongs to the engine.
++    if (!WebThreadIsCurrent() && WebThreadIsEnabled()) {
++        WebThreadRun(^{
++            m_postRenderingUpdateRunLoopObserver->schedule();
++        });
++        return;
++    }
++#endif
++
+     m_postRenderingUpdateRunLoopObserver->schedule();
  }
  
