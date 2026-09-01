@@ -24,6 +24,14 @@ Dates are the day the change was measured on the device, not the day it compiled
 - The faulting address and the register file in the crash report. A stack names
   the function; it does not say which pointer was bad.
 
+### Changed
+- The bytecode cache's ceiling is 192 MB rather than 32, and a number written
+  into `/tmp/native-bytecode-cache` sets it. At 32 MB it held four of this
+  site's bundles and missed everything else - one hit against forty three. It
+  is still off by default: measured with the larger ceiling and a warm cache,
+  fourteen hits against thirty misses and no change in the stalls, 63 s against
+  62-77 s without it, for 15 MB more resident.
+
 ### Fixed
 - **Tile layout, which was being skipped almost every frame.** The interface
   stops waiting for the engine before laying out tiles, which is right, but the
