@@ -33,6 +33,22 @@ Dates are the day the change was measured on the device, not the day it compiled
   stylesheet - one file, parsed once. Compiling later (`thresholdForJITAfterWarmUp`
   2000, `thresholdForOptimizeAfterWarmUp` 5000) brings the feed up two seconds
   sooner and costs 43% on the JavaScript benchmark, so the upstream numbers stay.
+- **The bytecode cache is on, for the large bundles only.** Caching every
+  script cost 31 MB of resident memory to save a second and a half, which is
+  why it was off. The site's weight is in four bundles: with the engine's floor
+  raised to half a megabyte of source, the feed comes up 24.0 s after launch
+  against 28.3 s without, for 7 MB. Its ceiling is 192 MB rather than 32 - one
+  of these bundles compiles to a seven megabyte blob - and
+  `/tmp/native-no-bytecode-cache` turns it off,
+  `WEBKIT_IOS6_BYTECODE_MINIMUM_BYTES` moves the floor.
+- Stylesheet parsing can be timed through `WEBKIT_IOS6_STYLE_LOG`, which is how
+  the launch was accounted for: of the twenty six and a half seconds between
+  the application starting and the feed appearing, the web thread is busy for
+  ninety eight percent of them. About forty percent is running the site's
+  JavaScript, ten percent compiling it, and three of those seconds are a single
+  stylesheet - one file, parsed once. Compiling later (`thresholdForJITAfterWarmUp`
+  2000, `thresholdForOptimizeAfterWarmUp` 5000) brings the feed up two seconds
+  sooner and costs 43% on the JavaScript benchmark, so the upstream numbers stay.
 - The bytecode cache's ceiling is 192 MB rather than 32, and a number written
   into `/tmp/native-bytecode-cache` sets it. At 32 MB it held four of this
   site's bundles and missed everything else - one hit against forty three. It

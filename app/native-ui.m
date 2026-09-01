@@ -813,7 +813,7 @@ static unsigned long long bytecodeCacheLimitBytes(void)
     // The disk has room; the limit does not need to pretend otherwise. A number
     // written into the switch file overrides this.
     unsigned long long megabytes = 192;
-    FILE *file = fopen("/tmp/native-bytecode-cache", "r");
+    FILE *file = fopen("/tmp/native-bytecode-size", "r");
     if (file) {
         char line[32];
         if (fgets(line, sizeof(line), file)) {
@@ -920,15 +920,15 @@ static unsigned long long bytecodeCacheLimitBytes(void)
     // read it back instead of parsing, and this port already builds that - it
     // was simply never switched on in this application.
     Class bytecodeWebView = NSClassFromString(@"WebView");
-    // Off by default, and measured that way.
+    // On, for the large bundles only.
     //
-    // Caching the compiled form removes the parsing - the parser's arena is the
-    // largest allocator in the process - but the compiled form then lives in
-    // memory, and on this device that costs more than the parsing saves:
-    // resident 229 and 250 MB with it against 214 without, over comparable
-    // feeds. It stays one flag away for a device with room.
+    // Caching every script cost 31 MB of resident memory to save a second and a
+    // half of the launch, which is why this was off. The site's weight is in
+    // four bundles, and caching only those - the engine's floor is now half a
+    // megabyte of source - brings the feed up in 24.0 seconds against 28.3, for
+    // 7 MB. Removing the switch file turns it off.
     if ([bytecodeWebView respondsToSelector:@selector(_setJavaScriptBytecodeCacheDirectory:maximumSize:)]
-        && access("/tmp/native-bytecode-cache", F_OK) == 0) {
+        && access("/tmp/native-no-bytecode-cache", F_OK) != 0) {
         NSArray *caches = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
         NSString *directory = [[caches count] ? [caches objectAtIndex:0] : @"/tmp"
             stringByAppendingPathComponent:@"bytecode"];
