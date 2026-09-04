@@ -1,0 +1,30 @@
+{
+  "name": "Google",
+  "bundle_id": "space.kern0x1b.webapp.google",
+  "scheme": "googletest",
+  "version": "1.0",
+  "start_url": "https://www.google.com/",
+
+  "internal_hosts": ["www.google.com", "google.com"],
+
+  "shell_hosts": [],
+  "precache": [],
+
+  "user_agent": {
+    "product_version": "17.0",
+    "build_version": "15E148",
+    "bundle_version": "604.1",
+    "override": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+  },
+
+  "orientation": "portrait",
+  "status_bar_style": "default",
+  "background_color": "#ffffff",
+  "icon_color": "#000000",
+
+  "external_links": "open-in-safari",
+
+  "notes": [
+    "Test-only manifest, not a real product target: used to confirm the engine's basic load/render/JS pipeline end-to-end on a site with no per-IP anti-bot block, while Threads.com is rate-limited on this device's IP."
+  ]
+}

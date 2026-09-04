@@ -18,9 +18,20 @@
 @end
 
 @interface NSPresentationIntent : NSObject
+@property (nonatomic, readonly) NSInteger identity;
+@property (nonatomic, readonly) NSPresentationIntent *parentIntent;
++ (instancetype)blockQuoteIntentWithIdentity:(NSInteger)identity nestedInsideIntent:(NSPresentationIntent *)parent;
 @end
 
+/* Only referrerURL is set anywhere in this port's compiled code
+ * (WebFrameLoaderClient.mm, the sole caller of LSAppLink openWithURL:
+ * configuration: - WebKit's UIProcess/webpushd callers of the real
+ * sensitive/allowURLOverrides/frontBoardOptions properties are WebKit2 code
+ * this legacy-engine port does not build). LSAppLink's own +openWithURL:
+ * configuration:completionHandler: below ignores the configuration object
+ * entirely, so this is purely a data holder to stop the setter crash. */
 @interface _LSOpenConfiguration : NSObject
+@property (nonatomic, retain) NSURL *referrerURL;
 @end
 
 #pragma clang diagnostic push
@@ -132,18 +143,60 @@
 @end
 
 @implementation NSPresentationIntent
+{
+    NSInteger _identity;
+    NSPresentationIntent *_parentIntent;
+}
+
+@synthesize identity = _identity;
+@synthesize parentIntent = _parentIntent;
+
 + (id)alloc
 {
     static BOOL said_NSPresentationIntent; if (!said_NSPresentationIntent) { said_NSPresentationIntent = YES; fprintf(stderr, "[ios6] class unavailable: NSPresentationIntent\n"); }
     return [super alloc];
 }
+
+/* NodeHTMLConverter.mm's <blockquote> pasteboard/copy conversion is the only
+ * caller anywhere in this port's compiled code (WebKit/Shared/Cocoa's
+ * CoreIPCPresentationIntent, which needs the other kinds -
+ * paragraph/header/list/table/... - is WebKit2 IPC code this legacy-engine
+ * port does not build). Only this one factory method and the parentIntent
+ * getter it reads back are implemented; the other real factory methods
+ * (paragraphIntentWithIdentity:..., headerIntentWithIdentity:level:..., etc.)
+ * are not, on purpose - nothing here calls them. */
++ (instancetype)blockQuoteIntentWithIdentity:(NSInteger)identity nestedInsideIntent:(NSPresentationIntent *)parent
+{
+    NSPresentationIntent *intent = [[self alloc] init];
+    intent->_identity = identity;
+    intent->_parentIntent = [parent retain];
+    return [intent autorelease];
+}
+
+- (void)dealloc
+{
+    [_parentIntent release];
+    [super dealloc];
+}
 @end
 
 @implementation _LSOpenConfiguration
+{
+    NSURL *_referrerURL;
+}
+
+@synthesize referrerURL = _referrerURL;
+
 + (id)alloc
 {
     fprintf(stderr, "[ios6] class unavailable: _LSOpenConfiguration\n");
     return [super alloc];
+}
+
+- (void)dealloc
+{
+    [_referrerURL release];
+    [super dealloc];
 }
 @end
 

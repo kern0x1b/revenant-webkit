@@ -16,7 +16,14 @@ STUBS="-include $P/compat/stubs/ios6_dispatch_compat.h"
 CXX_ONLY="-nostdinc++ -isystem $L/include/c++/v1 -D_LIBCPP_DISABLE_AVAILABILITY -std=c++2b"
 
 cd $P/compat
-for f in ios6_compat.c ios6_missing.c ios6_missing_constants.c ios6_coretext.c ios6_coregraphics.c; do
+
+# _CFHostIsDomainTopLevel's real Public Suffix List lookup is the only piece
+# here that needs libpsl, so it carries the include path the same way the
+# Web Crypto file below carries OpenSSL's.
+"$TC/usr/bin/clang" $COMMON -I $P/third_party/libpsl-armv7/include \
+    -c ios6_compat.c -o ios6_compat.o
+
+for f in ios6_missing.c ios6_missing_constants.c ios6_coretext.c ios6_coregraphics.c; do
     "$TC/usr/bin/clang" $COMMON -c "$f" -o "${f%.c}.o"
 done
 for f in ios6_missing_classes.m ios6_uttype.m ios6_palswift.m ios6_uicolor.m ios6_avaudio.m; do
@@ -35,12 +42,17 @@ done
 rm -f libios6compat.a
 ar rcs libios6compat.a ios6_*.o
 
-# OpenSSL travels inside this archive so the engine's link line needs no change.
-# The linker still takes only the members it needs, which for the crypto above is
-# the ciphers and digests, not the library.
+# OpenSSL and libpsl travel inside this archive so the engine's link line
+# needs no change. The linker still takes only the members it needs, which
+# for the crypto above is the ciphers and digests, not the library, and for
+# libpsl is psl.o (the built-in PSL data and psl_is_public_suffix live there).
 mkdir -p /tmp/ios6-openssl-members
 (cd /tmp/ios6-openssl-members && rm -f *.o && ar x $P/third_party/openssl-armv7/lib/libcrypto.a)
 ar rs libios6compat.a /tmp/ios6-openssl-members/*.o > /dev/null 2>&1
+
+mkdir -p /tmp/ios6-libpsl-members
+(cd /tmp/ios6-libpsl-members && rm -f *.o && ar x $P/third_party/libpsl-armv7/lib/libpsl.a)
+ar rs libios6compat.a /tmp/ios6-libpsl-members/*.o > /dev/null 2>&1
 echo "libios6compat.a: $(nm libios6compat.a | awk '$2 ~ /^[TDBSC]$/' | wc -l | tr -d ' ') symbols"
 
 if [ "$1" = "audit" ]; then

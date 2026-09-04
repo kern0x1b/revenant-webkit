@@ -276,3 +276,61 @@ kern_return_t catch_mach_exception_raise_state_identity_protected(mach_port_t ex
     (void)outState; (void)outStateCount;
     return KERN_FAILURE;
 }
+
+/* ---- _CFHostIsDomainTopLevel is PublicSuffixStoreCocoa.mm's only source of
+ * public-suffix (eTLD/eTLD+1) data on any Cocoa port - its own in-memory cache
+ * (enablePublicSuffixCache/addPublicSuffix) is never populated on this port
+ * either, so this is genuinely the only thing standing behind:
+ *   - SecurityOrigin.cpp's document.domain relaxation checks (must not let a
+ *     page claim ownership of a whole public suffix)
+ *   - ContentSecurityPolicySourceList.cpp's rejection of CSP wildcard sources
+ *     that would cover an entire public suffix (e.g. "*.co.uk")
+ *   - RegistrableDomain.h's eTLD+1 computation, which cookie/storage
+ *     partitioning is keyed on
+ * declared in WebCore/PAL/pal/spi/cf/CFNetworkSPI.h as:
+ *   Boolean _CFHostIsDomainTopLevel(CFStringRef domain);
+ * "domain" here is a candidate suffix being tested in isolation (e.g. "uk",
+ * "co.uk", "com", "github.io"), not a full hostname - PublicSuffixStore walks
+ * a host label by label and asks this question about each shrinking suffix.
+ *
+ * This now answers from the real Mozilla Public Suffix List, via libpsl
+ * (third_party/libpsl-armv7, scripts/build-libpsl.sh) - the same data source
+ * WebKit's own soup/libpsl backend uses (platform/soup/PublicSuffixStoreSoup.cpp).
+ * A previous version of this function was a hand-curated table of ~90 common
+ * suffixes, an honestly-documented heuristic standing in for the several
+ * thousand rules in the real list; that gap is gone now that the actual list
+ * is linked in. libpsl is built with --enable-builtin (the PSL data compiled
+ * into libpsl.a, not read from a file the device would have to carry and
+ * update) and --disable-runtime (no libidn2/libunistring cross-compiled for
+ * armv7; psl_is_public_suffix() does not need them - only IDNA punycode
+ * normalization of non-ASCII input would, and _CFHostIsDomainTopLevel is
+ * only ever called with the ASCII labels PublicSuffixStoreCocoa.mm already
+ * split a hostname into).
+ */
+#include <CoreFoundation/CoreFoundation.h>
+#include <libpsl.h>
+#include <string.h>
+
+static void lowercaseASCII(char *s)
+{
+    for (; *s; s++) {
+        if (*s >= 'A' && *s <= 'Z')
+            *s += ('a' - 'A');
+    }
+}
+
+Boolean _CFHostIsDomainTopLevel(CFStringRef domain)
+{
+    if (!domain)
+        return false;
+
+    char buffer[256];
+    if (!CFStringGetCString(domain, buffer, sizeof(buffer), kCFStringEncodingUTF8))
+        return false;
+    lowercaseASCII(buffer);
+
+    if (buffer[0] == '\0')
+        return false;
+
+    return psl_is_public_suffix(psl_builtin(), buffer) ? true : false;
+}

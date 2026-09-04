@@ -868,6 +868,44 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     [(id)context correctPinnedLayers];
 }
 
+// element.requestFullscreen(), the native half.
+//
+// WebChromeClient::enterFullScreenForElement (built for every platform, iOS
+// included - PlatformIOS.cmake already lists WebChromeClient.mm and
+// WebKitFullScreenListener.mm) does not go through -_UIKitDelegate the way
+// -attachRootLayer: does. It asks the WebView's ordinary public UIDelegate for
+// three plain WebUIDelegate selectors and, if nothing answers, calls back with
+// "unsupported" - the same object AppKit's WebFullScreenController listens to
+// on the Mac, minus everything that needs a real NSWindow.
+//
+// UIWebView installs its own UIDelegate on the engine's WebView to get JS
+// alerts and the rest working; nothing here may replace it wholesale without
+// losing that. What is missing is only three selectors nothing in that
+// delegate ever had a reason to implement, so they are added to its class at
+// runtime instead of the object being swapped out - every selector it already
+// answered keeps working unchanged, this app just gains three more answers on
+// top. The delegate object does not know about this file, so a global points
+// back at the one BrowserViewController-equivalent screen this app has.
+static NativeAppDelegate *gFullscreenScreen;
+
+static BOOL nativeFullscreenSupports(id self_, SEL _cmd, id webView, id element, BOOL withKeyboard)
+{
+    (void)self_; (void)_cmd; (void)webView; (void)element; (void)withKeyboard;
+    return YES;
+}
+
+static void nativeFullscreenEnter(id self_, SEL _cmd, id webView, id element, id listener)
+{
+    (void)self_; (void)_cmd; (void)webView; (void)element;
+    [gFullscreenScreen nativeFullscreenEnterWithListener:listener];
+}
+
+static void nativeFullscreenExit(id self_, SEL _cmd, id webView, id element, id listener)
+{
+    (void)self_; (void)_cmd; (void)webView; (void)element;
+    [gFullscreenScreen nativeFullscreenExitWithListener:listener];
+}
+
 @implementation NativeAppDelegate {
     UIWindow *_window;
     UIWebView *_webView;
@@ -910,6 +948,11 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     NSMutableArray *_multiTapRecognisers;
     NSURL *_pendingBarURL;
     UIButton *_pressedBarButton;
+    BOOL _fullscreenSupportInstalled;
+    BOOL _fullscreenActive;
+    CGRect _preFullscreenWebViewFrame;
+    BOOL _preFullscreenStatusBarHidden;
+    BOOL _bottomBarWasHiddenBeforeFullscreen;
 }
 
 static unsigned long long bytecodeCacheLimitBytes(void)
@@ -1195,6 +1238,18 @@ static BOOL adoptLocalStorage(NSString *stem, NSString *from, NSString *to)
         [preferences setAutomaticallyDetectsCacheModel:NO];
         logLine(@"cache model pinned to the engine's own defaults");
     }
+
+    // ENABLE_FULLSCREEN_API=ON at compile time is only half of it - the
+    // fullscreen IDL is additionally gated `EnabledBySetting=FullScreenEnabled`,
+    // a WebPreferences flag with no default registration, so it reads back NO
+    // until something sets it. Without this, document.fullscreenEnabled is
+    // false and requestFullscreen() rejects before ever reaching ChromeClient.
+    if ([preferences respondsToSelector:@selector(setFullScreenEnabled:)]) {
+        [preferences setFullScreenEnabled:YES];
+        logLine(@"fullscreen API enabled");
+    } else
+        logLine(@"could not reach WebPreferences to switch fullscreen on");
+
     _webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [_window addSubview:_webView];
     [_window makeKeyAndVisible];
@@ -1718,6 +1773,137 @@ static BOOL adoptLocalStorage(NSString *stem, NSString *from, NSString *to)
     return webView;
 }
 
+// Adds the three fullscreen selectors to whatever class the engine WebView's
+// UIDelegate already is - UIWebView's own private delegate object, almost
+// certainly, since nothing here has called -setUIDelegate:. class_addMethod
+// only adds; it never touches a selector the class already answers, so this
+// is safe to call repeatedly and safe regardless of what that class turns out
+// to be. If the engine has no UIDelegate at all yet, a bare object that
+// answers only these three is installed instead - there is nothing to lose in
+// that case, since nothing was reachable through UIDelegate before this ran.
+- (void)installFullscreenSupportIfNeeded
+{
+    if (_fullscreenSupportInstalled)
+        return;
+    id engineWebView = [self engineWebView];
+    if (!engineWebView || ![engineWebView respondsToSelector:@selector(UIDelegate)])
+        return;
+
+    gFullscreenScreen = self;
+
+    id delegate = [engineWebView performSelector:@selector(UIDelegate)];
+    Class delegateClass = delegate ? [delegate class] : Nil;
+
+    SEL supportsSel = @selector(webView:supportsFullScreenForElement:withKeyboard:);
+    SEL enterSel = @selector(webView:enterFullScreenForElement:listener:);
+    SEL exitSel = @selector(webView:exitFullScreenForElement:listener:);
+
+    if (delegateClass) {
+        if (!class_getInstanceMethod(delegateClass, supportsSel))
+            class_addMethod(delegateClass, supportsSel, (IMP)nativeFullscreenSupports, "c@:@@c");
+        if (!class_getInstanceMethod(delegateClass, enterSel))
+            class_addMethod(delegateClass, enterSel, (IMP)nativeFullscreenEnter, "v@:@@@");
+        if (!class_getInstanceMethod(delegateClass, exitSel))
+            class_addMethod(delegateClass, exitSel, (IMP)nativeFullscreenExit, "v@:@@@");
+        _fullscreenSupportInstalled = YES;
+        logLine(@"fullscreen: added supports/enter/exit to %@'s existing UIDelegate (%@)",
+            NSStringFromClass([engineWebView class]), NSStringFromClass(delegateClass));
+        return;
+    }
+
+    Class bareClass = objc_allocateClassPair([NSObject class], "RevenantBareFullscreenDelegate", 0);
+    if (bareClass) {
+        class_addMethod(bareClass, supportsSel, (IMP)nativeFullscreenSupports, "c@:@@c");
+        class_addMethod(bareClass, enterSel, (IMP)nativeFullscreenEnter, "v@:@@@");
+        class_addMethod(bareClass, exitSel, (IMP)nativeFullscreenExit, "v@:@@@");
+        objc_registerClassPair(bareClass);
+    } else {
+        bareClass = objc_getClass("RevenantBareFullscreenDelegate");
+    }
+    if (bareClass && [engineWebView respondsToSelector:@selector(setUIDelegate:)]) {
+        id bareDelegate = [[bareClass alloc] init];
+        ((void (*)(id, SEL, id))objc_msgSend)(engineWebView, @selector(setUIDelegate:), bareDelegate);
+        _fullscreenSupportInstalled = YES;
+        logLine(@"fullscreen: engine WebView had no UIDelegate, installed a bare one");
+    }
+}
+
+// requestFullscreen() on an arbitrary element - a <div> or <canvas>, not a
+// <video>; this port paints <video> as an ordinary DOM element and has no
+// separate native player UI to hand control to.
+//
+// DocumentFullscreen already puts the element through fullscreen.css
+// (position:fixed;inset:0;width/height:100% !important) the moment
+// -webkitWillEnterFullScreen below resolves willEnterFullscreen(), which is
+// enough on its own to cover this app's WebView - "one view, one URL, no
+// chrome" means that view is everything below the status bar already. What is
+// left for the native side is the sliver fullscreen.css cannot reach: the
+// status bar strip UIKit draws over the window, and this app's own promoted
+// bottom bar if the page happened to have declared one. Growing the WebView's
+// frame over both and hiding them is the whole of it - UIWebView relays out
+// its document at the new size on its own, the same as it would for a
+// rotation, so the fixed element's 100%/100% grows to match without this file
+// touching layout, viewport size, or the WAK/tile machinery at all.
+- (void)nativeFullscreenEnterWithListener:(id)listener
+{
+    if ([listener respondsToSelector:@selector(webkitWillEnterFullScreen)])
+        [listener webkitWillEnterFullScreen];
+
+    if (_fullscreenActive) {
+        if ([listener respondsToSelector:@selector(webkitDidEnterFullScreen)])
+            [listener webkitDidEnterFullScreen];
+        return;
+    }
+    _fullscreenActive = YES;
+
+    _preFullscreenWebViewFrame = [_webView frame];
+    _preFullscreenStatusBarHidden = [[UIApplication sharedApplication] isStatusBarHidden];
+    _bottomBarWasHiddenBeforeFullscreen = _bottomBar ? [_bottomBar isHidden] : YES;
+    [_bottomBar setHidden:YES];
+
+    [[UIApplication sharedApplication] setStatusBarHidden:YES withAnimation:UIStatusBarAnimationFade];
+    CGRect full = [_window bounds];
+    logLine(@"fullscreen: entering, web view %.0f,%.0f %.0fx%.0f -> %.0f,%.0f %.0fx%.0f",
+        _preFullscreenWebViewFrame.origin.x, _preFullscreenWebViewFrame.origin.y,
+        _preFullscreenWebViewFrame.size.width, _preFullscreenWebViewFrame.size.height,
+        full.origin.x, full.origin.y, full.size.width, full.size.height);
+    [UIView animateWithDuration:0.25 animations:^{
+        [_webView setFrame:full];
+    } completion:^(BOOL finished) {
+        (void)finished;
+        if ([listener respondsToSelector:@selector(webkitDidEnterFullScreen)])
+            [listener webkitDidEnterFullScreen];
+    }];
+}
+
+- (void)nativeFullscreenExitWithListener:(id)listener
+{
+    if ([listener respondsToSelector:@selector(webkitWillExitFullScreen)])
+        [listener webkitWillExitFullScreen];
+
+    if (!_fullscreenActive) {
+        if ([listener respondsToSelector:@selector(webkitDidExitFullScreen)])
+            [listener webkitDidExitFullScreen];
+        return;
+    }
+    _fullscreenActive = NO;
+
+    [[UIApplication sharedApplication] setStatusBarHidden:_preFullscreenStatusBarHidden withAnimation:UIStatusBarAnimationFade];
+    logLine(@"fullscreen: exiting, web view back to %.0f,%.0f %.0fx%.0f",
+        _preFullscreenWebViewFrame.origin.x, _preFullscreenWebViewFrame.origin.y,
+        _preFullscreenWebViewFrame.size.width, _preFullscreenWebViewFrame.size.height);
+    CGRect restoreFrame = _preFullscreenWebViewFrame;
+    BOOL restoreBottomBarHidden = _bottomBarWasHiddenBeforeFullscreen;
+    [UIView animateWithDuration:0.25 animations:^{
+        [_webView setFrame:restoreFrame];
+    } completion:^(BOOL finished) {
+        (void)finished;
+        [_bottomBar setHidden:restoreBottomBarHidden];
+        if ([listener respondsToSelector:@selector(webkitDidExitFullScreen)])
+            [listener webkitDidExitFullScreen];
+    }];
+}
+
 // Telling the engine where the window is.
 //
 // Everything on this port is painted into tiles in document coordinates and
@@ -2197,6 +2383,8 @@ static BOOL adoptLocalStorage(NSString *stem, NSString *from, NSString *to)
             [self applyInjection];
         }
     }
+
+    [self installFullscreenSupportIfNeeded];
 
     [self serveChromeDescription];
     // Sampled here because this already runs on the main thread every fraction

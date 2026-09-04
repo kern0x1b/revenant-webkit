@@ -58,7 +58,11 @@ long UTTypeIsDynamic() { report("UTTypeIsDynamic"); return 0; }
 long _AXSEnhanceTextLegibilityEnabled() { report("_AXSEnhanceTextLegibilityEnabled"); return 0; }
 long _CFCachedURLResponseGetMemMappedData() { report("_CFCachedURLResponseGetMemMappedData"); return 0; }
 long _CFCachedURLResponseSetBecameFileBackedCallBackBlock() { report("_CFCachedURLResponseSetBecameFileBackedCallBackBlock"); return 0; }
-long _CFHostIsDomainTopLevel() { report("_CFHostIsDomainTopLevel"); return 0; }
+/* _CFHostIsDomainTopLevel is implemented for real in ios6_compat.c - it is the
+   only thing PublicSuffixStoreCocoa.mm has to decide public suffixes (eTLD/eTLD+1),
+   which document.domain checks, CSP wildcard-source rejection and cookie/storage
+   partitioning all depend on. Stubbed to always return false, every multi-label
+   suffix (co.uk, com.au, ...) reads as an ordinary registrable domain. */
 long _CFRunLoopSetPerCalloutAutoreleasepoolEnabled() { report("_CFRunLoopSetPerCalloutAutoreleasepoolEnabled"); return 0; }
 long _CFURLStorageSessionDisableCache() { report("_CFURLStorageSessionDisableCache"); return 0; }
 long _os_feature_enabled_impl() { report("_os_feature_enabled_impl"); return 0; }

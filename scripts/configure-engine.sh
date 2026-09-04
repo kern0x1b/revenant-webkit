@@ -17,10 +17,10 @@
 # Source tree webkit-254 / build dir build-254, so webkit-trunk, webkit-trunk-jit,
 # build-cocoa and build-jit are all left alone.
 set -eu
-P=$(cd "$(dirname "$0")/.." && pwd); L=$P/third_party/libcxx-armv7; I=$P/third_party/icu-armv7; SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
+P=$(cd "$(dirname "$0")/.." && pwd); L=$P/third_party/libcxx-armv7; I=$P/third_party/icu-armv7; X=$P/third_party/libxslt-armv7; SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
 S=$P/webkit-254; B=$P/build-254-lto
-CXXF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -nostdinc++ -isystem $L/include/c++/v1 -isystem $P/compat/stubs -include $P/compat/stubs/ios6_dispatch_compat.h -include $P/compat/stubs/ios6_class_names.h -D_LIBCPP_DISABLE_AVAILABILITY -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
-CF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -isystem $P/compat/stubs -include $P/compat/stubs/ios6_class_names.h -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
+CXXF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -nostdinc++ -isystem $L/include/c++/v1 -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_dispatch_compat.h -include $P/compat/stubs/ios6_class_names.h -D_LIBCPP_DISABLE_AVAILABILITY -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
+CF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_class_names.h -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
 rm -rf $B && mkdir -p $B
 cmake -S $S -B $B -G Ninja \
   `# ccache: every source file this build touches gets recompiled from scratch` \
@@ -59,16 +59,39 @@ cmake -S $S -B $B -G Ninja \
   `# the engine's own mapped code is ninety one megabytes against a page that` \
   `# uses forty, in a process the system kills at about a hundred and seventy.` \
   -DWEBKIT_IOS6_SIZE_OPTIMIZED=ON \
-  `# MathML renders no part of this or any comparable site, web notifications` \
-  `# have no delivery path on this system, and the fullscreen element API has` \
-  `# no UIKit implementation here. All three are pure code weight.` \
-  -DENABLE_MATHML=OFF -DENABLE_NOTIFICATIONS=OFF -DENABLE_FULLSCREEN_API=OFF \
+  `# MathML was cut alongside notifications/fullscreen as "pure code weight"` \
+  `# under the old single-site framing; upstream default is ON, it is plain` \
+  `# layout code with no platform backend to write, and the goal is no longer` \
+  `# a site-specific engine.` \
+  `#` \
+  `# Fullscreen has a real UIKit bridge now (app/native-ui.m,` \
+  `# installFullscreenSupportIfNeeded) plus a fix for a real upstream gap:` \
+  `# requestFullscreen()'s IDL is EnabledBySetting=FullScreenEnabled, checked` \
+  `# against WebCore::Settings, but WebView.mm's hand-maintained WK1 preference` \
+  `# sync (_preferencesChanged:) never grew a line copying it there - it was` \
+  `# silently unreachable regardless of the WebPreferences value. Patched.` \
+  `#` \
+  `# Web notifications stay off for now - needs the same kind of` \
+  `# WebCore<->UIKit bridge, not yet written.` \
+  -DENABLE_NOTIFICATIONS=OFF -DENABLE_FULLSCREEN_API=ON \
   -DENABLE_WEBGPU=OFF -DENABLE_WEBDRIVER=OFF -DENABLE_WEBINSPECTORUI=OFF \
   -DENABLE_API_TESTS=OFF -DENABLE_MINIBROWSER=OFF \
   -DENABLE_WEB_RTC=OFF -DUSE_LIBWEBRTC=OFF -DENABLE_MEDIA_STREAM=OFF \
   -DENABLE_WEB_CODECS=OFF -DENABLE_COCOA_WEBM_PLAYER=OFF -DENABLE_AV1=OFF \
   \
-  -DENABLE_SPEECH_SYNTHESIS=OFF -DENABLE_WEB_SPEECH=OFF -DENABLE_WEBGL=OFF -DENABLE_GAMEPAD=OFF -DENABLE_PIXEL_FORMAT_RGBA16F=OFF -DENABLE_WIRELESS_PLAYBACK_TARGET=ON -DENABLE_WIRELESS_PLAYBACK_TARGET_AVAILABILITY_API=ON -DENABLE_WEB_CRYPTO=OFF -DENABLE_XSLT=OFF -DENABLE_COMPRESSION_STREAM=OFF -DENABLE_APPLE_PAY=OFF -DENABLE_APPLE_PAY_COUPON_CODE=OFF -DENABLE_APPLE_PAY_SESSION_V3=OFF -DUSE_ANGLE_EGL=OFF \
+  `# The SDK ships only libxslt.tbd (link stub); no headers, no static lib for` \
+  `# armv7. libxslt/libxml2 headers are the actual gap - libxml2's are already` \
+  `# in the SDK and used as-is, libxslt 1.1.43 is vendored under` \
+  `# third_party/libxslt-armv7 (scripts/build-libxslt.sh) and reached via the` \
+  `# -isystem on $X above. Linking still goes through the existing` \
+  `# WEBKIT_ADD_SDK_IMPORTED_LIBRARY(LibXslt::LibXslt libxslt.tbd) in` \
+  `# OptionsCocoa.cmake, same mechanism already used for libxml2/sqlite3/zlib` \
+  `# on this port - the vendored .a's lib dir is added to the linker search` \
+  `# path below only so a future switch to a fully static link (bypassing the` \
+  `# on-device system libxslt, the way OpenSSL bypasses SecureTransport) has` \
+  `# something to point at.` \
+  -DENABLE_XSLT=ON \
+  -DENABLE_SPEECH_SYNTHESIS=OFF -DENABLE_WEB_SPEECH=OFF -DENABLE_WEBGL=OFF -DENABLE_GAMEPAD=OFF -DENABLE_PIXEL_FORMAT_RGBA16F=OFF -DENABLE_WIRELESS_PLAYBACK_TARGET=ON -DENABLE_WIRELESS_PLAYBACK_TARGET_AVAILABILITY_API=ON -DENABLE_COMPRESSION_STREAM=OFF -DENABLE_APPLE_PAY=OFF -DENABLE_APPLE_PAY_COUPON_CODE=OFF -DENABLE_APPLE_PAY_SESSION_V3=OFF -DUSE_ANGLE_EGL=OFF \
   -DENABLE_JIT=ON -DENABLE_C_LOOP=OFF -DENABLE_DFG_JIT=ON -DENABLE_FTL_JIT=OFF \
   `# bmalloc was tried again and does not link on this port: WTF calls` \
   `# bmalloc::classic::*, which only exists in the non-libpas build, and the` \
@@ -93,22 +116,11 @@ cmake -S $S -B $B -G Ninja \
   `# the network: system 1494 and 1550 ms, bmalloc 1690, bmalloc with the` \
   `# scavenger at 2048 ms instead of 512 gives 1626 and 1617. Tuning helps and is` \
   `# not enough - the system allocator stays.` \
-  -DENABLE_SAMPLING_PROFILER=OFF -DUSE_SYSTEM_MALLOC=ON \
+  -DUSE_SYSTEM_MALLOC=ON \
   `# Verified to build and never reachable from these web apps.` \
   -DENABLE_MEDIA_SOURCE=OFF -DENABLE_MEDIA_SOURCE_IN_WORKERS=OFF \
   -DENABLE_ENCRYPTED_MEDIA=OFF -DENABLE_LEGACY_ENCRYPTED_MEDIA=OFF \
   -DENABLE_WEB_AUTHN=OFF -DENABLE_WRITING_TOOLS=OFF -DENABLE_PAYMENT_REQUEST=OFF \
-  `# OptionsIOS.cmake force-defaults these three ON for PORT=IOS even though` \
-  `# WebKitFeatures.cmake's own base default is OFF - upstream aims this override` \
-  `# at real modern iOS, not this port. Verified each still has live, compiled` \
-  `# WebCore sources on this tree (page/PointerLockController.cpp,` \
-  `# Modules/applicationmanifest/ApplicationManifestParser.cpp,` \
-  `# Modules/pictureinpicture/*.cpp), unlike ENABLE_APPLE_PAY* and` \
-  `# ENABLE_WK_WEB_EXTENSIONS/ENABLE_MEMORY_SAMPLER below, which this tree's` \
-  `# SourcesCocoa.txt already comments out or which only exist under` \
-  `# Source/WebKit (built solely when ENABLE_WEBKIT=ON, which we don't use) -` \
-  `# those are no-ops here regardless of their setting, so they are left alone.` \
-  -DENABLE_POINTER_LOCK=OFF -DENABLE_APPLICATION_MANIFEST=OFF -DENABLE_PICTURE_IN_PICTURE_API=OFF \
   `# Tools/CMakeLists.txt builds a standalone ImageDiff CLI for layout-test` \
   `# result comparison whenever ENABLE_TOOLS defaults on (it does, Tools/` \
   `# exists). It is not linked into any of the three shipped frameworks, so` \
@@ -117,7 +129,7 @@ cmake -S $S -B $B -G Ninja \
   -DENABLE_IMAGE_DIFF=OFF \
   -DICU_UC_LIBRARY=$I/lib/libicuuc.a -DICU_I18N_LIBRARY=$I/lib/libicui18n.a \
   -DICU_DATA_LIBRARY=$I/lib/libicudata.a -DICU_INCLUDE_DIR=$I/include \
-  -DCMAKE_SHARED_LINKER_FLAGS="-flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0" \
+  -DCMAKE_SHARED_LINKER_FLAGS="-flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0 -L$X/lib" \
   -DCMAKE_CXX_FLAGS="$CXXF" -DCMAKE_C_FLAGS="$CF" \
   -DCMAKE_OBJCXX_FLAGS="$CXXF -DWEBKIT_IOS6_OBJC_EXTRAS" -DCMAKE_OBJC_FLAGS="$CF -DWEBKIT_IOS6_OBJC_EXTRAS" \
   `# find_library searches the host as well, and on a Mac it finds this` \
