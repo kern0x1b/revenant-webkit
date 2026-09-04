@@ -10,7 +10,7 @@
 #   ./build-app-sys.sh platform/apps/threads.json
 set -eu
 P=$(cd "$(dirname "$0")/.." && pwd)
-B=$P/build-254-lto
+B=${ENGINE_BUILD:-$P/build-254-lto}
 SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
 TC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain
 

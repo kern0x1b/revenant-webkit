@@ -2431,6 +2431,18 @@ typedef enum {
 {
     if (_cancelled)
         return;
+    {
+        static BOOL first;
+        if (!first) {
+            first = YES;
+            FILE *log = fopen("/tmp/native.log", "a");
+            if (log) {
+                fprintf(log, "%.3f [start] first byte of %s\n", CFAbsoluteTimeGetCurrent(),
+                    [[[response URL] absoluteString] UTF8String] ?: "?");
+                fclose(log);
+            }
+        }
+    }
     if ([response statusCode] >= 400) {
         NSURLRequest *sent = [self request];
         NSURL *url = [response URL];

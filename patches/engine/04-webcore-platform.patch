@@ -232,6 +232,473 @@ index bf0777b939..dd6ab91860 100644
  OS_OBJECT_RETURNS_RETAINED nw_resolver_config_t nw_resolver_config_create(void);
  void nw_resolver_config_set_protocol(nw_resolver_config_t, nw_resolver_protocol_t);
  void nw_resolver_config_set_class(nw_resolver_config_t, nw_resolver_class_t);
+diff --git a/Source/WebCore/PAL/pal/text/TextCodecASCIIFastPath.h b/Source/WebCore/PAL/pal/text/TextCodecASCIIFastPath.h
+index a70cd92e56..9cbc120484 100644
+--- a/Source/WebCore/PAL/pal/text/TextCodecASCIIFastPath.h
++++ b/Source/WebCore/PAL/pal/text/TextCodecASCIIFastPath.h
+@@ -27,8 +27,13 @@
+ #pragma once
+ 
+ #include <wtf/StdLibExtras.h>
++#include <wtf/UnalignedAccess.h>
+ #include <wtf/text/ASCIIFastPath.h>
+ 
++#if HAVE(ARM_NEON_INTRINSICS)
++#include <arm_neon.h>
++#endif
++
+ namespace PAL {
+ 
+ template<size_t size> struct ASCIIFastPathByteFiller;
+@@ -75,4 +80,133 @@ inline void copyASCIIMachineWord(std::span<char16_t> destination, std::span<cons
+     ASCIIFastPathByteFiller<sizeof(WTF::MachineWord)>::copy(destination, source);
+ }
+ 
++#if HAVE(ARM_NEON_INTRINSICS)
++
++ALWAYS_INLINE bool vectorContainsOnlyASCII(uint8x16_t value)
++{
++    uint8x8_t folded = vorr_u8(vget_low_u8(value), vget_high_u8(value));
++    return !(vget_lane_u64(vreinterpret_u64_u8(folded), 0) & 0x8080808080808080ULL);
++}
++
++ALWAYS_INLINE void storeASCIIVector(Latin1Character* destination, uint8x16_t value)
++{
++    vst1q_u8(destination, value);
++}
++
++ALWAYS_INLINE void storeASCIIVector(char16_t* destination, uint8x16_t value)
++{
++    auto* output = reinterpret_cast<uint16_t*>(destination);
++    vst1q_u16(output, vmovl_u8(vget_low_u8(value)));
++    vst1q_u16(output + 8, vmovl_u8(vget_high_u8(value)));
++}
++
++#elif CPU(ARM_THUMB2) && CPU(LITTLE_ENDIAN)
++
++ALWAYS_INLINE void storeASCIIWord(Latin1Character* destination, uint32_t word)
++{
++    WTF::unalignedStore<uint32_t>(destination, word);
++}
++
++ALWAYS_INLINE void storeASCIIWord(char16_t* destination, uint32_t word)
++{
++    uint32_t low = word & 0x0000FFFFU;
++    uint32_t high = word >> 16;
++    WTF::unalignedStore<uint32_t>(destination, (low | (low << 8)) & 0x00FF00FFU);
++    WTF::unalignedStore<uint32_t>(destination + 2, (high | (high << 8)) & 0x00FF00FFU);
++}
++
++#endif
++
++// Copies the longest prefix of `source` that contains only bytes below 0x80 into `destination`,
++// widening to 16 bits when that is what the destination holds, and returns the length of that
++// prefix in bytes. The first non-ASCII byte and everything after it is left untouched, so the
++// caller resumes its slow path on exactly the byte the scan stopped at and never re-reads a byte
++// this function already accepted.
++template<typename CharacterType>
++ALWAYS_INLINE size_t copyLeadingASCII(std::span<CharacterType> destination, std::span<const uint8_t> source)
++{
++    static_assert(sizeof(CharacterType) == 1 || sizeof(CharacterType) == 2);
++    ASSERT(destination.size() >= source.size());
++
++WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
++    const uint8_t* input = source.data();
++    CharacterType* output = destination.data();
++    const size_t size = source.size();
++    size_t index = 0;
++
++#if HAVE(ARM_NEON_INTRINSICS)
++    // Four vectors are tested with a single fold and a single transfer out of the vector unit,
++    // which is the expensive part of the test on this core, and the widening store below is one
++    // instruction per half vector instead of eight scalar stores.
++    while (size - index >= 64) {
++        uint8x16_t first = vld1q_u8(input + index);
++        uint8x16_t second = vld1q_u8(input + index + 16);
++        uint8x16_t third = vld1q_u8(input + index + 32);
++        uint8x16_t fourth = vld1q_u8(input + index + 48);
++        if (!vectorContainsOnlyASCII(vorrq_u8(vorrq_u8(first, second), vorrq_u8(third, fourth))))
++            break;
++        storeASCIIVector(output + index, first);
++        storeASCIIVector(output + index + 16, second);
++        storeASCIIVector(output + index + 32, third);
++        storeASCIIVector(output + index + 48, fourth);
++        index += 64;
++    }
++    while (size - index >= 16) {
++        uint8x16_t value = vld1q_u8(input + index);
++        if (!vectorContainsOnlyASCII(value))
++            break;
++        storeASCIIVector(output + index, value);
++        index += 16;
++    }
++#elif CPU(ARM_THUMB2) && CPU(LITTLE_ENDIAN)
++    // No alignment prologue: this core takes word loads and stores at any address, so a run that
++    // starts just after a multi-byte sequence goes straight into the word loop instead of
++    // stepping bytes until the pointer happens to be aligned again.
++    while (size - index >= 16) {
++        uint32_t first = WTF::unalignedLoad<uint32_t>(input + index);
++        uint32_t second = WTF::unalignedLoad<uint32_t>(input + index + 4);
++        uint32_t third = WTF::unalignedLoad<uint32_t>(input + index + 8);
++        uint32_t fourth = WTF::unalignedLoad<uint32_t>(input + index + 12);
++        if ((first | second | third | fourth) & 0x80808080U)
++            break;
++        storeASCIIWord(output + index, first);
++        storeASCIIWord(output + index + 4, second);
++        storeASCIIWord(output + index + 8, third);
++        storeASCIIWord(output + index + 12, fourth);
++        index += 16;
++    }
++    while (size - index >= 4) {
++        uint32_t word = WTF::unalignedLoad<uint32_t>(input + index);
++        if (word & 0x80808080U)
++            break;
++        storeASCIIWord(output + index, word);
++        index += 4;
++    }
++#else
++    // Portable: reach a machine-word boundary with a byte loop, then load whole words. Nothing
++    // here assumes an unaligned load is legal.
++    while (index < size && !WTF::isAlignedToMachineWord(input + index)) {
++        if (!isASCII(input[index]))
++            return index;
++        output[index] = static_cast<CharacterType>(input[index]);
++        ++index;
++    }
++    while (size - index >= sizeof(WTF::MachineWord)) {
++        if (!WTF::containsOnlyASCII<Latin1Character>(*reinterpret_cast<const WTF::MachineWord*>(input + index)))
++            break;
++        for (size_t offset = 0; offset < sizeof(WTF::MachineWord); ++offset)
++            output[index + offset] = static_cast<CharacterType>(input[index + offset]);
++        index += sizeof(WTF::MachineWord);
++    }
++#endif
++
++    while (index < size && isASCII(input[index])) {
++        output[index] = static_cast<CharacterType>(input[index]);
++        ++index;
++    }
++WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
++
++    return index;
++}
++
+ } // namespace PAL
+diff --git a/Source/WebCore/PAL/pal/text/TextCodecICU.cpp b/Source/WebCore/PAL/pal/text/TextCodecICU.cpp
+index 06af94cc29..d65d484853 100644
+--- a/Source/WebCore/PAL/pal/text/TextCodecICU.cpp
++++ b/Source/WebCore/PAL/pal/text/TextCodecICU.cpp
+@@ -240,10 +240,28 @@ String TextCodecICU::decode(std::span<const uint8_t> source, bool flush, bool st
+     int32_t* offsets = nullptr;
+     UErrorCode err = U_ZERO_ERROR;
+ 
++#if defined(WEBKIT_IOS6)
++    // Anything that converts in one buffer fill can be handed straight to the string, which skips
++    // the append into the builder and the reallocating copy that toString() does. Every encoding
++    // ICU handles here is byte-based, so text that happens to be ASCII or Latin-1 in one of them
++    // gets an 8-bit string instead of the 16-bit one the builder always produces.
++    // A count of zero is left to the builder so that an empty decode keeps returning a null string
++    // rather than an empty one.
++    size_t firstCount = decodeToBuffer(target, source, offsets, flush, err);
++    if (firstCount && !needsToGrowToProduceBuffer(err) && U_SUCCESS(err))
++        return StringImpl::create8BitIfPossible(target.first(firstCount));
++
++    result.append(target.first(firstCount));
++    while (needsToGrowToProduceBuffer(err)) {
++        size_t count = decodeToBuffer(target, source, offsets, flush, err);
++        result.append(target.first(count));
++    }
++#else
+     do {
+         size_t count = decodeToBuffer(target, source, offsets, flush, err);
+         result.append(target.first(count));
+     } while (needsToGrowToProduceBuffer(err));
++#endif
+ 
+     if (U_FAILURE(err)) {
+         // flush the converter so it can be reused, and not be bothered by this error.
+diff --git a/Source/WebCore/PAL/pal/text/TextCodecLatin1.cpp b/Source/WebCore/PAL/pal/text/TextCodecLatin1.cpp
+index 6d843fc457..9ed3a92ffc 100644
+--- a/Source/WebCore/PAL/pal/text/TextCodecLatin1.cpp
++++ b/Source/WebCore/PAL/pal/text/TextCodecLatin1.cpp
+@@ -111,47 +111,28 @@ String TextCodecLatin1::decode(std::span<const uint8_t> bytes, bool, bool, bool&
+     String result = String::createUninitialized(bytes.size(), characters);
+ 
+     auto source = bytes;
+-    const uint8_t* alignedEnd = WTF::alignToMachineWord(std::to_address(source.end()));
+     auto destination = characters;
+ 
+     while (!source.empty()) {
+         if (isASCII(source[0])) {
+             // Fast path for ASCII. Most Latin-1 text will be ASCII.
+-            if (WTF::isAlignedToMachineWord(source.data())) {
+-                while (source.data() < alignedEnd) {
+-                    auto chunk = reinterpretCastSpanStartTo<WTF::MachineWord>(source);
+-
+-                    if (!WTF::containsOnlyASCII<Latin1Character>(chunk))
+-                        goto useLookupTable;
+-
+-                    copyASCIIMachineWord(destination, source);
+-                    skip(source, sizeof(WTF::MachineWord));
+-                    skip(destination, sizeof(WTF::MachineWord));
+-                }
+-
+-                if (source.empty())
+-                    break;
+-
+-                // *source may not be ASCII anymore if source moves inside the loop of the fast code path
+-                if (!isASCII(source[0]))
+-                    goto useLookupTable;
+-            }
+-            destination[0] = source[0];
+-        } else {
+-useLookupTable:
+-            auto sourceCharacter = source[0];
+-            if (!isLatin1(latin1ConversionTable[sourceCharacter]))
+-                goto upConvertTo16Bit;
+-
+-            destination[0] = latin1ConversionTable[sourceCharacter];
++            size_t asciiLength = copyLeadingASCII(destination, source);
++            skip(source, asciiLength);
++            skip(destination, asciiLength);
++            if (source.empty())
++                break;
+         }
++        char16_t character = latin1ConversionTable[source[0]];
++        if (!isLatin1(character))
++            goto upConvertTo16Bit;
+ 
++        destination[0] = character;
+         skip(source, 1);
+         skip(destination, 1);
+     }
+ 
+     return result;
+-    
++
+ upConvertTo16Bit:
+     std::span<char16_t> characters16;
+     String result16 = String::createUninitialized(bytes.size(), characters16);
+@@ -159,8 +140,9 @@ upConvertTo16Bit:
+     auto destination16 = characters16;
+ 
+     // Zero extend and copy already processed 8 bit data
+-    for (auto character : characters.first(destination.data() - characters.data()))
+-        consume(destination16) = character;
++    size_t charactersToCopy = destination.data() - characters.data();
++    StringImpl::copyCharacters(destination16.first(charactersToCopy), characters.first(charactersToCopy));
++    skip(destination16, charactersToCopy);
+ 
+     // Handle the character that triggered the 16 bit path
+     consume(destination16) = latin1ConversionTable[consume(source)];
+@@ -168,35 +150,17 @@ upConvertTo16Bit:
+     while (!source.empty()) {
+         if (isASCII(source[0])) {
+             // Fast path for ASCII. Most Latin-1 text will be ASCII.
+-            if (WTF::isAlignedToMachineWord(source.data())) {
+-                while (source.data() < alignedEnd) {
+-                    auto chunk = reinterpretCastSpanStartTo<WTF::MachineWord>(source);
+-                    
+-                    if (!WTF::containsOnlyASCII<Latin1Character>(chunk))
+-                        goto useLookupTable16;
+-                    
+-                    copyASCIIMachineWord(destination16, source);
+-                    skip(source, sizeof(WTF::MachineWord));
+-                    skip(destination16, sizeof(WTF::MachineWord));
+-                }
+-                
+-                if (source.empty())
+-                    break;
+-
+-                // *source may not be ASCII anymore if source moves inside the loop of the fast code path
+-                if (!isASCII(source[0]))
+-                    goto useLookupTable16;
+-            }
+-            destination16[0] = source[0];
+-        } else {
+-useLookupTable16:
+-            destination16[0] = latin1ConversionTable[source[0]];
++            size_t asciiLength = copyLeadingASCII(destination16, source);
++            skip(source, asciiLength);
++            skip(destination16, asciiLength);
++            if (source.empty())
++                break;
+         }
+-        
++        destination16[0] = latin1ConversionTable[source[0]];
+         skip(source, 1);
+         skip(destination16, 1);
+     }
+-    
++
+     return result16;
+ }
+ 
+diff --git a/Source/WebCore/PAL/pal/text/TextCodecSingleByte.cpp b/Source/WebCore/PAL/pal/text/TextCodecSingleByte.cpp
+index a13141bc0b..6545fee092 100644
+--- a/Source/WebCore/PAL/pal/text/TextCodecSingleByte.cpp
++++ b/Source/WebCore/PAL/pal/text/TextCodecSingleByte.cpp
+@@ -253,9 +253,25 @@ static const SingleByteDecodeTable& NODELETE tableForDecoding(TextCodecSingleByt
+ // https://encoding.spec.whatwg.org/#single-byte-encoder
+ static Vector<uint8_t> encode(const SingleByteEncodeTable& table, StringView string, Function<void(char32_t, Vector<uint8_t>&)>&& unencodableHandler)
+ {
+-    // FIXME: Consider adding an ASCII fast path like the one in TextCodecLatin1::decode.
+     Vector<uint8_t> result;
+     result.reserveInitialCapacity(string.length());
++    if (string.is8Bit()) {
++        auto span = string.span8();
++        for (size_t i = 0; i < span.size(); ++i) {
++            uint8_t c = span[i];
++            if (isASCII(c)) {
++                result.append(c);
++                continue;
++            }
++            auto byte = findFirstInSortedPairs(table, c);
++            if (!byte) {
++                unencodableHandler(c, result);
++                continue;
++            }
++            result.append(*byte);
++        }
++        return result;
++    }
+     for (auto codePoint : string.codePoints()) {
+         if (isASCII(codePoint)) {
+             result.append(codePoint);
+diff --git a/Source/WebCore/PAL/pal/text/TextCodecUTF8.cpp b/Source/WebCore/PAL/pal/text/TextCodecUTF8.cpp
+index 53bca4671d..7f2a885a2e 100644
+--- a/Source/WebCore/PAL/pal/text/TextCodecUTF8.cpp
++++ b/Source/WebCore/PAL/pal/text/TextCodecUTF8.cpp
+@@ -314,7 +314,6 @@ String TextCodecUTF8::decode(std::span<const uint8_t> bytes, bool flush, bool st
+     StringBuffer<Latin1Character> buffer(bufferSize);
+ 
+     auto source = bytes;
+-    auto* alignedEnd = WTF::alignToMachineWord(std::to_address(source.end()));
+     auto destination = buffer.span();
+ 
+     do {
+@@ -334,22 +333,11 @@ String TextCodecUTF8::decode(std::span<const uint8_t> bytes, bool flush, bool st
+         while (!source.empty()) {
+             if (isASCII(source[0])) {
+                 // Fast path for ASCII. Most UTF-8 text will be ASCII.
+-                if (WTF::isAlignedToMachineWord(source.data())) {
+-                    while (source.data() < alignedEnd) {
+-                        auto chunk = reinterpretCastSpanStartTo<const WTF::MachineWord>(source);
+-                        if (!WTF::containsOnlyASCII<Latin1Character>(chunk))
+-                            break;
+-                        copyASCIIMachineWord(destination, source);
+-                        skip(source, sizeof(WTF::MachineWord));
+-                        skip(destination, sizeof(WTF::MachineWord));
+-                    }
+-                    if (source.empty())
+-                        break;
+-                    if (!isASCII(source[0]))
+-                        continue;
+-                }
+-                consume(destination) = consume(source);
+-                continue;
++                size_t asciiLength = copyLeadingASCII(destination, source);
++                skip(source, asciiLength);
++                skip(destination, asciiLength);
++                if (source.empty())
++                    break;
+             }
+             auto count = nonASCIISequenceLength(source[0]);
+             int character;
+@@ -373,6 +361,15 @@ String TextCodecUTF8::decode(std::span<const uint8_t> bytes, bool flush, bool st
+ 
+                 goto upConvertTo16Bit;
+             }
++#if defined(WEBKIT_IOS6)
++            // A leading byte order mark is the only non-Latin-1 character that produces no output
++            // at all. Dropping it here keeps a document that starts with one on the 8-bit path
++            // instead of storing every following ASCII byte in two bytes.
++            if (character == byteOrderMark && destination.data() == buffer.characters() && std::exchange(m_shouldStripByteOrderMark, false)) {
++                skip(source, count);
++                continue;
++            }
++#endif
+             if (!isLatin1(character))
+                 goto upConvertTo16Bit;
+ 
+@@ -390,6 +387,13 @@ String TextCodecUTF8::decode(std::span<const uint8_t> bytes, bool flush, bool st
+         sawError = true;
+         return { };
+     }
++#if defined(WEBKIT_IOS6)
++    // String::adopt keeps the whole allocation, so a decode that shrank the input holds the
++    // slack for as long as the string lives. Past a quarter of the buffer it is worth one copy
++    // to hand back an exactly sized string, which is also a single allocation rather than two.
++    if (size_t slack = bufferSize - buffer.length(); slack >= 4096 && slack >= bufferSize / 4)
++        return String { buffer.span() };
++#endif
+     return String::adopt(WTF::move(buffer));
+ 
+ upConvertTo16Bit:
+@@ -398,12 +402,18 @@ upConvertTo16Bit:
+     auto destination16 = buffer16.span();
+ 
+     // Copy the already converted characters
+-    auto converted8 = buffer.span();
+     size_t charactersToCopy = destination.data() - buffer.characters();
+-    for (size_t i = 0; i < charactersToCopy; ++i)
+-        destination16[i] = converted8[i];
++    StringImpl::copyCharacters(destination16.first(charactersToCopy), buffer.span().first(charactersToCopy));
+     skip(destination16, charactersToCopy);
+ 
++#if defined(WEBKIT_IOS6)
++    // Nothing below reads the 8-bit buffer again, and it is as large as the input. Releasing it
++    // here means the rest of the decode holds two bytes per input byte instead of three.
++    {
++        auto releasedBuffer = buffer.release();
++    }
++#endif
++
+     do {
+         if (m_partialSequenceSize) {
+             // Explicitly copy destination and source pointers to avoid taking pointers to the
+@@ -419,22 +429,11 @@ upConvertTo16Bit:
+         while (!source.empty()) {
+             if (isASCII(source[0])) {
+                 // Fast path for ASCII. Most UTF-8 text will be ASCII.
+-                if (WTF::isAlignedToMachineWord(source.data())) {
+-                    while (source.data() < alignedEnd) {
+-                        auto chunk = reinterpretCastSpanStartTo<const WTF::MachineWord>(source);
+-                        if (!WTF::containsOnlyASCII<Latin1Character>(chunk))
+-                            break;
+-                        copyASCIIMachineWord(destination16, source);
+-                        skip(source, sizeof(WTF::MachineWord));
+-                        skip(destination16, sizeof(WTF::MachineWord));
+-                    }
+-                    if (source.empty())
+-                        break;
+-                    if (!isASCII(source[0]))
+-                        continue;
+-                }
+-                consume(destination16) = consume(source);
+-                continue;
++                size_t asciiLength = copyLeadingASCII(destination16, source);
++                skip(source, asciiLength);
++                skip(destination16, asciiLength);
++                if (source.empty())
++                    break;
+             }
+             auto count = nonASCIISequenceLength(source[0]);
+             int character;
+@@ -475,6 +474,13 @@ upConvertTo16Bit:
+         sawError = true;
+         return { };
+     }
++#if defined(WEBKIT_IOS6)
++    // The 16-bit buffer is two bytes per input byte, so a multi-byte document leaves far more
++    // slack here than on the 8-bit path: three-byte sequences waste four bytes each. String::adopt
++    // would keep that for the lifetime of the string.
++    if (size_t slack = bufferSize - buffer16.length(); slack >= 2048 && slack >= bufferSize / 4)
++        return String { buffer16.span() };
++#endif
+     return String::adopt(WTF::move(buffer16));
+ }
+ 
 diff --git a/Source/WebCore/platform/LocalizedStrings.cpp b/Source/WebCore/platform/LocalizedStrings.cpp
 index a46b5878ee..8b2befc810 100644
 --- a/Source/WebCore/platform/LocalizedStrings.cpp
@@ -276,8 +743,106 @@ index f9c8c3d3c0..2d8d2b77f6 100644
          return RemoteCommandListenerCocoa::create(client);
  #elif USE(GLIB) && ENABLE(MEDIA_SESSION)
          return RemoteCommandListenerGLib::create(client);
+diff --git a/Source/WebCore/platform/SharedBuffer.cpp b/Source/WebCore/platform/SharedBuffer.cpp
+index a75d340020..fc076edbbb 100644
+--- a/Source/WebCore/platform/SharedBuffer.cpp
++++ b/Source/WebCore/platform/SharedBuffer.cpp
+@@ -260,8 +260,7 @@ Ref<FragmentedSharedBuffer> FragmentedSharedBuffer::copy() const
+ 
+ void FragmentedSharedBuffer::forEachSegment(NOESCAPE const Function<void(std::span<const uint8_t>)>& apply) const
+ {
+-    auto segments = m_segments;
+-    for (auto& segment : segments)
++    for (auto& segment : m_segments)
+         segment.segment->iterate(apply);
+ }
+ 
+@@ -653,6 +652,7 @@ Ref<FragmentedSharedBuffer> SharedBufferBuilder::createBuffer() const
+ void SharedBufferBuilder::appendDataSegment(Ref<DataSegment>&& segment)
+ {
+     m_state = State::Stale;
++    m_buffer = nullptr;
+     size_t size = segment->size();
+     m_segments.append(SharedBuffer::DataSegmentVectorEntry { m_size, WTF::move(segment) });
+     m_size += size;
+@@ -661,6 +661,7 @@ void SharedBufferBuilder::appendDataSegment(Ref<DataSegment>&& segment)
+ void SharedBufferBuilder::append(const FragmentedSharedBuffer& data)
+ {
+     m_state = State::Stale;
++    m_buffer = nullptr;
+     m_segments.appendContainerWithMapping(data.m_segments, [&](auto& element) {
+         SharedBuffer::DataSegmentVectorEntry entry { m_size, element.segment.copyRef() };
+         m_size += element.segment->size();
+@@ -684,6 +685,7 @@ void SharedBufferBuilder::append(Vector<uint8_t>&& data)
+ void SharedBufferBuilder::appendSpans(const Vector<std::span<const uint8_t>>& spans)
+ {
+     m_state = State::Stale;
++    m_buffer = nullptr;
+     m_segments.appendContainerWithMapping(spans, [&](auto& span) {
+         SharedBuffer::DataSegmentVectorEntry entry { m_size, DataSegment::create(span) };
+         m_size += span.size();
+diff --git a/Source/WebCore/platform/ThreadTimers.cpp b/Source/WebCore/platform/ThreadTimers.cpp
+index 08ef6a3e60..67d57958ad 100644
+--- a/Source/WebCore/platform/ThreadTimers.cpp
++++ b/Source/WebCore/platform/ThreadTimers.cpp
+@@ -62,6 +62,7 @@ void ThreadTimers::setSharedTimer(SharedTimer* sharedTimer)
+         sharedTimer->stop();
+         m_pendingSharedTimerFireTime = MonotonicTime { };
+     }
++    m_sharedTimerIsStopped = true;
+     
+     m_sharedTimer = sharedTimer;
+     
+@@ -83,10 +84,19 @@ void ThreadTimers::updateSharedTimer()
+     ASSERT(m_timerHeap.isEmpty() || m_timerHeap.first()->hasTimer());
+ 
+     if (m_firingTimers || m_timerHeap.isEmpty()) {
++        if (!m_pendingSharedTimerFireTime && m_sharedTimerIsStopped)
++            return;
+         m_pendingSharedTimerFireTime = MonotonicTime { };
++        m_sharedTimerIsStopped = true;
+         protect(m_sharedTimer)->stop();
+     } else {
+         MonotonicTime nextFireTime = m_timerHeap.first()->time;
++        // Every start, stop or retime of any timer lands here, but only a change
++        // to the earliest one changes what the shared timer has to do. Rearming
++        // it for the time it is already armed for costs a MonotonicTime::now(),
++        // a run loop timer teardown and a fresh one for no effect at all.
++        if (m_pendingSharedTimerFireTime == nextFireTime && !m_sharedTimerIsStopped)
++            return;
+         MonotonicTime currentMonotonicTime = MonotonicTime::now();
+         if (m_pendingSharedTimerFireTime) {
+             // No need to restart the timer if both the pending fire time and the new fire time are in the past.
+@@ -94,6 +104,7 @@ void ThreadTimers::updateSharedTimer()
+                 return;
+         }
+         m_pendingSharedTimerFireTime = nextFireTime;
++        m_sharedTimerIsStopped = false;
+         protect(m_sharedTimer)->setFireInterval(std::max(nextFireTime - currentMonotonicTime, 0_s));
+     }
+ }
+@@ -155,6 +166,7 @@ void ThreadTimers::fireTimersInNestedEventLoop()
+     if (CheckedPtr sharedTimer = m_sharedTimer) {
+         sharedTimer->invalidate();
+         m_pendingSharedTimerFireTime = MonotonicTime { };
++        m_sharedTimerIsStopped = true;
+     }
+ 
+     updateSharedTimer();
+diff --git a/Source/WebCore/platform/ThreadTimers.h b/Source/WebCore/platform/ThreadTimers.h
+index 1747dc8c19..11739c0b6e 100644
+--- a/Source/WebCore/platform/ThreadTimers.h
++++ b/Source/WebCore/platform/ThreadTimers.h
+@@ -73,6 +73,7 @@ private:
+     CheckedPtr<SharedTimer> m_sharedTimer; // External object, can be a run loop on a worker thread. Normally set/reset by worker thread.
+     bool m_firingTimers { false };
+     bool m_shouldBreakFireLoopForRenderingUpdate { false };
++    bool m_sharedTimerIsStopped { true };
+     unsigned m_currentHeapInsertionOrder { 0 };
+     MonotonicTime m_pendingSharedTimerFireTime;
+ };
 diff --git a/Source/WebCore/platform/Timer.cpp b/Source/WebCore/platform/Timer.cpp
-index bd18b47595..7688be1f83 100644
+index bd18b47595..717e046117 100644
 --- a/Source/WebCore/platform/Timer.cpp
 +++ b/Source/WebCore/platform/Timer.cpp
 @@ -25,6 +25,7 @@
@@ -325,7 +890,152 @@ index bd18b47595..7688be1f83 100644
  #endif
  }
  
-@@ -502,7 +528,7 @@ void TimerBase::updateHeapIfNeeded(MonotonicTime oldTime)
+@@ -350,42 +376,105 @@ inline void TimerBase::checkConsistency() const
+         checkHeapIndex();
+ }
+ 
++// The heap is a plain binary heap over TimerHeapLessThanFunction, which orders
++// by (fire time, insertion order) and so has a single well-defined minimum
++// whatever permutation the rest of the array is in. Sifting one element by hand
++// costs one pass; the standard-library formulation had to reach every removal
++// and every key increase through push_heap plus pop_heap, which is two or three
++// passes and, on a page holding hundreds of timers, two or three times the
++// element moves - each of which writes back a heap index.
++static inline void swapHeapItems(ThreadTimerHeap& heap, unsigned a, unsigned b)
++{
++    heap[a].swap(heap[b]);
++    heap[a]->setHeapIndex(a);
++    heap[b]->setHeapIndex(b);
++}
++
++static unsigned heapSiftUp(ThreadTimerHeap& heap, unsigned index)
++{
++    TimerHeapLessThanFunction lessThan;
++    while (index) {
++        unsigned parentIndex = (index - 1) / 2;
++        if (!lessThan(heap[parentIndex], heap[index]))
++            break;
++        swapHeapItems(heap, parentIndex, index);
++        index = parentIndex;
++    }
++    return index;
++}
++
++static unsigned heapSiftDown(ThreadTimerHeap& heap, unsigned index)
++{
++    TimerHeapLessThanFunction lessThan;
++    unsigned size = static_cast<unsigned>(heap.size());
++    for (;;) {
++        unsigned childIndex = 2 * index + 1;
++        if (childIndex >= size)
++            break;
++        if (childIndex + 1 < size && lessThan(heap[childIndex], heap[childIndex + 1]))
++            ++childIndex;
++        if (!lessThan(heap[index], heap[childIndex]))
++            break;
++        swapHeapItems(heap, index, childIndex);
++        index = childIndex;
++    }
++    return index;
++}
++
++// Leaves the heap valid and one element shorter. The removed item keeps whatever
++// heap index it had; every caller either drops it or marks it as not in the heap.
++static void heapRemoveAtIndex(ThreadTimerHeap& heap, unsigned index)
++{
++    unsigned lastIndex = static_cast<unsigned>(heap.size()) - 1;
++    if (index != lastIndex) {
++        swapHeapItems(heap, index, lastIndex);
++        heap.removeLast();
++        // The element that filled the hole came from the bottom of the heap, so
++        // it can belong either above or below its new place, but never both.
++        if (heapSiftUp(heap, index) == index)
++            heapSiftDown(heap, index);
++    } else
++        heap.removeLast();
++}
++
+ void TimerBase::heapDecreaseKey()
+ {
+     ASSERT(static_cast<bool>(nextFireTime()));
+     RefPtr item = m_heapItemWithBitfields.pointer();
+     ASSERT(item);
+     checkHeapIndex();
+-    auto heapData = item->timerHeap().mutableSpan();
+-    std::push_heap(TimerHeapIterator(heapData, 0), TimerHeapIterator(heapData, item->heapIndex() + 1), TimerHeapLessThanFunction());
++    heapSiftUp(item->timerHeap(), item->heapIndex());
+     checkHeapIndex();
+ }
+ 
+ inline void TimerBase::heapDelete()
+ {
+     ASSERT(!static_cast<bool>(nextFireTime()));
+-    heapPop();
+     RefPtr item = m_heapItemWithBitfields.pointer();
+     ASSERT(item);
+-    item->timerHeap().removeLast();
++    heapRemoveAtIndex(item->timerHeap(), item->heapIndex());
+     item->setNotInHeap();
+ }
+ 
+ void TimerBase::heapDeleteMin()
+ {
+     ASSERT(!static_cast<bool>(nextFireTime()));
+-    heapPopMin();
+     RefPtr item = m_heapItemWithBitfields.pointer();
+     ASSERT(item);
+-    item->timerHeap().removeLast();
++    ASSERT(item->isFirstInHeap());
++    heapRemoveAtIndex(item->timerHeap(), 0);
+     item->setNotInHeap();
+ }
+ 
+ inline void TimerBase::heapIncreaseKey()
+ {
+     ASSERT(static_cast<bool>(nextFireTime()));
+-    heapPop();
+-    heapDecreaseKey();
++    RefPtr item = m_heapItemWithBitfields.pointer();
++    ASSERT(item);
++    checkHeapIndex();
++    // A later fire time can only move an item away from the front of the heap.
++    heapSiftDown(item->timerHeap(), item->heapIndex());
++    checkHeapIndex();
+ }
+ 
+ inline void TimerBase::heapInsert()
+@@ -399,18 +488,6 @@ inline void TimerBase::heapInsert()
+     heapDecreaseKey();
+ }
+ 
+-inline void TimerBase::heapPop()
+-{
+-    RefPtr item = m_heapItemWithBitfields.pointer();
+-    ASSERT(item);
+-    // Temporarily force this timer to have the minimum key so we can pop it.
+-    MonotonicTime fireTime = item->time;
+-    item->time = -MonotonicTime::infinity();
+-    heapDecreaseKey();
+-    heapPopMin();
+-    item->time = fireTime;
+-}
+-
+ void TimerBase::heapPopMin()
+ {
+     RefPtr item = m_heapItemWithBitfields.pointer();
+@@ -427,10 +504,7 @@ void TimerBase::heapPopMin()
+ void TimerBase::heapDeleteNullMin(ThreadTimerHeap& heap)
+ {
+     RELEASE_ASSERT(!heap.first()->hasTimer());
+-    heap.first()->time = -MonotonicTime::infinity();
+-    auto heapData = heap.mutableSpan();
+-    std::pop_heap(TimerHeapIterator(heapData, 0), TimerHeapIterator(heapData, heap.size()), TimerHeapLessThanFunction());
+-    heap.removeLast();
++    heapRemoveAtIndex(heap, 0);
+ }
+ 
+ static inline bool NODELETE parentHeapPropertyHolds(const TimerBase* current, const ThreadTimerHeap& heap, unsigned currentIndex)
+@@ -502,7 +576,7 @@ void TimerBase::updateHeapIfNeeded(MonotonicTime oldTime)
  void TimerBase::setNextFireTime(MonotonicTime newTime)
  {
  #if USE(WEB_THREAD)
@@ -334,6 +1044,59 @@ index bd18b47595..7688be1f83 100644
  #endif
      ASSERT(canCurrentThreadIDAccessThreadLocalData(m_creationThreadID));
      bool timerHasBeenDeleted = m_unalignedNextFireTime.isNaN();
+@@ -520,7 +594,10 @@ void TimerBase::setNextFireTime(MonotonicTime newTime)
+         newTime = alignment->alignedFireTime(hasReachedMaxNestingLevel(), newTime);
+ 
+     if (oldTime != newTime) {
+-        auto newOrder = threadGlobalDataSingleton().threadTimers().nextHeapInsertionCount();
++        // One thread-local lookup, not two: this runs on every setTimeout,
++        // clearTimeout, timer fire and internal timer restart.
++        auto& threadTimers = threadGlobalDataSingleton().threadTimers();
++        auto newOrder = threadTimers.nextHeapInsertionCount();
+ 
+         RefPtr item = m_heapItemWithBitfields.pointer();
+         if (!item) {
+@@ -537,7 +614,7 @@ void TimerBase::setNextFireTime(MonotonicTime newTime)
+         bool isFirstTimerInHeap = item->isFirstInHeap();
+ 
+         if (wasFirstTimerInHeap || isFirstTimerInHeap)
+-            threadGlobalDataSingleton().threadTimers().updateSharedTimer();
++            threadTimers.updateSharedTimer();
+     }
+ 
+     checkConsistency();
+diff --git a/Source/WebCore/platform/Timer.h b/Source/WebCore/platform/Timer.h
+index 5aa864da61..97de787d2c 100644
+--- a/Source/WebCore/platform/Timer.h
++++ b/Source/WebCore/platform/Timer.h
+@@ -115,7 +115,6 @@ private:
+     void heapDeleteMin();
+     void heapIncreaseKey();
+     void heapInsert();
+-    void heapPop();
+     void heapPopMin();
+     static void heapDeleteNullMin(ThreadTimerHeap&);
+ 
+@@ -191,8 +190,17 @@ private:
+ 
+ inline void TimerBase::stop()
+ {
+-    if (m_heapItemWithBitfields.pointer())
+-        stopSlowCase();
++    // A timer that has run once keeps its heap item for reuse, so testing the
++    // item alone sent every stop() of an already-stopped timer through
++    // setNextFireTime(). An inactive timer has a zero fire time and a zero
++    // unaligned fire time, so the only thing the slow case would still do to it
++    // is clear the repeat interval.
++    if (auto* item = m_heapItemWithBitfields.pointer()) {
++        if (item->time)
++            stopSlowCase();
++        else
++            m_repeatInterval = 0_s;
++    }
+ }
+ 
+ inline bool TimerBase::isActive() const
 diff --git a/Source/WebCore/platform/audio/ios/AudioSessionIOS.mm b/Source/WebCore/platform/audio/ios/AudioSessionIOS.mm
 index 9b8897c810..b621e0cc53 100644
 --- a/Source/WebCore/platform/audio/ios/AudioSessionIOS.mm
@@ -534,37 +1297,235 @@ index 8412aba028..74226a9e78 100644
  SOFT_LINK_FUNCTION_FOR_HEADER(WebCore, VideoToolbox, VTDecompressionSessionDecodeFrameWithMultiImageCapableOutputHandler, OSStatus, (VTDecompressionSessionRef session, CMSampleBufferRef sampleBuffer, VTDecodeFrameFlags decodeFlags, VTDecodeInfoFlags *infoFlagsOut, VTDecompressionMultiImageCapableOutputHandler multiImageCapableOutputHandler), (session, sampleBuffer, decodeFlags, infoFlagsOut, multiImageCapableOutputHandler))
  #define VTDecompressionSessionDecodeFrameWithMultiImageCapableOutputHandler softLink_VideoToolbox_VTDecompressionSessionDecodeFrameWithMultiImageCapableOutputHandler
  SOFT_LINK_FUNCTION_FOR_HEADER(WebCore, VideoToolbox, VTDecompressionSessionDecodeFrame, OSStatus, (VTDecompressionSessionRef session, CMSampleBufferRef sampleBuffer, VTDecodeFrameFlags decodeFlags, void* sourceFrameRefCon, VTDecodeInfoFlags* infoFlagsOut), (session, sampleBuffer, decodeFlags, sourceFrameRefCon, infoFlagsOut))
+diff --git a/Source/WebCore/platform/graphics/BitmapImage.cpp b/Source/WebCore/platform/graphics/BitmapImage.cpp
+index 2f3e09ccb4..efbf53068d 100644
+--- a/Source/WebCore/platform/graphics/BitmapImage.cpp
++++ b/Source/WebCore/platform/graphics/BitmapImage.cpp
+@@ -100,6 +100,22 @@ ImageDrawResult BitmapImage::draw(GraphicsContext& context, const FloatRect& des
+ 
+     auto scaleFactorForDrawing = context.scaleFactorForDrawing(destinationRect, adjustedSourceRect);
+     auto sizeForDrawing = expandedIntSize(sourceSize * scaleFactorForDrawing);
++
++#if defined(WEBKIT_IOS6)
++    // The frame cache keys on this size and replaces the frame whenever a draw asks
++    // for a larger one, so a growing destination rect would re-decode every paint.
++    // Snap up to an eighth of the image so one frame serves a band of drawn sizes.
++    if (!sourceSize.isEmpty()) {
++        int quantum = std::max(1, sourceSize.maxDimension() / 8);
++        auto quantize = [quantum](int value, int limit) {
++            if (value >= limit)
++                return limit;
++            return std::min(limit, ((value + quantum - 1) / quantum) * quantum);
++        };
++        sizeForDrawing = { quantize(sizeForDrawing.width(), sourceSize.width()), quantize(sizeForDrawing.height(), sourceSize.height()) };
++    }
++#endif
++
+     auto subsamplingLevel =  m_source->subsamplingLevelForScaleFactor(context, scaleFactorForDrawing, options.allowImageSubsampling());
+     auto preferredDecodingDestination = m_source->preferredDecodingDestination(context, options);
+ 
+@@ -123,8 +139,19 @@ ImageDrawResult BitmapImage::draw(GraphicsContext& context, const FloatRect& des
+     else {
+         // adjustedSourceRect is in the coordinates of the unsubsampled image, so map it to the subsampled image.
+         auto imageSize = nativeImage->size();
++#if defined(WEBKIT_IOS6)
++        // Scaling a full-cover source rect lands a fraction of a pixel off the frame
++        // bounds, and GraphicsContextCG then saves state and clips on every draw.
++        if (imageSize != sourceSize) {
++            if (adjustedSourceRect == FloatRect { { }, FloatSize { sourceSize } })
++                adjustedSourceRect = FloatRect { { }, FloatSize { imageSize } };
++            else
++                adjustedSourceRect.scale(imageSize / sourceSize);
++        }
++#else
+         if (imageSize != sourceSize)
+             adjustedSourceRect.scale(imageSize / sourceSize);
++#endif
+ 
+         auto orientation = options.orientation();
+         if (orientation == ImageOrientation::Orientation::FromImage)
 diff --git a/Source/WebCore/platform/graphics/BitmapImageDescriptor.cpp b/Source/WebCore/platform/graphics/BitmapImageDescriptor.cpp
-index 7b73c38ad2..009b4e48b9 100644
+index 7b73c38ad2..66d39018d6 100644
 --- a/Source/WebCore/platform/graphics/BitmapImageDescriptor.cpp
 +++ b/Source/WebCore/platform/graphics/BitmapImageDescriptor.cpp
-@@ -238,10 +238,10 @@ SubsamplingLevel BitmapImageDescriptor::maximumSubsamplingLevel() const
+@@ -188,6 +188,11 @@ bool BitmapImageDescriptor::hasHDRGainMap() const
+ 
+ bool BitmapImageDescriptor::hasHDRColorSpace() const
+ {
++#if defined(WEBKIT_IOS6)
++    // No colour space this ImageIO produces uses the ITU-R 2100 transfer functions,
++    // and the path below answers by decoding the whole frame and discarding it.
++    return false;
++#else
+     if (m_cachedFlags.contains(CachedFlag::ColorSpace))
+         return m_colorSpace.usesITUR_2100TF();
+ 
+@@ -200,6 +205,7 @@ bool BitmapImageDescriptor::hasHDRColorSpace() const
+     // Async image decoding should destroy this frame and treat it as if it did not exist.
+     m_source->destroyNativeImageAtIndex(m_source->primaryFrameIndex());
+     return hasHDRColorSpace;
++#endif
+ }
+ 
+ String BitmapImageDescriptor::uti() const
+@@ -238,6 +244,12 @@ SubsamplingLevel BitmapImageDescriptor::maximumSubsamplingLevel() const
      if (!isSizeAvailable())
          return SubsamplingLevel::Default;
  
--    // FIXME: this value was chosen to be appropriate for Apple ports since the image
--    // subsampling is only enabled by default on Apple ports. Choose a different value
--    // if image subsampling is enabled on other platform.
--    static constexpr int maximumImageAreaBeforeSubsampling = 5 * 1024 * 1024;
-+    // This is the floor on how far subsamplingLevelForScaleFactor() is allowed to
-+    // go. Nothing on a 640x960 panel can show more than a screenful of pixels at
-+    // once, so a decoded frame larger than that is memory this device does not have.
-+    static constexpr int maximumImageAreaBeforeSubsampling = 640 * 960;
-     auto level = SubsamplingLevel::First;
++#if defined(WEBKIT_IOS6)
++    // subsamplingLevelForScaleFactor() rounds down, so the level it picks is never
++    // coarser than the size the frame is painted at; an area cap on top of that only
++    // forbids reductions already known to be invisible.
++    auto level = SubsamplingLevel::Last;
++#else
+     // FIXME: this value was chosen to be appropriate for Apple ports since the image
+     // subsampling is only enabled by default on Apple ports. Choose a different value
+     // if image subsampling is enabled on other platform.
+@@ -249,6 +261,7 @@ SubsamplingLevel BitmapImageDescriptor::maximumSubsamplingLevel() const
+         if (area < maximumImageAreaBeforeSubsampling)
+             break;
+     }
++#endif
  
-     for (; level < SubsamplingLevel::Last; ++level) {
-@@ -269,7 +269,10 @@ SubsamplingLevel BitmapImageDescriptor::subsamplingLevelForScaleFactor(GraphicsC
+     m_maximumSubsamplingLevel = level;
+     m_cachedFlags.add(CachedFlag::MaximumSubsamplingLevel);
+@@ -269,7 +282,12 @@ SubsamplingLevel BitmapImageDescriptor::subsamplingLevelForScaleFactor(GraphicsC
      if (!(scale > 0 && scale <= 1))
          return SubsamplingLevel::Default;
  
--    int result = std::ceil(std::log2(1 / scale));
-+    // Rounding up picks a level whose frame is smaller than the image is drawn,
-+    // which is visible as softening. Round down so the frame is never smaller
-+    // than the size it will be painted at.
++#if defined(WEBKIT_IOS6)
++    // Rounding up picks a frame smaller than the drawn size, which shows as softening.
 +    int result = std::floor(std::log2(1 / scale));
++#else
+     int result = std::ceil(std::log2(1 / scale));
++#endif
      return static_cast<SubsamplingLevel>(std::min(result, static_cast<int>(maximumSubsamplingLevel())));
  #else
      UNUSED_PARAM(context);
+diff --git a/Source/WebCore/platform/graphics/BitmapImageSource.cpp b/Source/WebCore/platform/graphics/BitmapImageSource.cpp
+index e4fd045758..d9a704b746 100644
+--- a/Source/WebCore/platform/graphics/BitmapImageSource.cpp
++++ b/Source/WebCore/platform/graphics/BitmapImageSource.cpp
+@@ -535,8 +535,16 @@ const ImageFrame& BitmapImageSource::frameAtIndexCacheIfNeeded(unsigned index, c
+     auto& frame = m_frames[index];
+     auto subsamplingLevelValue = subsamplingLevel.value_or(frame.subsamplingLevel());
+ 
++#if defined(WEBKIT_IOS6)
++    // ImageDecoderCG records frame metadata for the encoded image, not for the
++    // reduction it was decoded at, so a complete frame answers whatever level is
++    // asked about. Refetching would destroy the frame the following draw wants.
++    if (frame.isComplete())
++        return frame;
++#else
+     if (frame.isComplete() && subsamplingLevelValue == frame.subsamplingLevel())
+         return frame;
++#endif
+ 
+     destroyNativeImageAtIndex(index);
+ 
+@@ -600,6 +608,26 @@ Expected<Ref<NativeImage>, DecodingStatus> BitmapImageSource::nativeImageAtIndex
+     if (auto compatibleDecodingDestination = compatibleDecodingDestinationWithOptionsAtIndex(index, subsamplingLevel, options))
+         decodingDestination = *compatibleDecodingDestination;
+     else {
++#if defined(WEBKIT_IOS6)
++        std::optional<IntSize> sizeForDrawing;
++        if (!isAnimated())
++            sizeForDrawing = options.sizeForDrawing();
++
++        auto decodingOptions = DecodingOptions { DecodingMode::Synchronous, decodingDestination, sizeForDrawing };
++
++        auto result = protect(m_decoder)->createNativeImageAtIndex(index, subsamplingLevel, decodingOptions);
++        if (!result)
++            return makeUnexpected(DecodingStatus::Invalid);
++
++        Ref nativeImage = WTF::move(std::get<Ref<NativeImage>>(*result));
++        decodingDestination = std::get<DecodingDestination>(*result);
++
++        if (sizeForDrawing && nativeImage->size() == protect(m_decoder)->frameSizeAtIndex(index, SubsamplingLevel::Default))
++            sizeForDrawing = std::nullopt;
++
++        decodingOptions = { DecodingMode::Synchronous, decodingDestination, sizeForDrawing };
++        cacheNativeImageAtIndex(index, subsamplingLevel, decodingOptions, WTF::move(nativeImage));
++#else
+         auto decodingOptions = DecodingOptions { DecodingMode::Synchronous, decodingDestination };
+ 
+         auto result = protect(m_decoder)->createNativeImageAtIndex(index, subsamplingLevel, decodingOptions);
+@@ -611,6 +639,7 @@ Expected<Ref<NativeImage>, DecodingStatus> BitmapImageSource::nativeImageAtIndex
+ 
+         decodingOptions = { DecodingMode::Synchronous, decodingDestination };
+         cacheNativeImageAtIndex(index, subsamplingLevel, decodingOptions, WTF::move(nativeImage));
++#endif
+     }
+ 
+     if (RefPtr nativeImage = frameAtIndex(index).nativeImage(decodingDestination))
+diff --git a/Source/WebCore/platform/graphics/ComplexTextController.cpp b/Source/WebCore/platform/graphics/ComplexTextController.cpp
+index 7e4690df77..8e32f3ee66 100644
+--- a/Source/WebCore/platform/graphics/ComplexTextController.cpp
++++ b/Source/WebCore/platform/graphics/ComplexTextController.cpp
+@@ -403,7 +403,13 @@ void ComplexTextController::collectComplexTextRuns()
+     bool isSmallCaps = false;
+     bool nextIsSmallCaps = false;
+ 
+-    auto capitalizedBase = capitalized(baseCharacter);
++    // capitalized() is two ICU property lookups per cluster and shouldSynthesizeSmallCaps()
++    // discards it outright unless small caps are in play.
++    bool mayNeedCapitalization = fontVariantCaps != FontVariantCaps::Normal;
++
++    std::optional<char32_t> capitalizedBase;
++    if (mayNeedCapitalization)
++        capitalizedBase = capitalized(baseCharacter);
+     if (shouldSynthesizeSmallCaps(dontSynthesizeSmallCaps, nextFont.get(), baseCharacter, capitalizedBase, fontVariantCaps, engageAllSmallCapsProcessing)) {
+         synthesizedFont = nextFont->noSynthesizableFeaturesFont();
+         smallSynthesizedFont = synthesizedFont->smallCapsFont(m_fontCascade->fontDescription());
+@@ -447,7 +453,7 @@ void ComplexTextController::collectComplexTextRuns()
+             nextFont = halfWidthFont ? halfWidthFont : nextFont;
+         }
+ 
+-        capitalizedBase = capitalized(baseCharacter);
++        capitalizedBase = mayNeedCapitalization ? capitalized(baseCharacter) : std::optional<char32_t> { };
+         if (!synthesizedFont && shouldSynthesizeSmallCaps(dontSynthesizeSmallCaps, nextFont.get(), baseCharacter, capitalizedBase, fontVariantCaps, engageAllSmallCapsProcessing)) {
+             // Rather than synthesize each character individually, we should synthesize the entire "run" if any character requires synthesis.
+             synthesizedFont = nextFont->noSynthesizableFeaturesFont();
+@@ -706,6 +712,8 @@ void ComplexTextController::adjustGlyphsAndAdvances()
+     bool runForbidsRightExpansion = m_run->expansionBehavior().right == ExpansionBehavior::Behavior::Forbid;
+ 
+     TextSpacing::CharacterClass previousCharacterClass = m_textSpacingState.lastCharacterClassFromPreviousRun;
++    const auto& textAutoSpace = m_fontCascade->textAutospace();
++    bool hasAutospace = !textAutoSpace.isNoAutospace();
+     // We are iterating in glyph order, not string order. Compare this to WidthIterator::advanceInternal()
+     for (size_t runIndex = 0; runIndex < runCount; ++runIndex) {
+         Ref complexTextRun = *m_complexTextRuns[runIndex];
+@@ -770,7 +778,7 @@ void ComplexTextController::adjustGlyphsAndAdvances()
+             // https://www.w3.org/TR/css-text-3/#white-space-processing
+             // "Control characters (Unicode category Cc)—other than tabs (U+0009), line feeds (U+000A), carriage returns (U+000D) and sequences that form a segment break—must be rendered as a visible glyph"
+             // Also, we're omitting Null (U+0000) from this set because Chrome and Firefox do so and it's needed for compat. See https://github.com/w3c/csswg-drafts/pull/6983.
+-            if (character != newlineCharacter && character != carriageReturn && character != noBreakSpace && character != tabCharacter && character != nullCharacter && isControlCharacter(character)) {
++            if (character != newlineCharacter && character != carriageReturn && character != noBreakSpace && character != tabCharacter && character != nullCharacter && isControlCharacterFast(character)) {
+                 // Let's assume that .notdef is visible.
+                 glyph = 0;
+ #if USE(CORE_TEXT) || USE(SKIA)
+@@ -844,11 +852,10 @@ void ComplexTextController::adjustGlyphsAndAdvances()
+                     afterExpansion = false;
+             }
+ 
+-            const auto& textAutoSpace =  m_fontCascade->textAutospace();
+             float textAutoSpaceSpacing = 0;
+             auto characterClass = TextSpacing::CharacterClass::Undefined;
+             // Since we are iterating through glyphs here we skip combining marks, since we just care about the grapheme cluster base for text-autospace.
+-            if (!textAutoSpace.isNoAutospace() && !isCombiningMark(character)) {
++            if (hasAutospace && !isCombiningMark(character)) {
+                 characterClass = TextSpacing::characterClass(character);
+                 if (textAutoSpace.shouldApplySpacing(previousCharacterClass, characterClass)) {
+                     textAutoSpaceSpacing = complexTextRun->textAutospaceSize();
+@@ -858,7 +865,7 @@ void ComplexTextController::adjustGlyphsAndAdvances()
+                 previousCharacterClass = characterClass;
+             }
+ 
+-            if (!textAutoSpace.isNoAutospace())
++            if (hasAutospace)
+                 m_textAutoSpaceSpacings.append(textAutoSpaceSpacing);
+ 
+             m_totalAdvance += advance;
 diff --git a/Source/WebCore/platform/graphics/DestinationColorSpace.cpp b/Source/WebCore/platform/graphics/DestinationColorSpace.cpp
 index f99b66ec41..ece67eb41f 100644
 --- a/Source/WebCore/platform/graphics/DestinationColorSpace.cpp
@@ -587,6 +1548,103 @@ index f99b66ec41..ece67eb41f 100644
      // Avoid refing color space here as this is performance-sensitive.
      SUPPRESS_UNRETAINED_ARG return CGColorSpaceUsesITUR_2100TF(platformColorSpace());
  #else
+diff --git a/Source/WebCore/platform/graphics/Font.cpp b/Source/WebCore/platform/graphics/Font.cpp
+index a48513db93..4f22214340 100644
+--- a/Source/WebCore/platform/graphics/Font.cpp
++++ b/Source/WebCore/platform/graphics/Font.cpp
+@@ -396,7 +396,7 @@ static RefPtr<GlyphPage> createAndFillGlyphPage(unsigned pageNumber, const Font&
+     unsigned glyphPageSize = GlyphPage::sizeForPageNumber(pageNumber);
+ 
+     unsigned start = GlyphPage::startingCodePointInPageNumber(pageNumber);
+-    Vector<char16_t> buffer(glyphPageSize * 2 + 2);
++    Vector<char16_t, GlyphPage::size * 2 + 2> buffer(glyphPageSize * 2 + 2);
+     unsigned bufferLength;
+     if (U_IS_BMP(start)) {
+         bufferLength = glyphPageSize;
+@@ -432,14 +432,28 @@ static RefPtr<GlyphPage> createAndFillGlyphPage(unsigned pageNumber, const Font&
+ 
+ const GlyphPage* Font::glyphPage(unsigned pageNumber) const
+ {
+-    return m_glyphPages.ensure(pageNumber, [&] {
++    static_assert(directMappedGlyphPageCount * GlyphPage::size == 256);
++
++    bool isDirectMapped = pageNumber < directMappedGlyphPageCount;
++    if (isDirectMapped && (m_directMappedGlyphPagesFilled & (1u << pageNumber)))
++        return m_directMappedGlyphPages[pageNumber];
++
++    auto* page = m_glyphPages.ensure(pageNumber, [&] {
+         return createAndFillGlyphPage(pageNumber, *this);
+     }).iterator->value.get();
++
++    if (isDirectMapped) {
++        m_directMappedGlyphPages[pageNumber] = page;
++        m_directMappedGlyphPagesFilled |= 1u << pageNumber;
++    }
++    return page;
+ }
+ 
+ Glyph Font::glyphForCharacter(char32_t character) const
+ {
+-    RefPtr page = glyphPage(GlyphPage::pageNumberForCodePoint(character));
++    // m_glyphPages owns the page; a RefPtr here would be a refcount round trip for every
++    // character measured.
++    auto* page = glyphPage(GlyphPage::pageNumberForCodePoint(character));
+     if (!page)
+         return 0;
+     return page->glyphForCharacter(character);
+@@ -447,7 +461,7 @@ Glyph Font::glyphForCharacter(char32_t character) const
+ 
+ GlyphData Font::glyphDataForCharacter(char32_t character) const
+ {
+-    RefPtr page = glyphPage(GlyphPage::pageNumberForCodePoint(character));
++    auto* page = glyphPage(GlyphPage::pageNumberForCodePoint(character));
+     if (!page)
+         return GlyphData();
+     return page->glyphDataForCharacter(character);
+diff --git a/Source/WebCore/platform/graphics/Font.h b/Source/WebCore/platform/graphics/Font.h
+index d56ff867c7..9420cddcac 100644
+--- a/Source/WebCore/platform/graphics/Font.h
++++ b/Source/WebCore/platform/graphics/Font.h
+@@ -249,6 +249,11 @@ public:
+     WEBCORE_EXPORT static std::optional<Ref<Font>> fromIPCData(IPCFontData&&);
+     WEBCORE_EXPORT IPCFontData toSerializableFont() const;
+     WEBCORE_EXPORT std::optional<InstalledFont> toSerializableInstalledFont() const;
++
++    // The Core Text string attributes for shaping with this font. They depend only on the
++    // font, the kerning switch and the locale, so the dictionary is built once per font
++    // rather than once per complex text run.
++    RetainPtr<CFDictionaryRef> cfStringAttributes(bool enableKerning, const AtomString& locale) const;
+ #endif
+ #if PLATFORM(WIN)
+     SCRIPT_CACHE* scriptCache() const LIFETIME_BOUND { return &m_scriptCache; }
+@@ -327,6 +332,14 @@ private:
+ 
+     const FontPlatformData m_platformData;
+ 
++    // Code points 0-255 live in the first few pages and are hit once per character measured
++    // or painted. Their page pointers are kept in a direct-mapped side table so the common
++    // case is an array index instead of a hash probe. Entries in m_glyphPages are never
++    // removed, so a raw pointer stays valid for the lifetime of the Font.
++    static constexpr unsigned directMappedGlyphPageCount = 16;
++    mutable std::array<const GlyphPage*, directMappedGlyphPageCount> m_directMappedGlyphPages { };
++    mutable uint16_t m_directMappedGlyphPagesFilled { 0 };
++
+     mutable HashMap<unsigned, RefPtr<GlyphPage>, IntHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>> m_glyphPages;
+     mutable GlyphMetricsMap<float> m_glyphToWidthMap;
+     mutable std::unique_ptr<GlyphMetricsMap<FloatRect>> m_glyphToBoundsMap;
+@@ -389,6 +402,12 @@ private:
+     mutable SupportsFeature m_supportsOpenTypeAlternateHalfWidths { SupportsFeature::Unknown };
+ #endif
+ 
++#if USE(CORE_TEXT)
++    mutable RetainPtr<CFDictionaryRef> m_cachedStringAttributes;
++    mutable AtomString m_cachedStringAttributesLocale;
++    mutable bool m_cachedStringAttributesEnableKerning { false };
++#endif
++
+ #if PLATFORM(WIN)
+     mutable SCRIPT_CACHE m_scriptCache { 0 };
+ #endif
 diff --git a/Source/WebCore/platform/graphics/FontCache.cpp b/Source/WebCore/platform/graphics/FontCache.cpp
 index ab88353fed..43739b6e0e 100644
 --- a/Source/WebCore/platform/graphics/FontCache.cpp
@@ -618,7 +1676,7 @@ index ab88353fed..43739b6e0e 100644
  RefPtr<Font> FontCache::fontForFamily(const FontDescription& fontDescription, const String& family, const FontCreationContext& fontCreationContext, OptionSet<FontLookupOptions> options)
  {
 diff --git a/Source/WebCore/platform/graphics/FontCascade.cpp b/Source/WebCore/platform/graphics/FontCascade.cpp
-index 346c71d7f0..269bfcd5bd 100644
+index 346c71d7f0..b5174add62 100644
 --- a/Source/WebCore/platform/graphics/FontCascade.cpp
 +++ b/Source/WebCore/platform/graphics/FontCascade.cpp
 @@ -243,6 +243,20 @@ RefPtr<const DisplayList::DisplayList> FontCascade::displayListForGlyphBuffer(Gr
@@ -642,6 +1700,507 @@ index 346c71d7f0..269bfcd5bd 100644
  #else
      constexpr auto drawGlyphsMode = DisplayList::Recorder::DrawGlyphsMode::Deconstruct;
  #endif
+@@ -306,16 +320,29 @@ float FontCascade::width(const TextRun& run, SingleThreadWeakHashSet<const Font>
+     if (!run.length())
+         return 0;
+ 
+-    CodePath codePathToUse = codePath(run);
+-    if (codePathToUse != CodePath::Complex) {
+-        // The complex path is more restrictive about returning fallback fonts than the simple path, so we need an explicit test to make their behaviors match.
+-        if constexpr (!canReturnFallbackFontsForComplexText())
+-            fallbackFonts = nullptr;
+-        // The simple path can optimize the case where glyph overflow is not observable.
+-        if (codePathToUse != CodePath::SimpleWithGlyphOverflow && (glyphOverflow && !glyphOverflow->computeBounds))
++    // For a 16-bit run, deciding the code path means scanning every character of the run.
++    // A run whose width is already cached does not need the decision at all, so it is only
++    // made where its answer is actually read.
++    std::optional<CodePath> memoizedCodePath;
++    auto codePathToUse = [&]() -> CodePath {
++        if (!memoizedCodePath)
++            memoizedCodePath = codePath(run);
++        return *memoizedCodePath;
++    };
++
++    // The simple path can optimize the case where glyph overflow is not observable.
++    if (glyphOverflow && !glyphOverflow->computeBounds) {
++        auto path = codePathToUse();
++        if (path != CodePath::Complex && path != CodePath::SimpleWithGlyphOverflow)
+             glyphOverflow = nullptr;
+     }
+ 
++    // The complex path is more restrictive about returning fallback fonts than the simple path, so we need an explicit test to make their behaviors match.
++    if constexpr (!canReturnFallbackFontsForComplexText()) {
++        if (fallbackFonts && codePathToUse() != CodePath::Complex)
++            fallbackFonts = nullptr;
++    }
++
+     auto* cacheEntry = fonts()->glyphGeometryCache().add(run, { }, TextShapingContext { *this });
+     bool callerNeedsFallbackFonts = fallbackFonts;
+     bool canUseFallbackFontCacheEntry = !callerNeedsFallbackFonts && !run.rtl();
+@@ -338,7 +365,7 @@ float FontCascade::width(const TextRun& run, SingleThreadWeakHashSet<const Font>
+     if (!fallbackFonts)
+         fallbackFonts = &localFallbackFonts;
+ 
+-    float result = width(codePathToUse, run, fallbackFonts, glyphOverflow);
++    float result = width(codePathToUse(), run, fallbackFonts, glyphOverflow);
+     bool hasFallbackFonts = !fallbackFonts->isEmptyIgnoringNullReferences();
+ 
+     if (cacheEntry) {
+@@ -383,6 +410,19 @@ NEVER_INLINE float FontCascade::widthForSimpleTextSlow(StringView text, TextDire
+ #if PLATFORM(GTK) || PLATFORM(WPE)
+     TextRun run { text, 0, 0, ExpansionBehavior::defaultBehavior(), textDirection, false, false };
+     float result = width(CodePath::Simple, run);
++#elif defined(WEBKIT_IOS6)
++    UNUSED_PARAM(textDirection);
++    Ref font = primaryFont();
++    ASSERT(!font->syntheticBoldOffset());
++
++    auto sumWidths = [&](const Font& font, auto characters) {
++        float total = 0;
++        for (size_t i = 0; i < characters.size(); ++i)
++            total += font.widthForGlyph(font.glyphForCharacter(characters[i]));
++        return total;
++    };
++
++    float result = text.is8Bit() ? sumWidths(font, text.span8()) : sumWidths(font, text.span16());
+ #else
+     GlyphBuffer glyphBuffer;
+     Ref font = primaryFont();
+@@ -737,9 +777,23 @@ FontCascade::CodePath FontCascade::characterRangeCodePath(std::span<const char16
+     // are not 'combining', but still need to go to the complex path.
+     // Alternatively, we may as well consider binary search over a sorted
+     // list of ranges.
++    size_t size = span.size();
++
++    // Every early exit below needs a code point >= U+02E5, and so does the zero-width
++    // joiner. A max-reduction, which vectorizes, settles the whole run in one pass for
++    // Latin text - the reason this path is reached at all is usually a stray non-Latin1
++    // character elsewhere in the string - instead of walking the ladder of range
++    // comparisons per character.
++    char16_t highest = 0;
++    for (size_t i = 0; i < size; ++i) {
++        if (span[i] > highest)
++            highest = span[i];
++    }
++    if (highest < 0x2E5)
++        return CodePath::Simple;
++
+     CodePath result = CodePath::Simple;
+     bool previousCharacterIsEmojiGroupCandidate = false;
+-    size_t size = span.size();
+     for (size_t i = 0; i < size; ++i) {
+         auto c = span[i];
+         if (c == zeroWidthJoiner && previousCharacterIsEmojiGroupCandidate)
+@@ -1560,22 +1614,32 @@ inline bool NODELETE shouldDrawIfLoading(const Font& font, FontCascade::CustomFo
+ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& glyphBuffer, FloatPoint& point, CustomFontNotReadyAction customFontNotReadyAction) const
+ {
+     ASSERT(glyphBuffer.isFlattened());
+-    Ref fontData = glyphBuffer.fontAt(0);
++
++    // The font is compared per glyph but only referenced per run: taking a Ref for every
++    // glyph just to find out it is the same font as the previous one costs a weak-pointer
++    // dereference plus a refcount round trip on each character painted.
++    const Font* fontData = &glyphBuffer.fontAt(0);
++    auto smoothing = m_fontDescription.usedFontSmoothing();
++    auto flush = [&](unsigned lastFrom, unsigned glyphCount, const FloatPoint& origin) {
++        if (!shouldDrawIfLoading(*fontData, customFontNotReadyAction))
++            return;
++        Ref protectedFont { *fontData };
++        context.drawGlyphs(protectedFont.get(), glyphBuffer.glyphs(lastFrom, glyphCount), glyphBuffer.advances(lastFrom, glyphCount), origin, smoothing);
++    };
++
+     FloatPoint startPoint = point;
+     float nextX = startPoint.x() + WebCore::width(glyphBuffer.advanceAt(0));
+     float nextY = startPoint.y() + height(glyphBuffer.advanceAt(0));
+     unsigned lastFrom = 0;
+     unsigned nextGlyph = 1;
+-    while (nextGlyph < glyphBuffer.size()) {
+-        Ref nextFontData = glyphBuffer.fontAt(nextGlyph);
++    unsigned size = glyphBuffer.size();
++    while (nextGlyph < size) {
++        const Font* nextFontData = &glyphBuffer.fontAt(nextGlyph);
+ 
+         if (nextFontData != fontData) {
+-            if (shouldDrawIfLoading(fontData.get(), customFontNotReadyAction)) {
+-                size_t glyphCount = nextGlyph - lastFrom;
+-                context.drawGlyphs(fontData.get(), glyphBuffer.glyphs(lastFrom, glyphCount), glyphBuffer.advances(lastFrom, glyphCount), startPoint, m_fontDescription.usedFontSmoothing());
+-            }
++            flush(lastFrom, nextGlyph - lastFrom, startPoint);
+             lastFrom = nextGlyph;
+-            fontData = WTF::move(nextFontData);
++            fontData = nextFontData;
+             startPoint.setX(nextX);
+             startPoint.setY(nextY);
+         }
+@@ -1584,10 +1648,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
+         nextGlyph++;
+     }
+ 
+-    if (shouldDrawIfLoading(fontData.get(), customFontNotReadyAction)) {
+-        size_t glyphCount = nextGlyph - lastFrom;
+-        context.drawGlyphs(fontData.get(), glyphBuffer.glyphs(lastFrom, glyphCount), glyphBuffer.advances(lastFrom, glyphCount), startPoint, m_fontDescription.usedFontSmoothing());
+-    }
++    flush(lastFrom, nextGlyph - lastFrom, startPoint);
+     point.setX(nextX);
+ }
+ 
+diff --git a/Source/WebCore/platform/graphics/FontCascadeFonts.cpp b/Source/WebCore/platform/graphics/FontCascadeFonts.cpp
+index c7e14646c7..4e507f6f2d 100644
+--- a/Source/WebCore/platform/graphics/FontCascadeFonts.cpp
++++ b/Source/WebCore/platform/graphics/FontCascadeFonts.cpp
+@@ -57,7 +57,14 @@ public:
+ 
+     void NODELETE setGlyphDataForCharacter(char32_t c, GlyphData glyphData)
+     {
+-        setGlyphDataForIndex(GlyphPage::indexForCodePoint(c), glyphData);
++        unsigned index = GlyphPage::indexForCodePoint(c);
++        setGlyphDataForIndex(index, glyphData);
++        m_resolved.set(index);
++    }
++
++    bool NODELETE isResolved(char32_t c) const
++    {
++        return m_resolved.get(GlyphPage::indexForCodePoint(c));
+     }
+ 
+ private:
+@@ -69,6 +76,9 @@ private:
+ 
+     std::array<Glyph, GlyphPage::size> m_glyphs = { };
+     std::array<SingleThreadWeakPtr<const Font>, GlyphPage::size> m_fonts = { };
++    // Set for characters this page has already answered for, whether or not a font was
++    // found. Without it a character no font covers is re-resolved on every measurement.
++    WTF::BitSet<GlyphPage::size> m_resolved;
+ };
+ 
+ inline FontCascadeFonts::GlyphPageCacheEntry::GlyphPageCacheEntry(RefPtr<GlyphPage>&& singleFont)
+@@ -89,6 +99,11 @@ GlyphData FontCascadeFonts::GlyphPageCacheEntry::glyphDataForCharacter(char32_t
+     return 0;
+ }
+ 
++bool FontCascadeFonts::GlyphPageCacheEntry::isKnownMissing(char32_t character) const
++{
++    return m_mixedFont && m_mixedFont->isResolved(character);
++}
++
+ void FontCascadeFonts::GlyphPageCacheEntry::setGlyphDataForCharacter(char32_t character, GlyphData glyphData)
+ {
+     ASSERT(!glyphDataForCharacter(character).isValid());
+@@ -544,13 +559,34 @@ GlyphData FontCascadeFonts::glyphDataForCharacter(char32_t c, const FontCascadeD
+ 
+     const unsigned pageNumber = GlyphPage::pageNumberForCodePoint(c);
+ 
+-    auto& cacheEntry = m_cachedPages[resolvedEmojiPolicy].ensure(pageNumber, [&] {
+-        // Initialize cache with a full page of glyph mappings from a single font.
++    // Initialize cache with a full page of glyph mappings from a single font.
++    auto makePageCacheEntry = [&] {
+         return GlyphPageCacheEntry { glyphPageFromFontRanges(pageNumber, realizeFallbackRangesAt(description, fontSelector, 0)) };
+-    }).iterator->value;
++    };
++
++    auto& cacheEntry = [&]() -> GlyphPageCacheEntry& {
++        if (pageNumber >= directMappedPageCount)
++            return m_cachedPages[resolvedEmojiPolicy].ensure(pageNumber, makePageCacheEntry).iterator->value;
++        auto& directMapped = m_directMappedPages[resolvedEmojiPolicy];
++        if (!(directMapped.filled & (1u << pageNumber))) {
++            directMapped.pages[pageNumber] = makePageCacheEntry();
++            directMapped.filled |= 1u << pageNumber;
++        }
++        return directMapped.pages[pageNumber];
++    }();
+ 
+     GlyphData glyphData = cacheEntry.glyphDataForCharacter(c);
+-    if (!glyphData.isValid()) {
++
++#if defined(WEBKIT_IOS6)
++    // A character no font in the cascade covers used to walk the whole cascade and then ask
++    // Core Text for a system fallback again on every single measurement of every layout
++    // pass. The walk is remembered with the same lifetime as its positive results.
++    bool needsResolution = !glyphData.isValid() && !cacheEntry.isKnownMissing(c);
++#else
++    bool needsResolution = !glyphData.isValid();
++#endif
++
++    if (needsResolution) {
+         // No glyph, resolve per-character.
+         ASSERT(variant == FontVariant::Normal);
+         glyphData = glyphDataForVariant(c, description, fontSelector, variant, resolvedEmojiPolicy);
+@@ -571,6 +607,14 @@ void FontCascadeFonts::pruneSystemFallbacks()
+             return keyAndValue.value.isMixedFont();
+         });
+     }
++    for (auto& directMapped : m_directMappedPages) {
++        for (unsigned pageNumber = 0; pageNumber < directMappedPageCount; ++pageNumber) {
++            if (!directMapped.pages[pageNumber].isMixedFont())
++                continue;
++            directMapped.pages[pageNumber] = GlyphPageCacheEntry { };
++            directMapped.filled &= ~(1u << pageNumber);
++        }
++    }
+     m_systemFallbackFontSet.clear();
+     m_shapedTextCache.clear();
+ }
+diff --git a/Source/WebCore/platform/graphics/FontCascadeFonts.h b/Source/WebCore/platform/graphics/FontCascadeFonts.h
+index 41f8d3f880..93a3432f21 100644
+--- a/Source/WebCore/platform/graphics/FontCascadeFonts.h
++++ b/Source/WebCore/platform/graphics/FontCascadeFonts.h
+@@ -28,6 +28,7 @@
+ #include <WebCore/GlyphPage.h>
+ #include <WebCore/TextMeasurementCache.h>
+ #include <WebCore/TextRun.h>
++#include <array>
+ #include <wtf/CurrentThread.h>
+ #include <wtf/EnumeratedArray.h>
+ #include <wtf/Forward.h>
+@@ -184,6 +185,10 @@ private:
+ 
+         GlyphData glyphDataForCharacter(char32_t);
+ 
++        // True once the cascade and the system fallback have already been walked for this
++        // character and came back with nothing, so the walk must not be repeated.
++        bool isKnownMissing(char32_t) const;
++
+         void NODELETE setSingleFontPage(RefPtr<GlyphPage>&&);
+         void setGlyphDataForCharacter(char32_t, GlyphData);
+ 
+@@ -196,7 +201,18 @@ private:
+         std::unique_ptr<MixedFontGlyphPage> m_mixedFont;
+     };
+ 
++    // Code points 0-255 occupy the first pages and are looked up once per character
++    // measured. They get a direct-mapped slot instead of a hash probe; the rest of the
++    // code space keeps the map.
++    static constexpr unsigned directMappedPageCount = 256 / GlyphPage::size;
++
++    struct DirectMappedPages {
++        std::array<GlyphPageCacheEntry, directMappedPageCount> pages;
++        uint16_t filled { 0 };
++    };
++
+     EnumeratedArray<ResolvedEmojiPolicy, HashMap<unsigned, GlyphPageCacheEntry, IntHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>>, ResolvedEmojiPolicy::RequireEmoji> m_cachedPages;
++    EnumeratedArray<ResolvedEmojiPolicy, DirectMappedPages, ResolvedEmojiPolicy::RequireEmoji> m_directMappedPages;
+ 
+     HashSet<Ref<Font>> m_systemFallbackFontSet;
+ 
+diff --git a/Source/WebCore/platform/graphics/FontCascadeInlines.h b/Source/WebCore/platform/graphics/FontCascadeInlines.h
+index e4eb9c28b4..77d7cef45d 100644
+--- a/Source/WebCore/platform/graphics/FontCascadeInlines.h
++++ b/Source/WebCore/platform/graphics/FontCascadeInlines.h
+@@ -142,6 +142,19 @@ inline bool FontCascade::treatAsSpace(char32_t c)
+     return c == space || c == tabCharacter || c == newlineCharacter || c == noBreakSpace;
+ }
+ 
++inline constexpr char32_t lastControlCharacter = 0x9F;
++inline constexpr char32_t firstDefaultIgnorableCharacter = softHyphen;
++
++inline bool isControlCharacterFast(char32_t character)
++{
++    return character <= lastControlCharacter && isControlCharacter(character);
++}
++
++inline bool isDefaultIgnorableCodePointFast(char32_t character)
++{
++    return character >= firstDefaultIgnorableCharacter && isDefaultIgnorableCodePoint(character);
++}
++
+ inline bool FontCascade::isCharacterWhoseGlyphsShouldBeDeletedForTextRendering(char32_t character)
+ {
+     // https://www.w3.org/TR/css-text-3/#white-space-processing
+@@ -151,6 +164,8 @@ inline bool FontCascade::isCharacterWhoseGlyphsShouldBeDeletedForTextRendering(c
+     // Also, we're omitting Null (U+0000) from this set because Chrome and Firefox do so and it's needed for compat. See https://github.com/w3c/csswg-drafts/pull/6983.
+     if (character == nullCharacter)
+         return true;
++    if (character < firstDefaultIgnorableCharacter)
++        return false;
+     if (isControlCharacter(character))
+         return false;
+     // "Unsupported Default_ignorable characters must be ignored for text rendering."
+diff --git a/Source/WebCore/platform/graphics/FontInlines.h b/Source/WebCore/platform/graphics/FontInlines.h
+index f11f7220eb..8265859776 100644
+--- a/Source/WebCore/platform/graphics/FontInlines.h
++++ b/Source/WebCore/platform/graphics/FontInlines.h
+@@ -46,16 +46,17 @@ ALWAYS_INLINE FloatRect Font::boundsForGlyph(Glyph glyph) const
+     if (isZeroWidthSpaceGlyph(glyph))
+         return FloatRect();
+ 
+-    FloatRect bounds;
+     if (m_glyphToBoundsMap) {
+-        bounds = m_glyphToBoundsMap->metricsForGlyph(glyph);
+-        if (bounds.width() != cGlyphSizeUnknown)
+-            return bounds;
++        FloatRect& boundsSlot = m_glyphToBoundsMap->metricsSlotForGlyph(glyph);
++        if (boundsSlot.width() != cGlyphSizeUnknown)
++            return boundsSlot;
++        auto bounds = platformBoundsForGlyph(glyph);
++        boundsSlot = bounds;
++        return bounds;
+     }
+ 
+-    bounds = platformBoundsForGlyph(glyph);
+-    if (!m_glyphToBoundsMap)
+-        m_glyphToBoundsMap = makeUnique<GlyphMetricsMap<FloatRect>>();
++    auto bounds = platformBoundsForGlyph(glyph);
++    m_glyphToBoundsMap = makeUnique<GlyphMetricsMap<FloatRect>>();
+     m_glyphToBoundsMap->setMetricsForGlyph(glyph, bounds);
+     return bounds;
+ }
+@@ -121,7 +122,8 @@ ALWAYS_INLINE float Font::widthForGlyph(Glyph glyph, SyntheticBoldInclusion Synt
+     if (isZeroWidthSpaceGlyph(glyph) && !isInterstitial())
+         return 0;
+ 
+-    float width = m_glyphToWidthMap.metricsForGlyph(glyph);
++    float& widthSlot = m_glyphToWidthMap.metricsSlotForGlyph(glyph);
++    float width = widthSlot;
+     if (width != cGlyphSizeUnknown)
+         return width + (SyntheticBoldInclusion == SyntheticBoldInclusion::Incorporate ? syntheticBoldOffset() : 0);
+ 
+@@ -132,7 +134,7 @@ ALWAYS_INLINE float Font::widthForGlyph(Glyph glyph, SyntheticBoldInclusion Synt
+ #endif
+         width = platformWidthForGlyph(glyph);
+ 
+-    m_glyphToWidthMap.setMetricsForGlyph(glyph, width);
++    widthSlot = width;
+     return width + (SyntheticBoldInclusion == SyntheticBoldInclusion::Incorporate ? syntheticBoldOffset() : 0);
+ }
+ 
+diff --git a/Source/WebCore/platform/graphics/FontPlatformData.h b/Source/WebCore/platform/graphics/FontPlatformData.h
+index 6d7a74b15a..2a0ce9705c 100644
+--- a/Source/WebCore/platform/graphics/FontPlatformData.h
++++ b/Source/WebCore/platform/graphics/FontPlatformData.h
+@@ -506,18 +506,24 @@ WEBCORE_EXPORT RetainPtr<CTFontRef> createCTFont(CFDictionaryRef attributes, flo
+ 
+ #if USE(CG)
+ 
++// Purely stack-scoped inside a call that already holds the context, so it neither retains
++// it nor writes the matrix back when consecutive glyph runs ask for the one already in
++// place - which is every run of a paragraph that has no synthetic oblique.
+ class ScopedTextMatrix {
+ public:
+     ScopedTextMatrix(CGAffineTransform newMatrix, CGContextRef context)
+         : m_context(context)
+         , m_textMatrix(CGContextGetTextMatrix(context))
++        , m_changed(!CGAffineTransformEqualToTransform(newMatrix, m_textMatrix))
+     {
+-        CGContextSetTextMatrix(m_context.get(), newMatrix);
++        if (m_changed)
++            CGContextSetTextMatrix(m_context, newMatrix);
+     }
+ 
+     ~ScopedTextMatrix()
+     {
+-        CGContextSetTextMatrix(m_context.get(), m_textMatrix);
++        if (m_changed)
++            CGContextSetTextMatrix(m_context, m_textMatrix);
+     }
+ 
+     CGAffineTransform savedMatrix() const
+@@ -526,8 +532,9 @@ public:
+     }
+ 
+ private:
+-    RetainPtr<CGContextRef> m_context;
++    CGContextRef m_context;
+     CGAffineTransform m_textMatrix;
++    bool m_changed;
+ };
+ 
+ #endif
+diff --git a/Source/WebCore/platform/graphics/GlyphMetricsMap.h b/Source/WebCore/platform/graphics/GlyphMetricsMap.h
+index 739cf988d7..0fc58611d6 100644
+--- a/Source/WebCore/platform/graphics/GlyphMetricsMap.h
++++ b/Source/WebCore/platform/graphics/GlyphMetricsMap.h
+@@ -46,6 +46,11 @@ public:
+         return locatePage(glyph / GlyphMetricsPage::size).metricsForGlyph(glyph);
+     }
+ 
++    T& metricsSlotForGlyph(Glyph glyph)
++    {
++        return locatePage(glyph / GlyphMetricsPage::size).metricsSlotForGlyph(glyph);
++    }
++
+     const T& existingMetricsForGlyph(Glyph glyph)
+     {
+         return locatePage(glyph / GlyphMetricsPage::size).existingMetricsForGlyph(glyph);
+@@ -74,6 +79,7 @@ private:
+         }
+ 
+         T metricsForGlyph(Glyph glyph) const { return m_metrics[glyph % size]; }
++        T& metricsSlotForGlyph(Glyph glyph) { return m_metrics[glyph % size]; }
+         const T& existingMetricsForGlyph(Glyph glyph) const { return m_metrics[glyph % size]; }
+         void setMetricsForGlyph(Glyph glyph, const T& metrics)
+         {
+@@ -89,19 +95,31 @@ private:
+         std::array<T, size> m_metrics;
+     };
+     
++    // A page holds 16 glyphs, so only glyphs 0-15 reach m_primaryPage; every other Latin
++    // glyph used to cost a HashMap probe on each width or bounds query, i.e. once per
++    // character measured or painted. Pages 1-15 (glyph indices 16-255, which is where the
++    // Latin repertoire of the system fonts lives) get a direct-mapped slot instead.
++    static constexpr unsigned directMappedPageCount = 16;
++
+     GlyphMetricsPage& locatePage(unsigned pageNumber)
+     {
+-        if (!pageNumber && m_filledPrimaryPage)
+-            return m_primaryPage;
++        if (!pageNumber) {
++            if (m_filledPrimaryPage)
++                return m_primaryPage;
++        } else if (pageNumber < directMappedPageCount) {
++            if (auto* page = m_directMappedPages[pageNumber - 1].get())
++                return *page;
++        }
+         return locatePageSlowCase(pageNumber);
+     }
+ 
+     GlyphMetricsPage& locatePageSlowCase(unsigned pageNumber);
+-    
++
+     static T unknownMetrics();
+ 
+     bool m_filledPrimaryPage { false };
+     GlyphMetricsPage m_primaryPage; // We optimize for the page that contains glyph indices 0-255.
++    std::array<std::unique_ptr<GlyphMetricsPage>, directMappedPageCount - 1> m_directMappedPages;
+     HashMap<int, std::unique_ptr<GlyphMetricsPage>> m_pages;
+ };
+ 
+@@ -132,6 +150,13 @@ template<class T> typename GlyphMetricsMap<T>::GlyphMetricsPage& GlyphMetricsMap
+         return m_primaryPage;
+     }
+ 
++    if (pageNumber < directMappedPageCount) {
++        auto& page = m_directMappedPages[pageNumber - 1];
++        ASSERT(!page);
++        page = makeUnique<GlyphMetricsPage>(unknownMetrics());
++        return *page;
++    }
++
+     return *m_pages.ensure(pageNumber, [] {
+         return makeUnique<GlyphMetricsPage>(unknownMetrics());
+     }).iterator->value;
+diff --git a/Source/WebCore/platform/graphics/GlyphPage.h b/Source/WebCore/platform/graphics/GlyphPage.h
+index 39e792604a..ae71e469c6 100644
+--- a/Source/WebCore/platform/graphics/GlyphPage.h
++++ b/Source/WebCore/platform/graphics/GlyphPage.h
+@@ -74,12 +74,14 @@ public:
+ 
+     WEBCORE_EXPORT static unsigned count();
+ 
+-    static constexpr unsigned size = 16;
++    static constexpr unsigned sizeBits = 4;
++    static constexpr unsigned size = 1 << sizeBits; // 16
++    static constexpr unsigned sizeMask = size - 1;  // 15
+ 
+     static constexpr unsigned sizeForPageNumber(unsigned) { return size; }
+-    static constexpr unsigned indexForCodePoint(char32_t c) { return c % size; }
+-    static constexpr unsigned pageNumberForCodePoint(char32_t c) { return c / size; }
+-    static constexpr char32_t startingCodePointInPageNumber(unsigned pageNumber) { return pageNumber * size; }
++    static constexpr unsigned indexForCodePoint(char32_t c) { return c & sizeMask; }
++    static constexpr unsigned pageNumberForCodePoint(char32_t c) { return c >> sizeBits; }
++    static constexpr char32_t startingCodePointInPageNumber(unsigned pageNumber) { return pageNumber << sizeBits; }
+     static constexpr bool pageNumberIsUsedForArabic(unsigned pageNumber) { return startingCodePointInPageNumber(pageNumber) >= 0x600 && startingCodePointInPageNumber(pageNumber) + sizeForPageNumber(pageNumber) < 0x700; }
+ 
+     GlyphData glyphDataForCharacter(char32_t c) const
 diff --git a/Source/WebCore/platform/graphics/GraphicsLayer.cpp b/Source/WebCore/platform/graphics/GraphicsLayer.cpp
 index cb43407093..aad535dd50 100644
 --- a/Source/WebCore/platform/graphics/GraphicsLayer.cpp
@@ -656,22 +2215,206 @@ index cb43407093..aad535dd50 100644
  #endif
  
 diff --git a/Source/WebCore/platform/graphics/ImageFrameAnimator.cpp b/Source/WebCore/platform/graphics/ImageFrameAnimator.cpp
-index af9e6e1eb1..8381df52b2 100644
+index af9e6e1eb1..e0df86b946 100644
 --- a/Source/WebCore/platform/graphics/ImageFrameAnimator.cpp
 +++ b/Source/WebCore/platform/graphics/ImageFrameAnimator.cpp
-@@ -64,8 +64,10 @@ ImageFrameAnimator::~ImageFrameAnimator()
- void ImageFrameAnimator::destroyDecodedData(bool destroyAll)
+@@ -65,7 +65,13 @@ void ImageFrameAnimator::destroyDecodedData(bool destroyAll)
  {
      // Animated images over a certain size are considered large enough that we'll
--    // only hang on to one frame at a time.
--    static constexpr unsigned LargeAnimationCutoff = 30 * 1024 * 1024;
-+    // only hang on to one frame at a time. Below the cutoff every frame an
-+    // animation has ever shown stays decoded, so on a 512MB device the cutoff is
-+    // set at two screenfuls: the frame being shown and the one being decoded.
+     // only hang on to one frame at a time.
++#if defined(WEBKIT_IOS6)
++    // Below the cutoff every frame an animation has ever shown stays decoded; two
++    // screenfuls is the frame being shown plus the one being decoded.
 +    static constexpr unsigned LargeAnimationCutoff = 2 * 640 * 960 * 4;
++#else
+     static constexpr unsigned LargeAnimationCutoff = 30 * 1024 * 1024;
++#endif
  
      Ref source = m_source.get();
      if (source->decodedSize() < LargeAnimationCutoff)
+diff --git a/Source/WebCore/platform/graphics/WidthIterator.cpp b/Source/WebCore/platform/graphics/WidthIterator.cpp
+index 7c3d84250f..aba7f9af6e 100644
+--- a/Source/WebCore/platform/graphics/WidthIterator.cpp
++++ b/Source/WebCore/platform/graphics/WidthIterator.cpp
+@@ -88,37 +88,55 @@ inline auto WidthIterator::applyFontTransforms(GlyphBuffer& glyphBuffer, unsigne
+     if (lastGlyphCount >= glyphBufferSize)
+         return { 0, makeGlyphBufferAdvance() };
+ 
++#if defined(WEBKIT_IOS6)
++    // Font::applyTransforms on this port only reverses RTL runs; it never rewrites an
++    // advance. The only thing that can move a width between the two sums below is the
++    // treated-as-space fixup, so with nothing to fix up the two passes are provably equal
++    // and both can be skipped.
++    const bool measureWidthChange = !charactersTreatedAsSpace.isEmpty();
++#else
++    constexpr bool measureWidthChange = true;
++#endif
++
+     auto advances = glyphBuffer.advances();
+     float beforeWidth = 0;
+-    for (unsigned i = lastGlyphCount; i < glyphBufferSize; ++i)
+-        beforeWidth += width(advances[i]);
++    if (measureWidthChange) {
++        for (unsigned i = lastGlyphCount; i < glyphBufferSize; ++i)
++            beforeWidth += width(advances[i]);
++    }
+ 
+     auto initialAdvance = font.applyTransforms(glyphBuffer, lastGlyphCount, m_currentCharacterIndex, m_enableKerning, m_requiresShaping, m_fontCascade->fontDescription().computedLocale(), m_run->text(), direction());
+ 
+     glyphBufferSize = glyphBuffer.size();
+     advances = glyphBuffer.advances();
+ 
++    // The sign flip, the treated-as-space fixup and the closing sum all walk the same glyph
++    // range and touch disjoint fields of each entry, so they are one pass. The sum still
++    // reads each advance after that advance has been fixed up, in the same order, so the
++    // total is unchanged.
+     auto origins = glyphBuffer.origins();
++    bool hasCharactersTreatedAsSpace = !charactersTreatedAsSpace.isEmpty();
++    float afterWidth = 0;
+     for (unsigned i = lastGlyphCount; i < glyphBufferSize; ++i) {
+         setHeight(advances[i], -height(advances[i]));
+         setY(origins[i], -y(origins[i]));
+-    }
+ 
+-    for (unsigned i = lastGlyphCount; i < glyphBufferSize; ++i) {
+-        auto characterIndex = glyphBuffer.uncheckedStringOffsetAt(i);
+-        auto iterator = std::lower_bound(charactersTreatedAsSpace.begin(), charactersTreatedAsSpace.end(), characterIndex, [](const OriginalAdvancesForCharacterTreatedAsSpace& l, GlyphBufferStringOffset r) -> bool {
+-            return l.stringOffset < r;
+-        });
+-        if (iterator == charactersTreatedAsSpace.end() || iterator->stringOffset != characterIndex)
+-            continue;
+-        auto& originalAdvances = *iterator;
+-        setWidth(glyphBuffer.advanceAt(i), originalAdvances.advance);
++        if (hasCharactersTreatedAsSpace) {
++            auto characterIndex = glyphBuffer.uncheckedStringOffsetAt(i);
++            auto iterator = std::lower_bound(charactersTreatedAsSpace.begin(), charactersTreatedAsSpace.end(), characterIndex, [](const OriginalAdvancesForCharacterTreatedAsSpace& l, GlyphBufferStringOffset r) -> bool {
++                return l.stringOffset < r;
++            });
++            if (iterator != charactersTreatedAsSpace.end() && iterator->stringOffset == characterIndex)
++                setWidth(advances[i], iterator->advance);
++        }
++
++        if (measureWidthChange)
++            afterWidth += width(advances[i]);
+     }
+     charactersTreatedAsSpace.clear();
+ 
+-    float afterWidth = 0;
+-    for (unsigned i = lastGlyphCount; i < glyphBufferSize; ++i)
+-        afterWidth += width(advances[i]);
++    if (!measureWidthChange)
++        return { 0, initialAdvance };
+ 
+     return { afterWidth - beforeWidth, initialAdvance };
+ }
+@@ -287,6 +305,11 @@ struct AdvanceInternalState {
+ 
+     void updateFont(const Font* newFont)
+     {
++        // Text almost never changes font mid-run, so once font and lastFont have both
++        // settled on the same Font there is nothing to write. Assigning anyway costs two
++        // refcount round trips per character.
++        if (font.get() == newFont && lastFont.get() == newFont)
++            return;
+         lastFont = std::exchange(font, newFont);
+     }
+ };
+@@ -422,9 +445,14 @@ inline void WidthIterator::advanceInternal(TextIterator& textIterator, GlyphBuff
+         unsigned advanceLength = clusterLength;
+         if (advanceInternalState.currentCharacterIndex + advanceLength == m_run->length())
+             m_lastCharacterIndex = advanceInternalState.currentCharacterIndex;
+-        bool isDefaultIgnorable = isDefaultIgnorableCodePoint(character);
+-
+-        auto capitalizedCharacter = capitalized(character);
++        bool isDefaultIgnorable = isDefaultIgnorableCodePointFast(character);
++
++        // capitalized() is two ICU property lookups. With font-variant-caps: normal its
++        // result is dead: shouldSynthesizeSmallCaps() and updateCharacterAndSmallCapsIfNeeded()
++        // both return before reading it.
++        std::optional<char32_t> capitalizedCharacter;
++        if (!smallCapsState.skipSmallCapsProcessing())
++            capitalizedCharacter = capitalized(character);
+         char32_t characterToWrite = character;
+ 
+         auto advanceToNextCharacter = [&] {
+@@ -444,11 +472,16 @@ inline void WidthIterator::advanceInternal(TextIterator& textIterator, GlyphBuff
+ 
+         RefPtr halfWidthFont = applyTextSpacingTrimIfNeeded(glyphData, character, fontDescription.textSpacingTrim());
+ 
+-        advanceInternalState.updateFont(glyphData.font ? protect(glyphData.font).get() : primaryFont.ptr());
++        // updateFont() stores into a RefPtr, so the raw pointer only has to survive the
++        // call; protect() would ref and immediately deref once per character.
++        advanceInternalState.updateFont(glyphData.font ? glyphData.font.get() : primaryFont.ptr());
+         smallCapsState.shouldSynthesizeCharacter = shouldSynthesizeSmallCaps(smallCapsState.dontSynthesizeSmallCaps, advanceInternalState.font.get(), character, capitalizedCharacter, smallCapsState.fontVariantCaps, smallCapsState.engageAllSmallCapsProcessing);
+         updateCharacterAndSmallCapsIfNeeded(smallCapsState, capitalizedCharacter, characterToWrite);
+ 
+-        advanceInternalState.rangeFont = fontForRange(advanceInternalState.lastFont.get(), smallCapsState, smallCapsState.isLastSmallCaps);
++        // Same reason as updateFont(): within a run this is the same Font every character,
++        // and assigning it to the RefPtr anyway is a refcount round trip each time.
++        if (const auto* rangeFont = fontForRange(advanceInternalState.lastFont.get(), smallCapsState, smallCapsState.isLastSmallCaps); rangeFont != advanceInternalState.rangeFont.get())
++            advanceInternalState.rangeFont = rangeFont;
+         startNewFontRangeIfNeeded(advanceInternalState, smallCapsState, fontDescription);
+         if (resetFontRangeIfNeeded(advanceInternalState, smallCapsState, fontDescription, textIterator))
+             continue;
+@@ -458,7 +491,7 @@ inline void WidthIterator::advanceInternal(TextIterator& textIterator, GlyphBuff
+ 
+         Glyph glyph = glyphData.glyph;
+         if (glyphData.font.get() != advanceInternalState.nextRangeFont || character != characterToWrite)
+-            glyph = Ref { *advanceInternalState.nextRangeFont }->glyphForCharacter(characterToWrite);
++            glyph = advanceInternalState.nextRangeFont->glyphForCharacter(characterToWrite);
+ 
+         bool isIgnorable = !glyph && isDefaultIgnorable;
+         if (isIgnorable) {
+@@ -467,13 +500,15 @@ inline void WidthIterator::advanceInternal(TextIterator& textIterator, GlyphBuff
+             continue;
+         }
+ 
+-        Ref currentRangeFont = *advanceInternalState.nextRangeFont;
++        // nextRangeFont owns the reference for the whole iteration; taking another Ref here
++        // is a refcount round trip per character.
++        const Font& currentRangeFont = *advanceInternalState.nextRangeFont;
+ 
+-        width = currentRangeFont->widthForGlyph(glyph, Font::SyntheticBoldInclusion::Exclude); // We apply synthetic bold after shaping, in applyCSSVisibilityRules().
++        width = currentRangeFont.widthForGlyph(glyph, Font::SyntheticBoldInclusion::Exclude); // We apply synthetic bold after shaping, in applyCSSVisibilityRules().
+         advanceInternalState.widthOfCurrentFontRange += width;
+ 
+         if (FontCascade::treatAsSpace(characterToWrite))
+-            advanceInternalState.charactersTreatedAsSpace.constructAndAppend(advanceInternalState.currentCharacterIndex, characterToWrite == space, characterToWrite == tabCharacter ? width : currentRangeFont->spaceWidth(Font::SyntheticBoldInclusion::Exclude));
++            advanceInternalState.charactersTreatedAsSpace.constructAndAppend(advanceInternalState.currentCharacterIndex, characterToWrite == space, characterToWrite == tabCharacter ? width : currentRangeFont.spaceWidth(Font::SyntheticBoldInclusion::Exclude));
+ 
+         m_glyphBounds.computeIfNeeded(glyph, currentRangeFont, advanceInternalState.currentCharacterIndex, width);
+ 
+@@ -737,7 +772,7 @@ bool WidthIterator::characterCanUseSimplifiedTextMeasuring(char32_t codePoint, b
+         return false;
+     }
+ 
+-    if (codePoint >= HiraganaLetterSmallA || isControlCharacter(codePoint))
++    if (codePoint >= HiraganaLetterSmallA || isControlCharacterFast(codePoint))
+         return false;
+ 
+     return true;
+@@ -784,8 +819,10 @@ void WidthIterator::applyCSSVisibilityRules(GlyphBuffer& glyphBuffer, unsigned g
+         glyphBuffer.makeGlyphInvisible(index);
+     };
+ 
+-    for (unsigned i = glyphBufferStartIndex; i < glyphBuffer.size(); yPosition += height(glyphBuffer.advanceAt(i)), ++i) {
+-        auto stringOffset = glyphBuffer.checkedStringOffsetAt(i, m_run->length());
++    unsigned runLength = m_run->length();
++    unsigned glyphBufferSize = glyphBuffer.size();
++    for (unsigned i = glyphBufferStartIndex; i < glyphBufferSize; yPosition += height(glyphBuffer.advanceAt(i)), ++i) {
++        auto stringOffset = glyphBuffer.checkedStringOffsetAt(i, runLength);
+         if (!stringOffset)
+             continue;
+         auto characterResponsibleForThisGlyph = m_run.get()[stringOffset.value()];
+@@ -816,7 +853,7 @@ void WidthIterator::applyCSSVisibilityRules(GlyphBuffer& glyphBuffer, unsigned g
+             continue;
+         }
+         // "Control characters (Unicode category Cc)—other than tabs (U+0009), line feeds (U+000A), carriage returns (U+000D) and sequences that form a segment break—must be rendered as a visible glyph"
+-        if (isControlCharacter(characterResponsibleForThisGlyph)) {
++        if (isControlCharacterFast(characterResponsibleForThisGlyph)) {
+             // Let's assume that .notdef is visible.
+             GlyphBufferGlyph visibleGlyph = 0;
+             clobberGlyph(i, visibleGlyph);
 diff --git a/Source/WebCore/platform/graphics/avfoundation/objc/CDMSessionAVContentKeySession.mm b/Source/WebCore/platform/graphics/avfoundation/objc/CDMSessionAVContentKeySession.mm
 index 85b979dcfb..fb7ca745f0 100644
 --- a/Source/WebCore/platform/graphics/avfoundation/objc/CDMSessionAVContentKeySession.mm
@@ -815,7 +2558,7 @@ index 00910344f6..33b70ce0c0 100644
      });
      return colorSpace.get().get();
 diff --git a/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp b/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp
-index 3498bf65a7..7a53bd86e4 100644
+index 3498bf65a7..a2ce92a59a 100644
 --- a/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp
 +++ b/Source/WebCore/platform/graphics/cg/GraphicsContextCG.cpp
 @@ -252,9 +252,12 @@ const DestinationColorSpace& GraphicsContextCG::colorSpace() const
@@ -832,7 +2575,86 @@ index 3498bf65a7..7a53bd86e4 100644
          colorSpace = CGBitmapContextGetColorSpace(context);
      else
          colorSpace = CGContextGetColorSpace(context);
-@@ -899,6 +902,17 @@ void GraphicsContextCG::fillRect(const FloatRect& rect, Gradient& gradient, cons
+@@ -282,7 +285,7 @@ void GraphicsContextCG::restore(GraphicsContextState::Purpose purpose)
+ 
+ void GraphicsContextCG::drawNativeImage(const NativeImage& nativeImage, const FloatRect& destRect, const FloatRect& srcRect, ImagePaintingOptions options)
+ {
+-    auto image = nativeImage.platformImage();
++    auto& image = nativeImage.platformImage();
+     if (!image)
+         return;
+     auto imageSize = nativeImage.size();
+@@ -349,7 +352,8 @@ void GraphicsContextCG::drawNativeImage(const NativeImage& nativeImage, const Fl
+     CGContextStateSaver stateSaver(context, false);
+     auto transform = CGContextGetCTM(context);
+ 
+-    auto subImage = image;
++    RetainPtr<CGImageRef> retainedSubImage;
++    auto subImage = image.get();
+ 
+     auto adjustedDestRect = normalizedDestRect;
+ 
+@@ -364,7 +368,8 @@ void GraphicsContextCG::drawNativeImage(const NativeImage& nativeImage, const Fl
+             // containing only the portion we want to display. We need to do this because high-quality
+             // interpolation smoothes sharp edges, causing pixels from outside the source rect to bleed
+             // into the destination rect. See <rdar://problem/6112909>.
+-            subImage = getSubimage(subImage.get(), imageSize, subimageRect, options);
++            retainedSubImage = getSubimage(subImage, imageSize, subimageRect, options);
++            subImage = retainedSubImage.get();
+ 
+             auto subPixelPadding = normalizedSrcRect.location() - subimageRect.location();
+             adjustedDestRect = { adjustedDestRect.location() - subPixelPadding * scale, subimageRect.size() * scale };
+@@ -383,7 +388,8 @@ void GraphicsContextCG::drawNativeImage(const NativeImage& nativeImage, const Fl
+ #if PLATFORM(IOS_FAMILY)
+     bool wasAntialiased = CGContextGetShouldAntialias(context);
+     // Anti-aliasing is on by default on the iPhone. Need to turn it off when drawing images.
+-    CGContextSetShouldAntialias(context, false);
++    if (wasAntialiased)
++        CGContextSetShouldAntialias(context, false);
+ 
+     // Align to pixel boundaries
+     adjustedDestRect = roundToDevicePixels(adjustedDestRect);
+@@ -391,7 +397,9 @@ void GraphicsContextCG::drawNativeImage(const NativeImage& nativeImage, const Fl
+ 
+     auto oldCompositeOperator = compositeOperation();
+     auto oldBlendMode = blendMode();
+-    setCGBlendMode(context, options.compositeOperator(), options.blendMode());
++    bool blendModeChanged = oldCompositeOperator != options.compositeOperator() || oldBlendMode != options.blendMode();
++    if (blendModeChanged)
++        setCGBlendMode(context, options.compositeOperator(), options.blendMode());
+ 
+ #if HAVE(SUPPORT_HDR_DISPLAY_APIS)
+     auto oldHeadroom = CGContextGetEDRTargetHeadroom(context);
+@@ -409,7 +417,7 @@ void GraphicsContextCG::drawNativeImage(const NativeImage& nativeImage, const Fl
+     }
+ 
+     if (options.dynamicRangeLimit() == PlatformDynamicRangeLimit::standard() && options.drawsHDRContent() == DrawsHDRContent::Yes)
+-        setCGDynamicRangeLimitForImage(context, subImage.get(), options.dynamicRangeLimit().value());
++        setCGDynamicRangeLimitForImage(context, subImage, options.dynamicRangeLimit().value());
+ #endif
+ 
+     // Make the origin be at adjustedDestRect.location()
+@@ -430,14 +438,16 @@ void GraphicsContextCG::drawNativeImage(const NativeImage& nativeImage, const Fl
+     CGContextScaleCTM(context, 1, -1);
+ 
+     // Draw the image.
+-    CGContextDrawImage(context, adjustedDestRect, subImage.get());
++    CGContextDrawImage(context, adjustedDestRect, subImage);
+ 
+     if (!stateSaver.didSave()) {
+         CGContextSetCTM(context, transform);
+ #if PLATFORM(IOS_FAMILY)
+-        CGContextSetShouldAntialias(context, wasAntialiased);
++        if (wasAntialiased)
++            CGContextSetShouldAntialias(context, true);
+ #endif
+-        setCGBlendMode(context, oldCompositeOperator, oldBlendMode);
++        if (blendModeChanged)
++            setCGBlendMode(context, oldCompositeOperator, oldBlendMode);
+ #if HAVE(SUPPORT_HDR_DISPLAY_APIS)
+         CGContextSetContentToneMappingInfo(context, oldToneMappingInfo);
+         CGContextSetEDRTargetHeadroom(context, oldHeadroom);
+@@ -899,6 +909,17 @@ void GraphicsContextCG::fillRect(const FloatRect& rect, Gradient& gradient, cons
  void GraphicsContextCG::fillRect(const FloatRect& rect, const Color& color)
  {
      CGContextRef context = platformContext();
@@ -850,7 +2672,7 @@ index 3498bf65a7..7a53bd86e4 100644
      Color oldFillColor = fillColor();
  
      if (oldFillColor != color)
-@@ -1131,13 +1145,24 @@ void GraphicsContextCG::setCGDropShadow(const std::optional<GraphicsDropShadow>&
+@@ -1131,13 +1152,24 @@ void GraphicsContextCG::setCGDropShadow(const std::optional<GraphicsDropShadow>&
  
      CGContextSetAlpha(context, shadow->opacity);
  
@@ -875,7 +2697,7 @@ index 3498bf65a7..7a53bd86e4 100644
  }
  
  #if HAVE(CGSTYLE_COLORMATRIX_BLUR)
-@@ -1172,7 +1197,11 @@ void GraphicsContextCG::setCGStyle(const std::optional<GraphicsStyle>& style, bo
+@@ -1172,7 +1204,11 @@ void GraphicsContextCG::setCGStyle(const std::optional<GraphicsStyle>& style, bo
      auto context = platformContext();
  
      if (!style) {
@@ -887,7 +2709,7 @@ index 3498bf65a7..7a53bd86e4 100644
          return;
      }
  
-@@ -1500,8 +1529,10 @@ bool GraphicsContextCG::knownToHaveFloatBasedBacking() const
+@@ -1500,8 +1536,10 @@ bool GraphicsContextCG::knownToHaveFloatBasedBacking() const
  {
      auto context = platformContext();
  
@@ -899,38 +2721,223 @@ index 3498bf65a7..7a53bd86e4 100644
          return CGBitmapContextGetBitmapInfo(context) & kCGBitmapFloatComponents;
      return false;
 diff --git a/Source/WebCore/platform/graphics/cg/ImageDecoderCG.cpp b/Source/WebCore/platform/graphics/cg/ImageDecoderCG.cpp
-index 5a19a92dd7..6c59248078 100644
+index 5a19a92dd7..4823d46f6b 100644
 --- a/Source/WebCore/platform/graphics/cg/ImageDecoderCG.cpp
 +++ b/Source/WebCore/platform/graphics/cg/ImageDecoderCG.cpp
-@@ -681,7 +681,35 @@ PlatformImagePtr ImageDecoderCG::createFrameImageAtIndex(size_t index, Subsampli
+@@ -153,6 +153,19 @@ static RetainPtr<CFDictionaryRef> imageSourceOptions(SubsamplingLevel subsamplin
+     if (subsamplingLevel == SubsamplingLevel::Default && decodingDestination == DecodingDestination::Base)
+         return options;
+ 
++    if (decodingDestination == DecodingDestination::Base && subsamplingLevel > SubsamplingLevel::First && subsamplingLevel <= SubsamplingLevel::Last) {
++        static CFDictionaryRef subsampledOptions[static_cast<int>(SubsamplingLevel::Max)];
++        static std::once_flag initializeSubsampledOptionsOnce;
++        std::call_once(initializeSubsampledOptionsOnce, [] {
++            for (auto level = SubsamplingLevel::First; level <= SubsamplingLevel::Last; ++level) {
++                auto levelOptions = adoptCF(CFDictionaryCreateMutableCopy(nullptr, 0, options));
++                appendImageSourceOption(levelOptions.get(), level);
++                subsampledOptions[static_cast<int>(level)] = levelOptions.leakRef();
++            }
++        });
++        return subsampledOptions[static_cast<int>(subsamplingLevel)];
++    }
++
+     auto extendedOptions = adoptCF(CFDictionaryCreateMutableCopy(nullptr, 0, options));
+     appendImageSourceOption(extendedOptions.get(), subsamplingLevel);
+     appendImageSourceOption(extendedOptions.get(), decodingDestination);
+@@ -319,6 +332,34 @@ ImageDecoderCG::ImageDecoderCG(FragmentedSharedBuffer& data, AlphaOption, GammaA
+         m_nativeDecoder = adoptCF(CGImageSourceCreateIncremental(nullptr));
+ }
+ 
++RetainPtr<CFDictionaryRef> ImageDecoderCG::propertiesAtIndex(size_t index, SubsamplingLevel subsamplingLevel) const
++{
++    {
++        Locker locker { m_propertiesLock };
++        if (m_properties && m_propertiesIndex == index && m_propertiesSubsamplingLevel == subsamplingLevel)
++            return m_properties;
++    }
++
++    auto properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions(subsamplingLevel).get()));
++    if (!properties)
++        return nullptr;
++
++    {
++        Locker locker { m_propertiesLock };
++        m_properties = properties;
++        m_propertiesIndex = index;
++        m_propertiesSubsamplingLevel = subsamplingLevel;
++    }
++
++    return properties;
++}
++
++void ImageDecoderCG::clearCachedProperties() const
++{
++    Locker locker { m_propertiesLock };
++    m_properties = nullptr;
++}
++
+ size_t ImageDecoderCG::bytesDecodedToDetermineProperties() const
+ {
+     // Measured by tracing malloc/calloc calls on Mac OS 10.6.6, x86_64.
+@@ -380,7 +421,7 @@ EncodedDataStatus ImageDecoderCG::encodedDataStatus() const
+         if (m_encodedDataStatus == EncodedDataStatus::SizeAvailable)
+             break;
+ 
+-        auto image0Properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), 0, imageSourceOptions().get()));
++        auto image0Properties = propertiesAtIndex(0);
+         if (!image0Properties || !CFDictionaryContainsKey(image0Properties.get(), kCGImagePropertyPixelWidth) || !CFDictionaryContainsKey(image0Properties.get(), kCGImagePropertyPixelHeight)) {
+             m_encodedDataStatus = EncodedDataStatus::TypeAvailable;
+             break;
+@@ -400,7 +441,8 @@ EncodedDataStatus ImageDecoderCG::encodedDataStatus() const
+ 
+ bool ImageDecoderCG::hasHDRGainMap() const
+ {
+-#if HAVE(SUPPORT_HDR_DISPLAY)
++// Gain maps postdate this ImageIO, and the lookup is a whole-container metadata copy.
++#if HAVE(SUPPORT_HDR_DISPLAY) && !defined(WEBKIT_IOS6)
+     auto properties = adoptCF(CGImageSourceCopyProperties(m_nativeDecoder.get(), imageSourceMetadataOptions().get()));
+     if (!properties)
+         return false;
+@@ -487,7 +529,7 @@ RepetitionCount ImageDecoderCG::repetitionCount() const
+ 
+ std::optional<IntPoint> ImageDecoderCG::hotSpot() const
+ {
+-    auto properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), 0, imageSourceOptions().get()));
++    auto properties = propertiesAtIndex(0);
+     if (!properties)
+         return std::nullopt;
+     
+@@ -506,48 +548,34 @@ std::optional<IntPoint> ImageDecoderCG::hotSpot() const
+     return IntPoint(x, y);
+ }
+ 
+-bool ImageDecoderCG::hasAlpha() const
+-{
+-    String uti = this->uti();
+-    
+-    // Return false if there is no image type or the image type is JPEG, because
+-    // JPEG does not support alpha transparency.
+-    if (uti.isEmpty() || uti == "public.jpeg"_s)
+-        return false;
+-    
+-    // FIXME: Could return false for other non-transparent image formats.
+-    // FIXME: Could maybe return false for a GIF Frame if we have enough info in the GIF properties dictionary
+-    // to determine whether or not a transparent color was defined.
+-    return true;
+-}
+-
+ IntSize ImageDecoderCG::frameSizeAtIndex(size_t index, SubsamplingLevel subsamplingLevel) const
+ {
+-    auto properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions(subsamplingLevel).get()));
++    auto properties = propertiesAtIndex(index, subsamplingLevel);
+     return frameSizeFromProperties(properties.get());
+ }
+ 
+ FloatSize ImageDecoderCG::frameDensityAtIndex(size_t index) const
+ {
+-    RetainPtr properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions().get()));
++    RetainPtr properties = propertiesAtIndex(index);
+     return frameDensityFromProperties(properties.get());
+ }
+ 
+ bool ImageDecoderCG::frameIsCompleteAtIndex(size_t index) const
+ {
+-    ASSERT(frameCount());
++    auto frameCount = this->frameCount();
++    ASSERT(frameCount);
+     // CGImageSourceGetStatusAtIndex() changes the return status value from kCGImageStatusIncomplete
+     // to kCGImageStatusComplete only if (index > 1 && index < frameCount() - 1). To get an accurate
+     // result for the last frame (or the single frame of the static image) use CGImageSourceGetStatus()
+     // instead for this frame.
+-    if (index == frameCount() - 1)
++    if (index == frameCount - 1)
+         return CGImageSourceGetStatus(m_nativeDecoder.get()) == kCGImageStatusComplete;
+     return CGImageSourceGetStatusAtIndex(m_nativeDecoder.get(), index) == kCGImageStatusComplete;
+ }
+ 
+ ImageOrientation ImageDecoderCG::frameOrientationAtIndex(size_t index) const
+ {
+-    auto properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions().get()));
++    auto properties = propertiesAtIndex(index);
+     if (!properties)
+         return ImageOrientation::Orientation::None;
+ 
+@@ -556,7 +584,7 @@ ImageOrientation ImageDecoderCG::frameOrientationAtIndex(size_t index) const
+ 
+ std::optional<IntSize> ImageDecoderCG::frameDensityCorrectedSizeAtIndex(size_t index) const
+ {
+-    auto properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions().get()));
++    auto properties = propertiesAtIndex(index);
+     if (!properties)
+         return std::nullopt;
+ 
+@@ -573,10 +601,18 @@ std::optional<IntSize> ImageDecoderCG::frameDensityCorrectedSizeAtIndex(size_t i
+ Seconds ImageDecoderCG::frameDurationAtIndex(size_t index) const
+ {
+     RetainPtr<CFDictionaryRef> properties = nullptr;
+-    RetainPtr<CFDictionaryRef> frameProperties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions().get()));
++    RetainPtr<CFDictionaryRef> frameProperties = propertiesAtIndex(index);
+     CFDictionaryRef animationProperties = animationPropertiesFromProperties(frameProperties.get());
+ 
+-    if (frameProperties && !animationProperties) {
++#if defined(WEBKIT_IOS6)
++    // The container lookup below only ever holds delays for HEICS and AVIS, which are
++    // multi-frame by construction.
++    bool mayHaveContainerFrameInfo = frameCount() > 1;
++#else
++    constexpr bool mayHaveContainerFrameInfo = true;
++#endif
++
++    if (mayHaveContainerFrameInfo && frameProperties && !animationProperties) {
+         properties = adoptCF(CGImageSourceCopyProperties(m_nativeDecoder.get(), imageSourceOptions().get()));
+         animationProperties = animationPropertiesFromProperties(properties.get(), WebCoreCGImagePropertyAVISDictionary, index);
+         if (!animationProperties)
+@@ -610,7 +646,19 @@ bool ImageDecoderCG::frameHasAlphaAtIndex(size_t index) const
+ 
+ bool ImageDecoderCG::fetchFrameMetaDataAtIndex(size_t index, SubsamplingLevel subsamplingLevel, const DecodingOptions& options, ImageFrame& frame) const
+ {
+-    auto properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions(subsamplingLevel).get()));
++#if defined(WEBKIT_IOS6)
++    // Everything below is a property of the encoded image, not of the reduction the
++    // frame was decoded at, and ImageFrame::size() is only read for the intrinsic
++    // size layout uses. One level keeps the properties cache warm across a decode and
++    // stops a query about one level discarding a frame decoded at another.
++    UNUSED_PARAM(options);
++    auto properties = propertiesAtIndex(index, SubsamplingLevel::Default);
++    if (!properties)
++        return false;
++
++    frame.m_size = frameSizeFromProperties(properties.get());
++#else
++    auto properties = propertiesAtIndex(index, subsamplingLevel);
+     if (!properties)
+         return false;
+ 
+@@ -619,6 +667,7 @@ bool ImageDecoderCG::fetchFrameMetaDataAtIndex(size_t index, SubsamplingLevel su
+         frame.m_size = frame.nativeImage(options.decodingDestination())->size();
+     } else
+         frame.m_size = frameSizeFromProperties(properties.get());
++#endif
+ 
+     frame.m_density = frameDensityFromProperties(properties.get());
+ 
+@@ -681,15 +730,33 @@ PlatformImagePtr ImageDecoderCG::createFrameImageAtIndex(size_t index, Subsampli
  
      ASSERT(decodingOptions.decodingMode() != DecodingMode::Auto);
  
 -    if (decodingOptions.decodingMode() == DecodingMode::Synchronous) {
 +    bool decodeForNativeSize = decodingOptions.decodingMode() == DecodingMode::Synchronous;
++    auto sizeForDrawing = decodingOptions.sizeForDrawing();
++    std::optional<IntSize> nativeSize;
 +
 +#if defined(WEBKIT_IOS6)
-+    // A synchronous decode is what every image inside the viewport gets
-+    // (RenderBoxModelObject::decodingModeForImageDraw returns Synchronous for
-+    // isVisibleInViewport()), so on this port the images that are on screen are
-+    // exactly the ones decoded at native size. The panel is 640x960 px and the
-+    // process budget is about 122MB, so a 1080px-wide photo drawn into a
-+    // 320pt column is 4.7MB of RGBA held to paint 1.6MB of it, and the surplus
-+    // is resampled away again on every paint.
-+    //
-+    // Decode it at the size it will be drawn instead, which is what the
-+    // asynchronous branch below already does on this same device for the images
-+    // below the fold. This is not the subsampling lever: sizeForDrawing is exact
-+    // rather than a power of two, so the frame is never smaller than the rect it
-+    // is painted into and there is no softening. A later draw at a larger size
-+    // re-decodes rather than reusing a small frame - the frame cache keys on it,
-+    // see DecodingOptions::isCompatibleWith().
-+    //
-+    // Only when a drawing size is known and is actually smaller than the image:
-+    // a synchronous decode with no sizeForDrawing (canvas, favicons) keeps the
-+    // native-size entry point it has always used.
-+    if (auto sizeForDrawing = decodingOptions.sizeForDrawing()) {
-+        if (sizeForDrawing->unclampedArea() < frameSizeAtIndex(index, SubsamplingLevel::Default).unclampedArea())
++    // Every image inside the viewport is decoded synchronously, so on this port the
++    // images on screen are exactly the ones held at native size while being painted
++    // into a 320pt column. Decode at the size it will be drawn, as the asynchronous
++    // branch below already does for the images below the fold.
++    if (sizeForDrawing) {
++        nativeSize = frameSizeAtIndex(index, SubsamplingLevel::Default);
++        if (sizeForDrawing->unclampedArea() < nativeSize->unclampedArea())
 +            decodeForNativeSize = false;
 +    }
 +#endif
@@ -939,6 +2946,77 @@ index 5a19a92dd7..6c59248078 100644
          // Decode an image synchronously for its native size.
          options = imageSourceOptions(subsamplingLevel, decodingOptions.decodingDestination());
          image = adoptCF(CGImageSourceCreateImageAtIndex(m_nativeDecoder.get(), index, options.get()));
+     } else {
+-        auto size = frameSizeAtIndex(index, SubsamplingLevel::Default);
++        if (!nativeSize)
++            nativeSize = frameSizeAtIndex(index, SubsamplingLevel::Default);
++        auto size = *nativeSize;
+ 
+         // Don't consider the subsamplingLevel when comparing the image native size with sizeForDrawing.
+-        if (auto sizeForDrawing = decodingOptions.sizeForDrawing()) {
++        if (sizeForDrawing) {
+             // See which size is smaller: the image native size or the decodingSize.
+             if (sizeForDrawing->unclampedArea() < size.unclampedArea())
+                 size = *sizeForDrawing;
+@@ -810,9 +877,15 @@ void ImageDecoderCG::setData(const FragmentedSharedBuffer& data, bool allDataRec
+     // We use FragmentedSharedBuffer's ability to wrap itself inside CFData to get around this, ensuring that ImageIO is
+     // really looking at the FragmentedSharedBuffer.
+     CGImageSourceUpdateData(m_nativeDecoder.get(), contiguousData->createCFData().get(), allDataReceived);
+-    
++
+     m_uti = decodeUTI(contiguousData.get());
+     m_isXBitmapImage = m_uti == "public.xbitmap-image"_s;
++
++    // JPEG does not support alpha transparency.
++    // FIXME: Could return false for other non-transparent image formats.
++    m_hasAlpha = !m_uti.isEmpty() && m_uti != "public.jpeg"_s;
++
++    clearCachedProperties();
+ }
+ 
+ bool ImageDecoderCG::canDecodeType(const String& mimeType)
+diff --git a/Source/WebCore/platform/graphics/cg/ImageDecoderCG.h b/Source/WebCore/platform/graphics/cg/ImageDecoderCG.h
+index fce0524bf3..52fa40f018 100644
+--- a/Source/WebCore/platform/graphics/cg/ImageDecoderCG.h
++++ b/Source/WebCore/platform/graphics/cg/ImageDecoderCG.h
+@@ -27,6 +27,7 @@
+ 
+ #include <WebCore/ImageDecoder.h>
+ #include <atomic>
++#include <wtf/Lock.h>
+ #include <wtf/TZoneMalloc.h>
+ 
+ #if USE(CG)
+@@ -82,9 +83,12 @@ public:
+     static String decodeUTI(CGImageSourceRef, const SharedBuffer&);
+ 
+ private:
+-    bool hasAlpha() const;
++    bool hasAlpha() const { return m_hasAlpha; }
+     String decodeUTI(const SharedBuffer&) const;
+ 
++    RetainPtr<CFDictionaryRef> propertiesAtIndex(size_t, SubsamplingLevel = SubsamplingLevel::Default) const;
++    void clearCachedProperties() const;
++
+ #if ENABLE(QUICKLOOK_FULLSCREEN)
+     bool isMaybePanoramic() const;
+     bool isPanorama() const;
+@@ -100,9 +104,15 @@ private:
+ 
+     bool m_isAllDataReceived { false };
+     std::atomic<bool> m_isXBitmapImage { false };
++    std::atomic<bool> m_hasAlpha { true };
+     mutable EncodedDataStatus m_encodedDataStatus { EncodedDataStatus::Unknown };
+     String m_uti;
+     RetainPtr<CGImageSourceRef> m_nativeDecoder;
++
++    mutable Lock m_propertiesLock;
++    mutable RetainPtr<CFDictionaryRef> m_properties WTF_GUARDED_BY_LOCK(m_propertiesLock);
++    mutable size_t m_propertiesIndex WTF_GUARDED_BY_LOCK(m_propertiesLock) { 0 };
++    mutable SubsamplingLevel m_propertiesSubsamplingLevel WTF_GUARDED_BY_LOCK(m_propertiesLock) { SubsamplingLevel::Default };
+ };
+ 
+ } // namespace WebCore
 diff --git a/Source/WebCore/platform/graphics/cg/NativeImageCG.cpp b/Source/WebCore/platform/graphics/cg/NativeImageCG.cpp
 index ef38a7c7b3..91a56e9121 100644
 --- a/Source/WebCore/platform/graphics/cg/NativeImageCG.cpp
@@ -1016,6 +3094,124 @@ index 789b7bcde7..1c2fb1639e 100644
      return kCTFontContentSizeCategoryL;
  #endif
  }
+diff --git a/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp b/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp
+index 990931f383..6affb8867a 100644
+--- a/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp
++++ b/Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp
+@@ -42,6 +42,7 @@
+ #include "UnrealizedCoreTextFont.h"
+ #include <CoreText/SFNTLayoutTypes.h>
+ #include <array>
++#include <atomic>
+ #include <pal/spi/cf/CoreTextSPI.h>
+ #include <pal/spi/cocoa/AccessibilitySupportSPI.h>
+ #include <wtf/HashSet.h>
+@@ -284,8 +285,13 @@ public:
+         m_families.clear();
+         for (auto& item : inputAllowlist)
+             m_families.add(item);
++        s_isEmpty.store(m_families.isEmpty(), std::memory_order_relaxed);
+     }
+ 
++    // An empty allowlist allows everything, which is the state every normal load runs in.
++    // Publishing that as a flag keeps the per-family-lookup lock off the hot path.
++    static bool isEmpty() { return s_isEmpty.load(std::memory_order_relaxed); }
++
+     bool allows(const AtomString& family) const WTF_REQUIRES_LOCK(lock)
+     {
+         return m_families.isEmpty() || m_families.contains(family);
+@@ -294,10 +300,12 @@ public:
+     static Lock lock;
+ 
+ private:
++    static std::atomic<bool> s_isEmpty;
+     HashSet<String, ASCIICaseInsensitiveHash> m_families;
+ };
+ 
+ Lock FontCacheAllowlist::lock;
++std::atomic<bool> FontCacheAllowlist::s_isEmpty { true };
+ 
+ void FontCache::setFontAllowlist(const Vector<String>& inputAllowlist)
+ {
+@@ -444,6 +452,11 @@ FontSelectionCapabilities capabilitiesForFontDescriptor(CTFontDescriptorRef font
+ 
+ static const FontDatabase::InstalledFont* findClosestFont(const FontDatabase::InstalledFontFamily& familyFonts, FontSelectionRequest fontSelectionRequest)
+ {
++    // With one candidate the selection algorithm can only pick it. Short-circuiting skips a
++    // heap-allocated capabilities vector and the whole three-stage matching pass per lookup.
++    if (familyFonts.installedFonts.size() == 1)
++        return &familyFonts.installedFonts[0];
++
+     auto capabilities = familyFonts.installedFonts.map([](auto& font) {
+         return font.capabilities;
+     });
+@@ -476,8 +489,13 @@ struct FontLookup {
+ 
+ static bool isDotPrefixedForbiddenFont(const AtomString& family)
+ {
++    // Everything this can forbid is dot-prefixed, so for an ordinary family neither the
++    // SDK query nor the name comparisons below can change the answer.
++    if (!family.startsWith('.'))
++        return false;
++
+     if (linkedOnOrAfterSDKWithBehavior(SDKAlignedBehavior::ForbidsDotPrefixedFonts))
+-        return family.startsWith('.');
++        return true;
+     return equalLettersIgnoringASCIICase(family, ".applesystemuifontserif"_s)
+         || equalLettersIgnoringASCIICase(family, ".sf ns mono"_s)
+         || equalLettersIgnoringASCIICase(family, ".sf ui mono"_s)
+@@ -487,6 +505,9 @@ static bool isDotPrefixedForbiddenFont(const AtomString& family)
+ 
+ static bool isAllowlistedFamily(const AtomString& family)
+ {
++    if (FontCacheAllowlist::isEmpty())
++        return true;
++
+     if (isSystemFont(family.string()))
+         return true;
+ 
+diff --git a/Source/WebCore/platform/graphics/cocoa/FontDatabase.cpp b/Source/WebCore/platform/graphics/cocoa/FontDatabase.cpp
+index 5683c4cc68..44fccbb248 100644
+--- a/Source/WebCore/platform/graphics/cocoa/FontDatabase.cpp
++++ b/Source/WebCore/platform/graphics/cocoa/FontDatabase.cpp
+@@ -29,6 +29,7 @@
+ #include "FontCacheCoreText.h"
+ #include "FontCascadeDescription.h"
+ #include <pal/spi/cf/CoreTextSPI.h>
++#include <wtf/text/StringHash.h>
+ 
+ namespace WebCore {
+ 
+@@ -50,10 +51,28 @@ void FontDatabase::InstalledFontFamily::expand(const InstalledFont& installedFon
+     capabilities.expand(installedFont.capabilities);
+ }
+ 
++// The keys in m_familyNameToFontDescriptors are already ASCII-lowercased, so hashing the
++// query case-insensitively lands on the same bucket as hashing its lowercased copy would.
++// This lets a hit avoid allocating that copy, which is what every text run was paying for.
++struct FoldedFamilyNameTranslator {
++    static unsigned hash(const String& familyName) { return ASCIICaseInsensitiveHash::hash(familyName); }
++    static bool equal(const String& foldedKey, const String& familyName) { return equalIgnoringASCIICase(foldedKey, familyName); }
++};
++
+ const FontDatabase::InstalledFontFamily& FontDatabase::collectionForFamily(const String& familyName)
+ {
++    // Dot-prefixed names are not folded (see FontCascadeDescription::foldedFamilyName), so
++    // their stored keys can differ only by case and must be matched exactly.
++    bool canMatchWithoutFolding = !familyName.isEmpty() && familyName[0] != '.';
++    if (canMatchWithoutFolding) {
++        Locker locker { m_familyNameToFontDescriptorsLock };
++        auto it = m_familyNameToFontDescriptors.find<FoldedFamilyNameTranslator>(familyName);
++        if (it != m_familyNameToFontDescriptors.end())
++            return *it->value;
++    }
++
+     auto folded = FontCascadeDescription::foldedFamilyName(familyName);
+-    {
++    if (!canMatchWithoutFolding) {
+         Locker locker { m_familyNameToFontDescriptorsLock };
+         auto it = m_familyNameToFontDescriptors.find(folded);
+         if (it != m_familyNameToFontDescriptors.end())
 diff --git a/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm b/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm
 index 0b412f591c..925061919f 100644
 --- a/Source/WebCore/platform/graphics/cocoa/GraphicsContextCocoa.mm
@@ -1132,11 +3328,239 @@ index ccda60f194..eb77090df8 100644
      auto font = WTF::switchOn(m_baseFont, [this](const RetainPtr<CTFontRef>& font) -> RetainPtr<CTFontRef> {
          if (!font)
              return nullptr;
+diff --git a/Source/WebCore/platform/graphics/coretext/ComplexTextControllerCoreText.mm b/Source/WebCore/platform/graphics/coretext/ComplexTextControllerCoreText.mm
+index 15f6b0dc78..56ce2a523e 100644
+--- a/Source/WebCore/platform/graphics/coretext/ComplexTextControllerCoreText.mm
++++ b/Source/WebCore/platform/graphics/coretext/ComplexTextControllerCoreText.mm
+@@ -196,11 +196,11 @@ void ComplexTextController::collectComplexTextRunsForCharacters(std::span<const
+         effectiveFont = m_fontCascade->fallbackRangesAt(0).fontForCharacter(baseCharacter);
+         if (!effectiveFont)
+             effectiveFont = &m_fontCascade->fallbackRangesAt(0).fontForFirstRange();
+-        stringAttributes = adoptCF(CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, getCFStringAttributes(*effectiveFont, m_fontCascade->enableKerning(), effectiveFont->platformData().orientation(), m_fontCascade->fontDescription().computedLocale()).get()));
++        stringAttributes = adoptCF(CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, effectiveFont->cfStringAttributes(m_fontCascade->enableKerning(), m_fontCascade->fontDescription().computedLocale()).get()));
+         // We don't know which font should be used to render this grapheme cluster, so enable CoreText's fallback mechanism by using the CTFont which doesn't have CoreText's fallback disabled.
+         CFDictionarySetValue(const_cast<CFMutableDictionaryRef>(stringAttributes.get()), kCTFontAttributeName, effectiveFont->platformData().ctFont());
+     } else
+-        stringAttributes = getCFStringAttributes(*effectiveFont, m_fontCascade->enableKerning(), effectiveFont->platformData().orientation(), m_fontCascade->fontDescription().computedLocale());
++        stringAttributes = effectiveFont->cfStringAttributes(m_fontCascade->enableKerning(), m_fontCascade->fontDescription().computedLocale());
+ 
+     RetainPtr<CTLineRef> line;
+ 
+diff --git a/Source/WebCore/platform/graphics/coretext/FontCascadeCoreText.cpp b/Source/WebCore/platform/graphics/coretext/FontCascadeCoreText.cpp
+index 5355400f46..f4ac8bbf5a 100644
+--- a/Source/WebCore/platform/graphics/coretext/FontCascadeCoreText.cpp
++++ b/Source/WebCore/platform/graphics/coretext/FontCascadeCoreText.cpp
+@@ -112,7 +112,7 @@ AffineTransform NODELETE computeVerticalTextMatrix(const Font& font, const Affin
+     return computeBaseVerticalTextMatrix(previousTextMatrix);
+ }
+ 
+-static void fillVectorWithHorizontalGlyphPositions(Vector<CGPoint, 256>& positions, CGContextRef context, std::span<const CGSize> advances, const FloatPoint& point)
++static void fillVectorWithHorizontalGlyphPositions(Vector<CGPoint, 256>& positions, const AffineTransform& contextTextMatrix, std::span<const CGSize> advances, const FloatPoint& point)
+ {
+     // Keep this in sync as the inverse of `DrawGlyphsRecorder::recordDrawGlyphs`.
+     // The input positions are in the context's coordinate system, without the text matrix.
+@@ -123,8 +123,27 @@ static void fillVectorWithHorizontalGlyphPositions(Vector<CGPoint, 256>& positio
+     // CTM * text matrix * positions we need to deliver to CT = CTM * input positions
+     // Solving for the positions we need to deliver to CT, we get
+     // positions we need to deliver to CT = inverse(text matrix) * input positions
+-    CGAffineTransform matrix = CGAffineTransformInvert(CGContextGetTextMatrix(context));
++    // The caller has just installed contextTextMatrix on the context, so asking CG to read
++    // it back would be a round trip for a value we already have.
++    CGAffineTransform textMatrix = contextTextMatrix;
++    // Horizontal text without synthetic oblique gets the plain Y-flip, which is its own
++    // inverse, so the general inversion is only needed for the other cases.
++    CGAffineTransform matrix = (textMatrix.a == 1 && !textMatrix.b && !textMatrix.c && textMatrix.d == -1 && !textMatrix.tx && !textMatrix.ty)
++        ? textMatrix : CGAffineTransformInvert(textMatrix);
+     positions[0] = CGPointApplyAffineTransform(point, matrix);
++
++    if (!matrix.b && !matrix.c) {
++        // Horizontal text without synthetic oblique: the matrix is a scale/flip, so the
++        // per-glyph 2x3 apply collapses to one multiply per axis.
++        CGFloat a = matrix.a;
++        CGFloat d = matrix.d;
++        for (size_t i = 1; i < advances.size(); ++i) {
++            positions[i].x = positions[i - 1].x + advances[i - 1].width * a;
++            positions[i].y = positions[i - 1].y + advances[i - 1].height * d;
++        }
++        return;
++    }
++
+     for (size_t i = 1; i < advances.size(); ++i) {
+         CGSize advance = CGSizeApplyAffineTransform(advances[i - 1], matrix);
+         positions[i].x = positions[i - 1].x + advance.width;
+@@ -283,23 +302,26 @@ static void showGlyphsWithAdvances(const FloatPoint& point, const Font& font, CG
+         fillVectorWithVerticalGlyphPositions(positions, translations, advances, point, ascentDelta, CGContextGetTextMatrix(context));
+         CTFontDrawGlyphs(ctFont.get(), glyphs.data(), positions.span().data(), glyphs.size(), context);
+     } else {
+-        fillVectorWithHorizontalGlyphPositions(positions, context, advances, point);
+-        CTFontDrawGlyphs(RetainPtr { platformData.ctFont() }.get(), glyphs.data(), positions.span().data(), glyphs.size(), context);
++        fillVectorWithHorizontalGlyphPositions(positions, textMatrix, advances, point);
++        // The FontPlatformData owns the CTFont for the whole call; retaining it here would
++        // be a CFRetain/CFRelease pair per glyph run.
++        CTFontDrawGlyphs(platformData.ctFont(), glyphs.data(), positions.span().data(), glyphs.size(), context);
+     }
+ }
+ 
+-static void setCGFontRenderingMode(GraphicsContext& context)
++// Takes the context the caller already holds: wrapping it in a RetainPtr again is a
++// CFRetain/CFRelease pair per glyph run for a context that cannot go away underneath us.
++static void setCGFontRenderingMode(GraphicsContext& context, CGContextRef cgContext)
+ {
+-    RetainPtr<CGContextRef> cgContext = context.platformContext();
+-    CGContextSetShouldAntialiasFonts(cgContext.get(), true);
++    CGContextSetShouldAntialiasFonts(cgContext, true);
+ 
+-    CGAffineTransform contextTransform = CGContextGetCTM(cgContext.get());
++    CGAffineTransform contextTransform = CGContextGetCTM(cgContext);
+     bool isTranslationOrIntegralScale = WTF::isIntegral(contextTransform.a) && WTF::isIntegral(contextTransform.d) && contextTransform.b == 0.f && contextTransform.c == 0.f;
+     bool isRotated = ((contextTransform.b || contextTransform.c) && (contextTransform.a || contextTransform.d));
+     bool doSubpixelQuantization = isTranslationOrIntegralScale || (!isRotated && context.shouldSubpixelQuantizeFonts());
+ 
+-    CGContextSetShouldSubpixelPositionFonts(cgContext.get(), true);
+-    CGContextSetShouldSubpixelQuantizeFonts(cgContext.get(), doSubpixelQuantization);
++    CGContextSetShouldSubpixelPositionFonts(cgContext, true);
++    CGContextSetShouldSubpixelQuantizeFonts(cgContext, doSubpixelQuantization);
+ }
+ 
+ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::span<const GlyphBufferGlyph> glyphs, std::span<const GlyphBufferAdvance> advances, const FloatPoint& anchorPoint, FontSmoothingMode smoothingMode)
+@@ -313,7 +335,9 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
+         return;
+     }
+ 
+-    RetainPtr<CGContextRef> cgContext = context.platformContext();
++    // The GraphicsContext owns this context for the whole call; a RetainPtr here would only
++    // add a CFRetain/CFRelease pair per glyph run.
++    CGContextRef cgContext = context.platformContext();
+ 
+     if (!font.allowsAntialiasing())
+         smoothingMode = FontSmoothingMode::None;
+@@ -337,29 +361,37 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
+ #if PLATFORM(IOS_FAMILY)
+     UNUSED_VARIABLE(shouldSmoothFonts);
+ #else
+-    bool originalShouldUseFontSmoothing = CGContextGetShouldSmoothFonts(cgContext.get());
++    bool originalShouldUseFontSmoothing = CGContextGetShouldSmoothFonts(cgContext);
+     if (shouldSmoothFonts != originalShouldUseFontSmoothing)
+-        CGContextSetShouldSmoothFonts(cgContext.get(), shouldSmoothFonts);
++        CGContextSetShouldSmoothFonts(cgContext, shouldSmoothFonts);
+ #endif
+ 
+-    bool originalShouldAntialias = CGContextGetShouldAntialias(cgContext.get());
++    bool originalShouldAntialias = CGContextGetShouldAntialias(cgContext);
+     if (shouldAntialias != originalShouldAntialias)
+-        CGContextSetShouldAntialias(cgContext.get(), shouldAntialias);
++        CGContextSetShouldAntialias(cgContext, shouldAntialias);
+ 
+     FloatPoint point = anchorPoint;
+ 
+     auto textMatrix = computeOverallTextMatrix(font);
+-    ScopedTextMatrix restorer(textMatrix, cgContext.get());
++    ScopedTextMatrix restorer(textMatrix, cgContext);
+ 
+-    setCGFontRenderingMode(context);
+-    CGContextSetFontSize(cgContext.get(), platformData.size());
++    setCGFontRenderingMode(context, cgContext);
++    CGContextSetFontSize(cgContext, platformData.size());
+ 
+     auto shadow = context.dropShadow();
+ 
+-    AffineTransform contextCTM = context.getCTM();
++    // Reading the CTM back out of CoreGraphics is only needed for synthetic bold and for
++    // the simple-shadow test, neither of which body text hits.
++    std::optional<AffineTransform> contextCTM;
++    auto ctm = [&]() -> const AffineTransform& {
++        if (!contextCTM)
++            contextCTM = context.getCTM();
++        return *contextCTM;
++    };
++
+     float syntheticBoldOffset = font.syntheticBoldOffset();
+-    if (syntheticBoldOffset && !contextCTM.isIdentityOrTranslationOrFlipped()) {
+-        FloatSize horizontalUnitSizeInDevicePixels = contextCTM.mapSize(FloatSize(1, 0));
++    if (syntheticBoldOffset && !ctm().isIdentityOrTranslationOrFlipped()) {
++        FloatSize horizontalUnitSizeInDevicePixels = ctm().mapSize(FloatSize(1, 0));
+         float horizontalUnitLengthInDevicePixels = sqrtf(horizontalUnitSizeInDevicePixels.width() * horizontalUnitSizeInDevicePixels.width() + horizontalUnitSizeInDevicePixels.height() * horizontalUnitSizeInDevicePixels.height());
+         if (horizontalUnitLengthInDevicePixels) {
+             // Make sure that a scaled down context won't blow up the gap between the glyphs.
+@@ -367,7 +399,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
+         }
+     };
+ 
+-    bool hasSimpleShadow = context.textDrawingMode() == TextDrawingMode::Fill && shadow && shadow->color.isValid() && !shadow->radius && !platformData.isColorBitmapFont() && (!context.shadowsIgnoreTransforms() || contextCTM.isIdentityOrTranslationOrFlipped()) && !context.isInTransparencyLayer();
++    bool hasSimpleShadow = context.textDrawingMode() == TextDrawingMode::Fill && shadow && shadow->color.isValid() && !shadow->radius && !platformData.isColorBitmapFont() && (!context.shadowsIgnoreTransforms() || ctm().isIdentityOrTranslationOrFlipped()) && !context.isInTransparencyLayer();
+     if (hasSimpleShadow) {
+         // Paint simple shadows ourselves instead of relying on CG shadows, to avoid losing subpixel antialiasing.
+         context.clearDropShadow();
+@@ -375,29 +407,29 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
+         Color shadowFillColor = shadow->color.colorWithAlphaMultipliedBy(fillColor.alphaAsFloat());
+         context.setFillColor(shadowFillColor);
+         auto shadowTextOffset = point + context.platformShadowOffset(shadow->offset);
+-        showGlyphsWithAdvances(shadowTextOffset, font, cgContext.get(), glyphs, advances, textMatrix);
++        showGlyphsWithAdvances(shadowTextOffset, font, cgContext, glyphs, advances, textMatrix);
+         if (syntheticBoldOffset) {
+             shadowTextOffset.move(syntheticBoldOffset, 0);
+-            showGlyphsWithAdvances(shadowTextOffset, font, cgContext.get(), glyphs, advances, textMatrix);
++            showGlyphsWithAdvances(shadowTextOffset, font, cgContext, glyphs, advances, textMatrix);
+         }
+         context.setFillColor(fillColor);
+     }
+ 
+-    showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
++    showGlyphsWithAdvances(point, font, cgContext, glyphs, advances, textMatrix);
+ 
+     if (syntheticBoldOffset)
+-        showGlyphsWithAdvances(FloatPoint(point.x() + syntheticBoldOffset, point.y()), font, cgContext.get(), glyphs, advances, textMatrix);
++        showGlyphsWithAdvances(FloatPoint(point.x() + syntheticBoldOffset, point.y()), font, cgContext, glyphs, advances, textMatrix);
+ 
+     if (hasSimpleShadow)
+         context.setDropShadow(*shadow);
+ 
+ #if !PLATFORM(IOS_FAMILY)
+     if (shouldSmoothFonts != originalShouldUseFontSmoothing)
+-        CGContextSetShouldSmoothFonts(cgContext.get(), originalShouldUseFontSmoothing);
++        CGContextSetShouldSmoothFonts(cgContext, originalShouldUseFontSmoothing);
+ #endif
+ 
+     if (shouldAntialias != originalShouldAntialias)
+-        CGContextSetShouldAntialias(cgContext.get(), originalShouldAntialias);
++        CGContextSetShouldAntialias(cgContext, originalShouldAntialias);
+ }
+ 
+ bool FontCascade::primaryFontIsSystemFont() const
+@@ -470,6 +502,8 @@ RefPtr<const Font> FontCascade::fontForCombiningCharacterSequence(StringView str
+     return Font::createSystemFallbackFontPlaceholder();
+ }
+ 
++static constexpr char32_t firstCharacterWithEmojiPresentationByDefault = 0x231A;
++
+ ResolvedEmojiPolicy FontCascade::resolveEmojiPolicy(FontVariantEmoji fontVariantEmoji, char32_t character)
+ {
+     // You may think that this function should be different between macOS and iOS. And you may even be right!
+@@ -513,7 +547,7 @@ ResolvedEmojiPolicy FontCascade::resolveEmojiPolicy(FontVariantEmoji fontVariant
+         // The first category are characters with Emoji=Yes and Emoji_Presentation=Yes.
+         // The second category are characters with Emoji=Yes and Emoji_Presentation=No.
+         // The third category are characters with Emoji=No.
+-        if (isEmojiWithPresentationByDefault(character))
++        if (character >= firstCharacterWithEmojiPresentationByDefault && isEmojiWithPresentationByDefault(character))
+             return ResolvedEmojiPolicy::RequireEmoji;
+         return ResolvedEmojiPolicy::NoPreference;
+     case FontVariantEmoji::Text:
 diff --git a/Source/WebCore/platform/graphics/coretext/FontCoreText.cpp b/Source/WebCore/platform/graphics/coretext/FontCoreText.cpp
-index e2c9722db6..962de356f9 100644
+index e2c9722db6..94da2dd578 100644
 --- a/Source/WebCore/platform/graphics/coretext/FontCoreText.cpp
 +++ b/Source/WebCore/platform/graphics/coretext/FontCoreText.cpp
-@@ -621,6 +621,40 @@ GlyphBufferAdvance Font::applyTransforms(GlyphBuffer& glyphBuffer, unsigned begi
+@@ -609,7 +609,9 @@ float Font::platformWidthForGlyph(Glyph glyph) const
+     if (platformData().size()) {
+         bool horizontal = platformData().orientation() == FontOrientation::Horizontal;
+         CTFontOrientation orientation = horizontal || m_isBrokenIdeographFallback ? kCTFontOrientationHorizontal : kCTFontOrientationVertical;
+-        CTFontGetAdvancesForGlyphs(protect(ctFont()).get(), orientation, &glyph, &advance, 1);
++        // m_platformData owns this CTFont; protect() would be a CFRetain/CFRelease pair for
++        // every glyph whose advance is not cached yet.
++        CTFontGetAdvancesForGlyphs(ctFont(), orientation, &glyph, &advance, 1);
+     }
+     return advance.width;
+ }
+@@ -621,6 +623,40 @@ GlyphBufferAdvance Font::applyTransforms(GlyphBuffer& glyphBuffer, unsigned begi
      if (!platformData().size())
          return makeGlyphBufferAdvance();
  
@@ -1177,6 +3601,77 @@ index e2c9722db6..962de356f9 100644
      auto handler = ^(CFRange range, CGGlyph** newGlyphsPointer, CGSize** newAdvancesPointer, CGPoint** newOffsetsPointer, CFIndex** newIndicesPointer)
      {
          range.location = std::min(std::max(range.location, static_cast<CFIndex>(0)), static_cast<CFIndex>(glyphBuffer.size()));
+@@ -788,7 +824,8 @@ FloatRect Font::platformBoundsForGlyph(Glyph glyph) const
+ {
+     FloatRect boundingBox;
+     CGRect ignoredRect = { };
+-    boundingBox = CTFontGetBoundingRectsForGlyphs(protect(ctFont()).get(), platformData().orientation() == FontOrientation::Vertical ? kCTFontOrientationVertical : kCTFontOrientationHorizontal, &glyph, &ignoredRect, 1);
++    // m_platformData owns this CTFont for the duration of the call.
++    boundingBox = CTFontGetBoundingRectsForGlyphs(ctFont(), platformData().orientation() == FontOrientation::Vertical ? kCTFontOrientationVertical : kCTFontOrientationHorizontal, &glyph, &ignoredRect, 1);
+     boundingBox.setY(-boundingBox.maxY());
+     boundingBox.setWidth(boundingBox.width() + m_syntheticBoldOffset);
+ 
+@@ -798,7 +835,7 @@ FloatRect Font::platformBoundsForGlyph(Glyph glyph) const
+ Vector<FloatRect, Font::inlineGlyphRunCapacity> Font::platformBoundsForGlyphs(const Vector<Glyph, inlineGlyphRunCapacity>& glyphs) const
+ {
+     Vector<CGRect, inlineGlyphRunCapacity> rectsForGlyphs(glyphs.size());
+-    CTFontGetBoundingRectsForGlyphs(protect(ctFont()).get(), platformData().orientation() == FontOrientation::Vertical ? kCTFontOrientationVertical : kCTFontOrientationHorizontal, glyphs.span().data(), rectsForGlyphs.mutableSpan().data(), rectsForGlyphs.size());
++    CTFontGetBoundingRectsForGlyphs(ctFont(), platformData().orientation() == FontOrientation::Vertical ? kCTFontOrientationVertical : kCTFontOrientationHorizontal, glyphs.span().data(), rectsForGlyphs.mutableSpan().data(), rectsForGlyphs.size());
+ 
+     return rectsForGlyphs.map<Vector<FloatRect, inlineGlyphRunCapacity>>([&](const auto& rect) -> auto {
+         FloatRect boundingBox(rect);
+diff --git a/Source/WebCore/platform/graphics/coretext/GlyphPageCoreText.cpp b/Source/WebCore/platform/graphics/coretext/GlyphPageCoreText.cpp
+index 56e69968f1..e218197564 100644
+--- a/Source/WebCore/platform/graphics/coretext/GlyphPageCoreText.cpp
++++ b/Source/WebCore/platform/graphics/coretext/GlyphPageCoreText.cpp
+@@ -52,20 +52,22 @@ bool GlyphPage::fill(std::span<const char16_t> buffer)
+ {
+     ASSERT(buffer.size() == GlyphPage::size || buffer.size() == 2 * GlyphPage::size);
+ 
+-    Ref<const Font> font = this->font();
+-    Vector<CGGlyph, 512> glyphs(buffer.size());
++    // The Font owns this GlyphPage, so it outlives the call; and its FontPlatformData owns
++    // the CTFont. Neither needs a reference taken here.
++    const Font& font = this->font();
++    Vector<CGGlyph, GlyphPage::size * 2> glyphs(buffer.size());
+     unsigned glyphStep = buffer.size() / GlyphPage::size;
+ 
+     if (shouldFillWithVerticalGlyphs(buffer, font))
+-        CTFontGetVerticalGlyphsForCharacters(protect(font->platformData().ctFont()).get(), reinterpret_cast<const UniChar*>(buffer.data()), glyphs.mutableSpan().data(), buffer.size());
++        CTFontGetVerticalGlyphsForCharacters(font.platformData().ctFont(), reinterpret_cast<const UniChar*>(buffer.data()), glyphs.mutableSpan().data(), buffer.size());
+     else
+-        CTFontGetGlyphsForCharacters(protect(font->platformData().ctFont()).get(), reinterpret_cast<const UniChar*>(buffer.data()), glyphs.mutableSpan().data(), buffer.size());
++        CTFontGetGlyphsForCharacters(font.platformData().ctFont(), reinterpret_cast<const UniChar*>(buffer.data()), glyphs.mutableSpan().data(), buffer.size());
+ 
+     bool haveGlyphs = false;
+     for (unsigned i = 0; i < GlyphPage::size; ++i) {
+         auto theGlyph = glyphs[i * glyphStep];
+         if (theGlyph && theGlyph != deletedGlyph) {
+-            setGlyphForIndex(i, theGlyph, font->colorGlyphType(theGlyph));
++            setGlyphForIndex(i, theGlyph, font.colorGlyphType(theGlyph));
+             haveGlyphs = true;
+         }
+     }
+diff --git a/Source/WebCore/platform/graphics/coretext/SimpleFontDataCoreText.cpp b/Source/WebCore/platform/graphics/coretext/SimpleFontDataCoreText.cpp
+index e81ccab63f..168d9380d9 100644
+--- a/Source/WebCore/platform/graphics/coretext/SimpleFontDataCoreText.cpp
++++ b/Source/WebCore/platform/graphics/coretext/SimpleFontDataCoreText.cpp
+@@ -93,4 +93,15 @@ extern RetainPtr<CFDictionaryRef> getCFStringAttributes(const Font& font, bool e
+     return adoptCF(CFDictionaryCreate(kCFAllocatorDefault, keys.data(), values.data(), count, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+ }
+ 
++RetainPtr<CFDictionaryRef> Font::cfStringAttributes(bool enableKerning, const AtomString& locale) const
++{
++    if (m_cachedStringAttributes && m_cachedStringAttributesEnableKerning == enableKerning && m_cachedStringAttributesLocale == locale)
++        return m_cachedStringAttributes;
++
++    m_cachedStringAttributes = getCFStringAttributes(*this, enableKerning, m_platformData.orientation(), locale);
++    m_cachedStringAttributesEnableKerning = enableKerning;
++    m_cachedStringAttributesLocale = locale;
++    return m_cachedStringAttributes;
++}
++
+ } // namespace WebCore
 diff --git a/Source/WebCore/platform/graphics/cv/CVUtilities.mm b/Source/WebCore/platform/graphics/cv/CVUtilities.mm
 index 2e511734f7..17b1da2ca7 100644
 --- a/Source/WebCore/platform/graphics/cv/CVUtilities.mm
@@ -1197,7 +3692,7 @@ index 2e511734f7..17b1da2ca7 100644
  
  RetainPtr<CVPixelBufferRef> createBlackPixelBuffer(size_t width, size_t height, bool shouldUseIOSurface)
 diff --git a/Source/WebCore/platform/ios/LegacyTileCache.h b/Source/WebCore/platform/ios/LegacyTileCache.h
-index eb4e1ca8b4..511dfdd185 100644
+index eb4e1ca8b4..d93ed43c58 100644
 --- a/Source/WebCore/platform/ios/LegacyTileCache.h
 +++ b/Source/WebCore/platform/ios/LegacyTileCache.h
 @@ -129,6 +129,11 @@ public:
@@ -1212,6 +3707,15 @@ index eb4e1ca8b4..511dfdd185 100644
      void finishedCreatingTiles(bool didCreateTiles, bool createMore);
      FloatRect visibleRectInLayer(CALayer *) const;
      CALayer* hostLayer() const;
+@@ -167,7 +172,7 @@ private:
+     void tileCreationTimerFired();
+ 
+     void drawReplacementImage(LegacyTileLayer *, CGContextRef, CGImageRef);
+-    void drawWindowContent(LegacyTileLayer *, CGContextRef, CGRect dirtyRect, DrawingFlags);
++    void drawWindowContent(LegacyTileLayer *, CGContextRef, CGRect dirtyRect, DrawingFlags, CGRect layerFrame);
+ 
+     WAKWindow *m_window { nullptr };
+ 
 @@ -178,7 +183,37 @@ private:
  
      std::optional<FloatRect> m_overrideVisibleRect;
@@ -1252,7 +3756,7 @@ index eb4e1ca8b4..511dfdd185 100644
      TilingMode m_tilingMode { Normal };
      TilingDirection m_tilingDirection { TilingDirectionDown };
 diff --git a/Source/WebCore/platform/ios/LegacyTileCache.mm b/Source/WebCore/platform/ios/LegacyTileCache.mm
-index d3fd513118..5974de6460 100644
+index d3fd513118..27d05265dc 100644
 --- a/Source/WebCore/platform/ios/LegacyTileCache.mm
 +++ b/Source/WebCore/platform/ios/LegacyTileCache.mm
 @@ -25,6 +25,7 @@
@@ -1292,18 +3796,58 @@ index d3fd513118..5974de6460 100644
  // FIXME: This should go into a WAKViewInternals.h header.
  @interface WAKView (WebViewExtras)
  - (void)_dispatchTileDidDraw:(CALayer *)tile;
-@@ -64,6 +81,10 @@
+@@ -64,6 +81,13 @@
  
  namespace WebCore {
  
 +#if defined(WEBKIT_IOS6)
 +extern "C" int g_webkitIOS6PendingDrawWork;
++// Raised when a _dispatchTileDidDraw: perform is in flight, lowered by
++// -[WebView _dispatchTileDidDraw:] when it runs. See drawLayer().
++extern "C" { int g_webkitIOS6TileDidDrawPending = 0; }
 +#endif
 +
  void LegacyTileCache::ref() const
  {
      [m_window retain];
-@@ -433,6 +454,9 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
+@@ -101,10 +125,11 @@ CALayer* LegacyTileCache::hostLayer() const
+ 
+ FloatRect LegacyTileCache::visibleRectInLayer(CALayer *layer) const
+ {
+-    if (m_overrideVisibleRect)
+-        return [layer convertRect:m_overrideVisibleRect.value() fromLayer:hostLayer()];
+-
+-    return [layer convertRect:[m_window extendedVisibleRect] fromLayer:hostLayer()];
++    CALayer *host = [m_window hostLayer];
++    CGRect rect = m_overrideVisibleRect ? CGRect(m_overrideVisibleRect.value()) : [m_window extendedVisibleRect];
++    if (layer == host)
++        return rect;
++    return [layer convertRect:rect fromLayer:host];
+ }
+ 
+ bool LegacyTileCache::setOverrideVisibleRect(const FloatRect& rect)
+@@ -403,7 +428,7 @@ void LegacyTileCache::finishedCreatingTiles(bool didCreateTiles, bool createMore
+             m_zoomedInTileGrid->dropAllTiles();
+         } else if (activeTileGrid() == m_zoomedInTileGrid.get()) {
+             // Pass the minimum possible distance to consider all tiles, even visible ones.
+-            m_zoomedOutTileGrid->dropDistantTiles(0, std::numeric_limits<double>::min());
++            m_zoomedOutTileGrid->dropDistantTiles(0, std::numeric_limits<double>::min(), m_zoomedOutTileGrid->visibleRect());
+         }
+     }
+ 
+@@ -422,7 +447,11 @@ void LegacyTileCache::tileCreationTimerFired()
+ 
+ void LegacyTileCache::createTilesInActiveGrid(SynchronousTileCreationMode mode)
+ {
++#if defined(WEBKIT_IOS6)
++    if (MemoryPressureHandler::singleton().memoryPressureStatus() == SystemMemoryPressureStatus::Critical) {
++#else
+     if (MemoryPressureHandler::singleton().isUnderMemoryPressure()) {
++#endif
+         LOG(MemoryPressure, "Under memory pressure at: %s", __PRETTY_FUNCTION__);
+         removeAllNonVisibleTilesInternal();
+     }
+@@ -433,6 +462,9 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
  {
      static unsigned capacity;
      if (!capacity) {
@@ -1313,7 +3857,7 @@ index d3fd513118..5974de6460 100644
          size_t totalMemory = ramSize() / 1024 / 1024;
          if (totalMemory >= 1024)
              capacity = 128 * 1024 * 1024;
-@@ -440,6 +464,7 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
+@@ -440,6 +472,7 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
              capacity = 64 * 1024 * 1024;
          else
              capacity = 32 * 1024 * 1024;
@@ -1321,7 +3865,7 @@ index d3fd513118..5974de6460 100644
      }
  
      int gridCapacity;
-@@ -454,6 +479,50 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
+@@ -454,6 +487,50 @@ unsigned LegacyTileCache::tileCapacityForGrid(LegacyTileGrid* grid)
      else
          gridCapacity = capacity;
  
@@ -1372,7 +3916,42 @@ index d3fd513118..5974de6460 100644
      if (keepsZoomedOutTiles() && grid == m_zoomedOutTileGrid.get()) {
          if (activeTileGrid() == m_zoomedOutTileGrid.get())
              return gridCapacity;
-@@ -538,6 +607,16 @@ void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef con
+@@ -508,11 +585,14 @@ void LegacyTileCache::drawReplacementImage(LegacyTileLayer* layer, CGContextRef
+     CGContextDrawImage(context, imageRect, image);
+ }
+ 
+-void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef context, CGRect dirtyRect, DrawingFlags drawingFlags)
++void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef context, CGRect dirtyRect, DrawingFlags drawingFlags, CGRect frame)
+ {
+-    CGRect frame = [layer frame];
+-    FontAntialiasingStateSaver fontAntialiasingState(context, [m_window useOrientationDependentFontAntialiasing] && [layer isOpaque]);
+-    fontAntialiasingState.setup([WAKWindow hasLandscapeOrientation]);
++    // +[WAKWindow hasLandscapeOrientation] calls out to the application's
++    // orientation provider; the saver only looks at it when the style is being
++    // overridden, so it is not asked for otherwise.
++    bool useOrientationDependentFontAntialiasing = [m_window useOrientationDependentFontAntialiasing] && [layer isOpaque];
++    FontAntialiasingStateSaver fontAntialiasingState(context, useOrientationDependentFontAntialiasing);
++    fontAntialiasingState.setup(useOrientationDependentFontAntialiasing && [WAKWindow hasLandscapeOrientation]);
+ 
+     if (drawingFlags == DrawingFlags::Snapshotting)
+         [m_window setIsInSnapshottingPaint:YES];
+@@ -522,6 +602,7 @@ void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef con
+     
+     if (drawRegion && shouldRepaintInPieces(dirtyRect, drawRegion, contentsScale)) {
+         // Use fine grained repaint rectangles to minimize the amount of painted pixels.
++        CALayer *host = hostLayer();
+         CGSRegionEnumeratorObj enumerator = CGSRegionEnumerator(drawRegion);
+         CGRect *subRect;
+         while ((subRect = CGSNextRect(enumerator))) {
+@@ -531,13 +612,23 @@ void LegacyTileCache::drawWindowContent(LegacyTileLayer* layer, CGContextRef con
+             adjustedSubRect.size.width /= contentsScale;
+             adjustedSubRect.size.height /= contentsScale;
+ 
+-            CGRect subRectInSuper = [hostLayer() convertRect:adjustedSubRect fromLayer:layer];
++            CGRect subRectInSuper = [host convertRect:adjustedSubRect fromLayer:layer];
+             [m_window displayRect:subRectInSuper];
+         }
+         CGSReleaseRegionEnumerator(enumerator);
      } else {
          // Simple repaint
          CGRect dirtyRectInSuper = [hostLayer() convertRect:dirtyRect fromLayer:layer];
@@ -1389,7 +3968,7 @@ index d3fd513118..5974de6460 100644
          [m_window displayRect:dirtyRectInSuper];
      }
      
-@@ -555,6 +634,7 @@ void LegacyTileCache::drawLayer(LegacyTileLayer* layer, CGContextRef context, Dr
+@@ -555,6 +646,7 @@ void LegacyTileCache::drawLayer(LegacyTileLayer* layer, CGContextRef context, Dr
  
      WKSetCurrentGraphicsContext(context);
  
@@ -1397,15 +3976,59 @@ index d3fd513118..5974de6460 100644
      CGRect dirtyRect = CGContextGetClipBoundingBox(context);
      CGRect frame = [layer frame];
      CGContextTranslateCTM(context, -frame.origin.x, -frame.origin.y);
-@@ -615,6 +695,7 @@ void LegacyTileCache::scheduleRenderingUpdateForPendingRepaint()
+@@ -564,7 +656,7 @@ void LegacyTileCache::drawLayer(LegacyTileLayer* layer, CGContextRef context, Dr
+     if (RetainPtr<CGImage> contentReplacementImage = this->contentReplacementImage())
+         drawReplacementImage(layer, context, contentReplacementImage.get());
+     else
+-        drawWindowContent(layer, context, dirtyRect, drawingFlags);
++        drawWindowContent(layer, context, dirtyRect, drawingFlags, frame);
+ 
+     ++layer.paintCount;
+     if (m_tilePaintCountersVisible) {
+@@ -599,7 +691,24 @@ void LegacyTileCache::drawLayer(LegacyTileLayer* layer, CGContextRef context, Dr
+     }
+ 
+     WAKView* view = [m_window contentView];
++#if defined(WEBKIT_IOS6)
++    // One outstanding "tiles drew" notification, not one per tile.
++    //
++    // -[WebView _dispatchTileDidDraw:] reports the first paint of a load and
++    // returns immediately on every call after it, but the delayed perform that
++    // carries it allocates a timer and wakes the run loop each time. On the web
++    // thread that wake is a whole extra turn of the loop, which means another
++    // acquire and release of the web lock plus an autorelease pool - paid once
++    // per tile, per drawing pass. The flag is lowered by the callback itself, so
++    // no notification is dropped: a pass that finds one already in flight is a
++    // pass whose notification has not been delivered yet.
++    if (view && !g_webkitIOS6TileDidDrawPending) {
++        g_webkitIOS6TileDidDrawPending = 1;
++        [view performSelector:@selector(_dispatchTileDidDraw:) withObject:layer afterDelay:0.0];
++    }
++#else
+     [view performSelector:@selector(_dispatchTileDidDraw:) withObject:layer afterDelay:0.0];
++#endif
+ }
+ 
+ void LegacyTileCache::setNeedsDisplay()
+@@ -615,8 +724,17 @@ void LegacyTileCache::scheduleRenderingUpdateForPendingRepaint()
  
  void LegacyTileCache::setNeedsDisplayInRect(const IntRect& dirtyRect)
  {
 +    g_webkitIOS6PendingDrawWork = 1;
      Locker locker { m_savedDisplayRectMutex };
      bool addedFirstRect = m_savedDisplayRects.isEmpty();
++#if defined(WEBKIT_IOS6)
++    // A repaint contained in one already queued invalidates exactly the same
++    // pixels of exactly the same tiles, so queueing it only makes
++    // flushSavedDisplayRects() walk the grid again for nothing. Pages that
++    // invalidate an element and then its parent do this constantly.
++    if (!addedFirstRect && m_savedDisplayRects.last().contains(dirtyRect))
++        return;
++#endif
      m_savedDisplayRects.append(dirtyRect);
-@@ -665,6 +746,11 @@ bool LegacyTileCache::isTileCreationSuspended() const
+     if (!addedFirstRect)
+         return;
+@@ -665,6 +783,11 @@ bool LegacyTileCache::isTileCreationSuspended() const
  
  bool LegacyTileCache::isTileInvalidationSuspended() const 
  { 
@@ -1417,7 +4040,7 @@ index d3fd513118..5974de6460 100644
      return m_tilingMode == Zooming || m_tilingMode == Panning || m_tilingMode == ScrollToTop || m_tilingMode == Disabled; 
  }
  
-@@ -766,6 +852,62 @@ void LegacyTileCache::setSpeculativeTileCreationEnabled(bool enabled)
+@@ -766,6 +889,62 @@ void LegacyTileCache::setSpeculativeTileCreationEnabled(bool enabled)
          m_tileCreationTimer.startOneShot(0_s);
  }
  
@@ -1480,7 +4103,7 @@ index d3fd513118..5974de6460 100644
  void LegacyTileCache::prepareToDraw()
  {
      // This will trigger document relayout if needed.
-@@ -775,6 +917,9 @@ void LegacyTileCache::prepareToDraw()
+@@ -775,6 +954,9 @@ void LegacyTileCache::prepareToDraw()
          Locker locker { m_tileMutex };
          flushSavedDisplayRects();
      }
@@ -1491,13 +4114,67 @@ index d3fd513118..5974de6460 100644
  
  void LegacyTileCache::setLayerPoolCapacity(unsigned capacity)
 diff --git a/Source/WebCore/platform/ios/LegacyTileGrid.h b/Source/WebCore/platform/ios/LegacyTileGrid.h
-index fff86bd211..c617a4722e 100644
+index fff86bd211..cd8df49452 100644
 --- a/Source/WebCore/platform/ios/LegacyTileGrid.h
 +++ b/Source/WebCore/platform/ios/LegacyTileGrid.h
-@@ -106,7 +106,9 @@ private:
+@@ -70,16 +70,18 @@ public:
+ 
+     void dropAllTiles();
+     void dropInvalidTiles();
++    void dropInvalidTiles(const IntRect& bounds);
+     void dropTilesOutsideRect(const IntRect&);
+     void dropTilesIntersectingRect(const IntRect&);
+     // Drops tiles that intersect dropRect but do not intersect keepRect.
+     void dropTilesBetweenRects(const IntRect& dropRect, const IntRect& keepRect);
+-    bool dropDistantTiles(unsigned tilesNeeded, double shortestDistance);
++    bool dropDistantTiles(unsigned tilesNeeded, double shortestDistance, const IntRect& visibleRect);
+ 
+     void addTilesCoveringRect(const IntRect&);
+ 
+     bool tilesCover(const IntRect&) const;
+     void centerTileGridOrigin(const IntRect& visibleRect);
++    void centerTileGridOrigin(const IntRect& visibleRect, const IntRect& bounds);
+     void invalidateTiles(const IntRect& dirtyRect);
+ 
+     void updateTileOpacity();
+@@ -89,24 +91,40 @@ public:
+ 
+     bool hasTiles() const { return !m_tiles.isEmpty(); }
+ 
+-    IntRect calculateCoverRect(const IntRect& visibleRect, bool& centerGrid);
++    IntRect calculateCoverRect(const IntRect& visibleRect, bool& centerGrid, bool useMinimalCoverage);
++    IntRect calculateCoverRect(const IntRect& visibleRect, bool& centerGrid) { return calculateCoverRect(visibleRect, centerGrid, shouldUseMinimalTileCoverage()); }
+ 
+     // Logging
+     void dumpTiles();
+ 
+ private:
+-    double tileDistance2(const IntRect& visibleRect, const IntRect& tileRect) const;
++    // The direction-dependent part of tileDistance2() depends only on the
++    // visible rect and the tiling direction, not on the tile, so it is computed
++    // once per pass instead of once per candidate tile.
++    struct TileDistanceMetrics {
++        IntPoint visibleCenter;
++        double xScaleLeftward;
++        double xScaleRightward;
++        double yScaleUpward;
++        double yScaleDownward;
++    };
++    TileDistanceMetrics distanceMetricsFor(const IntRect& visibleRect) const;
++    static double tileDistance2(const IntRect& visibleRect, const IntRect& tileRect, const TileDistanceMetrics&);
+     unsigned tileByteSize() const;
+ 
+     void addTileForIndex(const TileIndex&);
++    void addTileForIndex(const TileIndex&, const IntRect& bounds);
+ 
+     RefPtr<LegacyTileGridTile> tileForIndex(const TileIndex&) const;
+     IntRect tileRectForIndex(const TileIndex&) const;
++    IntRect tileRectForIndex(const TileIndex&, const IntRect& bounds) const;
+     RefPtr<LegacyTileGridTile> tileForPoint(const IntPoint&) const;
      TileIndex tileIndexForPoint(const IntPoint&) const;
  
-     IntRect adjustCoverRectForPageBounds(const IntRect&) const;
+-    IntRect adjustCoverRectForPageBounds(const IntRect&) const;
++    IntRect adjustCoverRectForPageBounds(const IntRect&, bool useMinimalCoverage) const;
 +public:
      bool shouldUseMinimalTileCoverage() const;
 +private:
@@ -1505,7 +4182,7 @@ index fff86bd211..c617a4722e 100644
  private:        
      WeakRef<LegacyTileCache> m_tileCache;
 diff --git a/Source/WebCore/platform/ios/LegacyTileGrid.mm b/Source/WebCore/platform/ios/LegacyTileGrid.mm
-index 0c75b3f923..479b4215b7 100644
+index 0c75b3f923..1a793a1ed2 100644
 --- a/Source/WebCore/platform/ios/LegacyTileGrid.mm
 +++ b/Source/WebCore/platform/ios/LegacyTileGrid.mm
 @@ -41,6 +41,21 @@
@@ -1530,7 +4207,119 @@ index 0c75b3f923..479b4215b7 100644
  namespace WebCore {
  
  WTF_MAKE_TZONE_ALLOCATED_IMPL(LegacyTileGrid);
-@@ -222,8 +237,11 @@ void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect)
+@@ -88,7 +103,7 @@ void LegacyTileGrid::dropTilesOutsideRect(const IntRect& keepRect)
+ 
+ void LegacyTileGrid::dropTilesBetweenRects(const IntRect& dropRect, const IntRect& keepRect)
+ {
+-    Vector<TileIndex> toRemove;
++    Vector<TileIndex, 16> toRemove;
+     for (const auto& tile : m_tiles) {
+         const TileIndex& index = tile.key;
+         IntRect tileRect = tile.value->rect();
+@@ -113,12 +128,17 @@ static bool isFartherAway(const std::pair<double, T>& a, const std::pair<double,
+     return a.first > b.first;
+ }
+ 
+-bool LegacyTileGrid::dropDistantTiles(unsigned tilesNeeded, double shortestDistance)
++bool LegacyTileGrid::dropDistantTiles(unsigned tilesNeeded, double shortestDistance, const IntRect& visibleRect)
+ {
+-    unsigned bytesPerTile = tileByteSize();
++    // One protective reference for both queries: taking it retains and releases
++    // the window, and tileByteSize() would take a second one of its own.
++    Ref tileCache = m_tileCache.get();
++    IntSize tilePixelSize = m_tileSize;
++    tilePixelSize.scale(tileCache->screenScale());
++    unsigned bytesPerTile = LegacyTileLayerPool::bytesBackingLayerWithPixelSize(tilePixelSize);
+     unsigned bytesNeeded = tilesNeeded * bytesPerTile;
+     unsigned bytesUsed = tileCount() * bytesPerTile;
+-    unsigned maximumBytes = protect(tileCache())->tileCapacityForGrid(this);
++    unsigned maximumBytes = tileCache->tileCapacityForGrid(this);
+ 
+     int bytesToReclaim = int(bytesUsed) - (int(maximumBytes) - bytesNeeded);
+     if (bytesToReclaim <= 0)
+@@ -126,12 +146,12 @@ bool LegacyTileGrid::dropDistantTiles(unsigned tilesNeeded, double shortestDista
+ 
+     unsigned tilesToRemoveCount = bytesToReclaim / bytesPerTile;
+ 
+-    IntRect visibleRect = this->visibleRect();
+-    Vector<std::pair<double, TileIndex>> toRemove;
++    const TileDistanceMetrics metrics = distanceMetricsFor(visibleRect);
++    Vector<std::pair<double, TileIndex>, 16> toRemove;
+     for (const auto& tile : m_tiles) {
+         const TileIndex& index = tile.key;
+         const IntRect& tileRect = tile.value->rect();
+-        double distance = tileDistance2(visibleRect, tileRect);
++        double distance = tileDistance2(visibleRect, tileRect, metrics);
+         if (distance <= shortestDistance)
+             continue;
+         toRemove.append(std::make_pair(distance, index));
+@@ -154,8 +174,9 @@ bool LegacyTileGrid::dropDistantTiles(unsigned tilesNeeded, double shortestDista
+ void LegacyTileGrid::addTilesCoveringRect(const IntRect& rectToCover)
+ {
+     // We never draw anything outside of our bounds.
++    const IntRect bounds = this->bounds();
+     IntRect rect(rectToCover);
+-    rect.intersect(bounds());
++    rect.intersect(bounds);
+     if (rect.isEmpty())
+         return;
+ 
+@@ -165,14 +186,19 @@ void LegacyTileGrid::addTilesCoveringRect(const IntRect& rectToCover)
+         for (int xIndex = topLeftIndex.x(); xIndex <= bottomRightIndex.x(); ++xIndex) {
+             TileIndex index(xIndex, yIndex);
+             if (!tileForIndex(index))
+-                addTileForIndex(index);
++                addTileForIndex(index, bounds);
+         }
+     }
+ }
+ 
+ void LegacyTileGrid::addTileForIndex(const TileIndex& index)
+ {
+-    m_tiles.set(index, LegacyTileGridTile::create(this, tileRectForIndex(index)));
++    addTileForIndex(index, bounds());
++}
++
++void LegacyTileGrid::addTileForIndex(const TileIndex& index, const IntRect& bounds)
++{
++    m_tiles.set(index, LegacyTileGridTile::create(this, tileRectForIndex(index, bounds)));
+ }
+ 
+ CALayer* LegacyTileGrid::tileHostLayer() const
+@@ -191,12 +217,19 @@ RefPtr<LegacyTileGridTile> LegacyTileGrid::tileForIndex(const TileIndex& index)
+ }
+ 
+ IntRect LegacyTileGrid::tileRectForIndex(const TileIndex& index) const
++{
++    return tileRectForIndex(index, bounds());
++}
++
++// bounds() is a message send to the host layer. Callers that walk a range of
++// indices read it once and pass it in.
++IntRect LegacyTileGrid::tileRectForIndex(const TileIndex& index, const IntRect& bounds) const
+ {
+     IntRect rect(index.x() * m_tileSize.width() - (m_origin.x() ? m_tileSize.width() - m_origin.x() : 0),
+                  index.y() * m_tileSize.height() - (m_origin.y() ? m_tileSize.height() - m_origin.y() : 0),
+                  m_tileSize.width(),
+                  m_tileSize.height());
+-    rect.intersect(bounds());
++    rect.intersect(bounds);
+     return rect;
+ }
+ 
+@@ -210,6 +243,11 @@ LegacyTileGrid::TileIndex LegacyTileGrid::tileIndexForPoint(const IntPoint& poin
+ }
+ 
+ void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect)
++{
++    centerTileGridOrigin(visibleRect, bounds());
++}
++
++void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect, const IntRect& bounds)
+ {
+     if (visibleRect.isEmpty())
+         return;
+@@ -222,11 +260,14 @@ void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect)
      unsigned currentVerticalTiles = currentBottomRightIndex.y() - currentTopLeftIndex.y() + 1;
  
      // If we have tiles already, only center if we would get benefits from both directions (as we need to throw out existing tiles).
@@ -1542,8 +4331,12 @@ index 0c75b3f923..479b4215b7 100644
 +    }
  
      IntPoint newOrigin(0, 0);
-     IntSize size = bounds().size();
-@@ -238,9 +256,14 @@ void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect)
+-    IntSize size = bounds().size();
++    IntSize size = bounds.size();
+     if (size.width() > m_tileSize.width()) {
+         newOrigin.setX((visibleRect.x() - (minimumHorizontalTiles * m_tileSize.width() - visibleRect.width()) / 2) % m_tileSize.width());
+         if (newOrigin.x() < 0)
+@@ -238,9 +279,14 @@ void LegacyTileGrid::centerTileGridOrigin(const IntRect& visibleRect)
              newOrigin.setY(0);
      }
  
@@ -1560,7 +4353,86 @@ index 0c75b3f923..479b4215b7 100644
      m_tiles.clear();
      m_origin = newOrigin;
  }
-@@ -393,9 +416,19 @@ void LegacyTileGrid::invalidateTiles(const IntRect& dirtyRect)
+@@ -258,16 +304,18 @@ bool LegacyTileGrid::tilesCover(const IntRect& rect) const
+ 
+ void LegacyTileGrid::updateTileOpacity()
+ {
++    const BOOL opaque = m_tileCache->tilesOpaque();
+     TileMap::iterator end = m_tiles.end();
+     for (TileMap::iterator it = m_tiles.begin(); it != end; ++it)
+-        [it->value->tileLayer() setOpaque:m_tileCache->tilesOpaque()];
++        [it->value->tileLayer() setOpaque:opaque];
+ }
+ 
+ void LegacyTileGrid::updateTileBorderVisibility()
+ {
++    const bool visible = protect(m_tileCache)->tileBordersVisible();
+     TileMap::iterator end = m_tiles.end();
+     for (TileMap::iterator it = m_tiles.begin(); it != end; ++it)
+-        it->value->showBorder(protect(m_tileCache)->tileBordersVisible());
++        it->value->showBorder(visible);
+ }
+ 
+ unsigned LegacyTileGrid::tileCount() const
+@@ -277,7 +325,8 @@ unsigned LegacyTileGrid::tileCount() const
+ 
+ bool LegacyTileGrid::checkDoSingleTileLayout()
+ {
+-    IntSize size = bounds().size();
++    const IntRect bounds = this->bounds();
++    IntSize size = bounds.size();
+     if (size.width() > m_tileSize.width() || size.height() > m_tileSize.height())
+         return false;
+ 
+@@ -286,7 +335,7 @@ bool LegacyTileGrid::checkDoSingleTileLayout()
+         m_origin = IntPoint(0, 0);
+     }
+ 
+-    dropInvalidTiles();
++    dropInvalidTiles(bounds);
+ 
+     if (size.isEmpty()) {
+         ASSERT(!m_tiles.get(TileIndex(0, 0)));
+@@ -295,7 +344,7 @@ bool LegacyTileGrid::checkDoSingleTileLayout()
+ 
+     TileIndex originIndex(0, 0);
+     if (!m_tiles.get(originIndex))
+-        m_tiles.set(originIndex, LegacyTileGridTile::create(this, tileRectForIndex(originIndex)));
++        m_tiles.set(originIndex, LegacyTileGridTile::create(this, tileRectForIndex(originIndex, bounds)));
+ 
+     return true;
+ }
+@@ -317,13 +366,17 @@ void LegacyTileGrid::updateHostLayerSize()
+ 
+ void LegacyTileGrid::dropInvalidTiles()
+ {
+-    IntRect bounds = this->bounds();
++    dropInvalidTiles(bounds());
++}
++
++void LegacyTileGrid::dropInvalidTiles(const IntRect& bounds)
++{
+     IntRect dropBounds = intersection(m_validBounds, bounds);
+-    Vector<TileIndex> toRemove;
++    Vector<TileIndex, 16> toRemove;
+     for (const auto& tile : m_tiles) {
+         const TileIndex& index = tile.key;
+         const IntRect& tileRect = tile.value->rect();
+-        IntRect expectedTileRect = tileRectForIndex(index);
++        IntRect expectedTileRect = tileRectForIndex(index, bounds);
+         if (expectedTileRect != tileRect || !dropBounds.contains(tileRect))
+             toRemove.append(index);
+     }
+@@ -347,7 +400,7 @@ void LegacyTileGrid::invalidateTiles(const IntRect& dirtyRect)
+         m_validBounds = bounds;
+     }
+ 
+-    Vector<TileIndex> invalidatedTiles;
++    Vector<TileIndex, 16> invalidatedTiles;
+ 
+     if (dirtyRect.width() > m_tileSize.width() * 4 || dirtyRect.height() > m_tileSize.height() * 4) {
+         // For large invalidates, iterate over live tiles.
+@@ -393,12 +446,37 @@ void LegacyTileGrid::invalidateTiles(const IntRect& dirtyRect)
  
  bool LegacyTileGrid::shouldUseMinimalTileCoverage() const
  {
@@ -1569,7 +4441,22 @@ index 0c75b3f923..479b4215b7 100644
 -        || MemoryPressureHandler::singleton().isUnderMemoryPressure();
 +    bool minimalMode = m_tileCache->tilingMode() == LegacyTileCache::Minimal;
 +    bool noSpeculative = !m_tileCache->isSpeculativeTileCreationEnabled();
++#if defined(WEBKIT_IOS6)
++    // Only when the process is actually near the kill, not merely warned.
++    //
++    // A warning is the normal state here - the page's own memory keeps the
++    // process above three quarters of its budget for as long as it is open - and
++    // answering it by painting only what is on screen means a flick lands on
++    // page that was laid out and never painted. Photographed over six flicks,
++    // the longest unpainted run averaged 263 px of a 480 px screen and five
++    // frames in six ended blank.
++    static const bool coverageFollowsPolicy = !!getenv("WEBKIT_IOS6_MINIMAL_TILES");
++    bool underPressure = coverageFollowsPolicy
++        ? MemoryPressureHandler::singleton().isUnderMemoryPressure()
++        : MemoryPressureHandler::singleton().memoryPressureStatus() == SystemMemoryPressureStatus::Critical;
++#else
 +    bool underPressure = MemoryPressureHandler::singleton().isUnderMemoryPressure();
++#endif
 +
 +    static int lastReported = -1;
 +    int state = (minimalMode ? 1 : 0) | (noSpeculative ? 2 : 0) | (underPressure ? 4 : 0);
@@ -1582,13 +4469,30 @@ index 0c75b3f923..479b4215b7 100644
 +    return minimalMode || noSpeculative || underPressure;
  }
  
- IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
-@@ -420,13 +453,22 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
+-IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
++IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect, bool useMinimalCoverage) const
+ {
+     // Adjust the rect so that it stays within the bounds and keeps the pixel size.
+     IntRect bounds = this->bounds();
+@@ -408,7 +486,7 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
+     adjustedRect.move(rect.maxX() > bounds.maxX() ? bounds.maxX() - rect.maxX() : 0,
+               rect.maxY() > bounds.maxY() ? bounds.maxY() - rect.maxY() : 0);
+     adjustedRect = intersection(bounds, adjustedRect);
+-    if (adjustedRect == rect || adjustedRect.isEmpty() || shouldUseMinimalTileCoverage())
++    if (adjustedRect == rect || adjustedRect.isEmpty() || useMinimalCoverage)
+         return adjustedRect;
+     int pixels = adjustedRect.width() * adjustedRect.height();
+     if (adjustedRect.width() != rect.width())
+@@ -418,30 +496,47 @@ IntRect LegacyTileGrid::adjustCoverRectForPageBounds(const IntRect& rect) const
+     return intersection(adjustedRect, bounds);
+ }
  
- IntRect LegacyTileGrid::calculateCoverRect(const IntRect& visibleRect, bool& centerGrid)
+-IntRect LegacyTileGrid::calculateCoverRect(const IntRect& visibleRect, bool& centerGrid)
++IntRect LegacyTileGrid::calculateCoverRect(const IntRect& visibleRect, bool& centerGrid, bool useMinimalCoverage)
  {
 -    // Use minimum coverRect if we are under memory pressure.
-     if (shouldUseMinimalTileCoverage()) {
+-    if (shouldUseMinimalTileCoverage()) {
++    if (useMinimalCoverage) {
          centerGrid = true;
          return visibleRect;
      }
@@ -1604,19 +4508,140 @@ index 0c75b3f923..479b4215b7 100644
 +    // the cut did buy was a flick outrunning its tiles - screenshots taken
 +    // mid-drag show a blank page between two correctly pinned bars. Three screens
 +    // of coverage at this size is about seven megabytes.
++    // Half a screen above and below rather than a whole one.
++    //
++    // Each tile is 640 by 640 at this scale, which is 1.6 MB, and three screens
++    // of them came to eleven or twelve tiles - about nineteen megabytes of
++    // layers rather than the seven this comment used to claim. Soaked eight
++    // rounds at a time, that set of layers took the process down four times in
++    // nine runs, twice inside the GPU driver, where the smaller set has not
++    // fallen over. Two screens still cover the flick.
++    static const int verticalScreens = [] -> int {
++        if (const char* override = getenv("WEBKIT_IOS6_TILE_COVERAGE_HALVES")) {
++            int value = atoi(override);
++            if (value > 0 && value <= 8)
++                return value;
++        }
++        return 1;
++    }();
      coverRect.inflateX(visibleRect.width() / 2);
-     coverRect.inflateY(visibleRect.height());
-     return adjustCoverRectForPageBounds(coverRect);
-@@ -505,6 +547,8 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
-     Vector<LegacyTileGrid::TileIndex> tilesToCreate;
+-    coverRect.inflateY(visibleRect.height());
+-    return adjustCoverRectForPageBounds(coverRect);
++    coverRect.inflateY(visibleRect.height() * verticalScreens / 2);
++    return adjustCoverRectForPageBounds(coverRect, false);
+ }
+ 
+-double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect& tileRect) const
++LegacyTileGrid::TileDistanceMetrics LegacyTileGrid::distanceMetricsFor(const IntRect& visibleRect) const
+ {
+-    // The "distance" calculated here is used to pick which tile to cache next. The idea is to create those
+-    // closest to the current viewport first so the user is more likely to see already rendered content we she
+-    // scrolls. The calculation is weighted to prefer vertical and downward direction.
+-    if (visibleRect.intersects(tileRect))
+-        return 0;
+-    IntPoint visibleCenter = visibleRect.location() + IntSize(visibleRect.width() / 2, visibleRect.height() / 2);
+-    IntPoint tileCenter = tileRect.location() + IntSize(tileRect.width() / 2, tileRect.height() / 2);
+-    
+     double horizontalBias = 1.0;
+     double leftwardBias = 1.0;
+     double rightwardBias = 1.0;
+@@ -472,51 +567,95 @@ double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect&
+         break;
+     }
+ 
+-    double xScale = horizontalBias * visibleRect.height() / visibleRect.width() * (tileCenter.x() >= visibleCenter.x() ? rightwardBias : leftwardBias);
+-    double yScale = verticalBias * visibleRect.width() / visibleRect.height() * (tileCenter.y() >= visibleCenter.y() ? downwardBias : upwardBias);
++    double aspectX = horizontalBias * visibleRect.height() / visibleRect.width();
++    double aspectY = verticalBias * visibleRect.width() / visibleRect.height();
++
++    return TileDistanceMetrics {
++        visibleRect.location() + IntSize(visibleRect.width() / 2, visibleRect.height() / 2),
++        aspectX * leftwardBias,
++        aspectX * rightwardBias,
++        aspectY * upwardBias,
++        aspectY * downwardBias
++    };
++}
++
++// The "distance" calculated here is used to pick which tile to cache next. The idea is to create those
++// closest to the current viewport first so the user is more likely to see already rendered content we she
++// scrolls. The calculation is weighted to prefer vertical and downward direction.
++double LegacyTileGrid::tileDistance2(const IntRect& visibleRect, const IntRect& tileRect, const TileDistanceMetrics& metrics)
++{
++    if (visibleRect.intersects(tileRect))
++        return 0;
++    IntPoint tileCenter = tileRect.location() + IntSize(tileRect.width() / 2, tileRect.height() / 2);
++
++    int dx = tileCenter.x() - metrics.visibleCenter.x();
++    int dy = tileCenter.y() - metrics.visibleCenter.y();
+ 
+-    double xDistance = xScale * (tileCenter.x() - visibleCenter.x());
+-    double yDistance = yScale * (tileCenter.y() - visibleCenter.y());
++    double xDistance = (dx >= 0 ? metrics.xScaleRightward : metrics.xScaleLeftward) * dx;
++    double yDistance = (dy >= 0 ? metrics.yScaleDownward : metrics.yScaleUpward) * dy;
+ 
+-    double distance2 = xDistance * xDistance + yDistance * yDistance;
+-    return distance2;
++    return xDistance * xDistance + yDistance * yDistance;
+ }
+ 
+ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode creationMode)
+ {
++    if (engineChatterEnabled()) {
++        static MonotonicTime lastReport;
++        MonotonicTime now = MonotonicTime::now();
++        if (now - lastReport > 1_s) {
++            lastReport = now;
++            IntRect reportedVisible = visibleRect();
++            WTFLogAlways("[tiles] creating for visible %d,%d %dx%d, %u tiles, mode %d, minimal %d",
++                reportedVisible.x(), reportedVisible.y(), reportedVisible.width(), reportedVisible.height(),
++                (unsigned)m_tiles.size(), (int)creationMode, shouldUseMinimalTileCoverage());
++        }
++    }
++
+     IntRect visibleRect = this->visibleRect();
+     if (visibleRect.isEmpty())
+         return;
+ 
++    // bounds() and shouldUseMinimalTileCoverage() are a layer message send and a
++    // memory-pressure query respectively, and neither changes inside one pass.
++    IntRect bounds = this->bounds();
++    const bool coverRectIsOnlyTheViewport = shouldUseMinimalTileCoverage();
++
+     // Drop tiles that are wrong size or outside the frame (because the frame has been resized).
+-    dropInvalidTiles();
++    dropInvalidTiles(bounds);
+ 
+     bool centerGrid;
+-    IntRect coverRect = calculateCoverRect(visibleRect, centerGrid);
++    IntRect coverRect = calculateCoverRect(visibleRect, centerGrid, coverRectIsOnlyTheViewport);
+ 
+     // If tile size is bigger than the view, centering minimizes the painting needed to cover the screen.
+-    // This is especially useful after zooming 
++    // This is especially useful after zooming
+     centerGrid = centerGrid || !tileCount();
+     if (centerGrid)
+-        centerTileGridOrigin(visibleRect);
++        centerTileGridOrigin(visibleRect, bounds);
+ 
+     double shortestDistance = std::numeric_limits<double>::infinity();
+     double coveredDistance = 0;
+-    Vector<LegacyTileGrid::TileIndex> tilesToCreate;
++    Vector<LegacyTileGrid::TileIndex, 16> tilesToCreate;
      unsigned pendingTileCount = 0;
  
-+    bool coverRectIsOnlyTheViewport = shouldUseMinimalTileCoverage();
++    const TileDistanceMetrics metrics = distanceMetricsFor(visibleRect);
 +
      LegacyTileGrid::TileIndex topLeftIndex = tileIndexForPoint(topLeft(coverRect));
      LegacyTileGrid::TileIndex bottomRightIndex = tileIndexForPoint(bottomRight(coverRect));
      for (int yIndex = topLeftIndex.y(); yIndex <= bottomRightIndex.y(); ++yIndex) {
-@@ -517,6 +561,11 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+         for (int xIndex = topLeftIndex.x(); xIndex <= bottomRightIndex.x(); ++xIndex) {
+             LegacyTileGrid::TileIndex index(xIndex, yIndex);
+             // Currently visible tiles have distance of 0 and get all created in the same transaction.
+-            double distance = tileDistance2(visibleRect, tileRectForIndex(index));
++            double distance = tileDistance2(visibleRect, tileRectForIndex(index, bounds), metrics);
+             if (distance > coveredDistance)
+                 coveredDistance = distance;
              if (tileForIndex(index))
                  continue;
              ++pendingTileCount;
@@ -1628,25 +4653,88 @@ index 0c75b3f923..479b4215b7 100644
              if (distance > shortestDistance)
                  continue;
              if (distance < shortestDistance) {
-@@ -549,6 +598,18 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+@@ -537,7 +676,7 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+     // Even if we don't create any tiles, we should still drop distant tiles
+     // in case coverRect got smaller.
+     double keepDistance = std::min(shortestDistance, coveredDistance);
+-    if (!dropDistantTiles(tilesToCreateCount, keepDistance))
++    if (!dropDistantTiles(tilesToCreateCount, keepDistance, visibleRect))
+         return;
+ 
+     ASSERT(pendingTileCount >= tilesToCreateCount);
+@@ -545,10 +684,21 @@ void LegacyTileGrid::createTiles(LegacyTileCache::SynchronousTileCreationMode cr
+         return;
+ 
+     for (size_t n = 0; n < tilesToCreateCount; ++n)
+-        addTileForIndex(tilesToCreate[n]);
++        addTileForIndex(tilesToCreate[n], bounds);
  
      bool didCreateTiles = !!tilesToCreateCount;
      bool createMoreTiles = pendingTileCount > tilesToCreateCount;
 +
 +    static unsigned reportTick = 0;
-+    if (!(reportTick++ % 8)) {
-+        double tileBytes = (double)m_tiles.size() * m_tileSize.width() * m_tileSize.height() * 4.0;
-+        if (engineChatterEnabled()) WTFLogAlways("[tiles] %u tiles of %dx%d (%.1f MB each) = %.1f MB, coverRect %dx%d, doc %dx%d",
++    if (engineChatterEnabled() && !(reportTick++ % 8)) {
++        WTFLogAlways("[tiles] %u tiles of %dx%d (%.1f MB each) = %.1f MB, coverRect %dx%d, doc %dx%d",
 +            (unsigned)m_tiles.size(), m_tileSize.width(), m_tileSize.height(),
 +            tileByteSize() / (1024.0 * 1024.0),
 +            (double)m_tiles.size() * tileByteSize() / (1024.0 * 1024.0),
 +            coverRect.width(), coverRect.height(),
-+            tileCache().tileControllerShouldUseLowScaleTiles() ? 0 : bounds().width(), bounds().height());
++            tileCache().tileControllerShouldUseLowScaleTiles() ? 0 : bounds.width(), bounds.height());
 +    }
 +
      protect(tileCache())->finishedCreatingTiles(didCreateTiles, createMoreTiles);
  }
  
+diff --git a/Source/WebCore/platform/ios/LegacyTileGridTile.mm b/Source/WebCore/platform/ios/LegacyTileGridTile.mm
+index b5fa48d5f0..1c1eb5a7af 100644
+--- a/Source/WebCore/platform/ios/LegacyTileGridTile.mm
++++ b/Source/WebCore/platform/ios/LegacyTileGridTile.mm
+@@ -65,15 +65,29 @@ LegacyTileGridTile::LegacyTileGridTile(LegacyTileGrid* tileGrid, const IntRect&
+     }
+     LegacyTileLayer* layer = m_tileLayer.get();
+ 
+-    if (NSString *formatString = contentsFormatString(PlatformCALayer::contentsFormatForLayer()))
+-        layer.contentsFormat = formatString;
++    // Most of these layers come back out of the pool, where this same code put
++    // them, so the values are already what they are about to be set to. A CA
++    // setter is a write into the layer's transaction and, for contentsScale and
++    // contentsFormat, an invalidation of its backing store; a getter is not. Only
++    // the differences are written.
++    if (NSString *formatString = contentsFormatString(PlatformCALayer::contentsFormatForLayer())) {
++        if (![formatString isEqualToString:layer.contentsFormat])
++            layer.contentsFormat = formatString;
++    }
+ 
+     [layer setTileGrid:tileGrid];
+-    [layer setOpaque:tileCache->tilesOpaque()];
+-    [layer setEdgeAntialiasingMask:0];
+-    [layer setNeedsLayoutOnGeometryChange:NO];
+-    [layer setContentsScale:screenScale];
+-    [layer setDrawsAsynchronously:tileCache->acceleratedDrawingEnabled()];
++    const BOOL opaque = tileCache->tilesOpaque();
++    if ([layer isOpaque] != opaque)
++        [layer setOpaque:opaque];
++    if ([layer edgeAntialiasingMask])
++        [layer setEdgeAntialiasingMask:0];
++    if ([layer needsLayoutOnGeometryChange])
++        [layer setNeedsLayoutOnGeometryChange:NO];
++    if ([layer contentsScale] != screenScale)
++        [layer setContentsScale:screenScale];
++    const BOOL drawsAsynchronously = tileCache->acceleratedDrawingEnabled();
++    if ([layer drawsAsynchronously] != drawsAsynchronously)
++        [layer setDrawsAsynchronously:drawsAsynchronously];
+ 
+     // Host layer may have other sublayers. Keep the tile layers at the beginning of the array
+     // so they are painted behind everything else.
+@@ -128,6 +142,8 @@ void LegacyTileGridTile::showBorder(bool flag)
+         [layer setBorderColor:cachedCGColor(protect(m_tileGrid->tileCache())->colorForGridTileBorder(m_tileGrid)).get()];
+         [layer setBorderWidth:0.5f];
+     } else {
++        if (!layer.borderWidth && !layer.borderColor)
++            return;
+         [layer setBorderColor:nil];
+         [layer setBorderWidth:0];
+     }
 diff --git a/Source/WebCore/platform/ios/LegacyTileLayer.mm b/Source/WebCore/platform/ios/LegacyTileLayer.mm
 index 7283aae22a..52637587ef 100644
 --- a/Source/WebCore/platform/ios/LegacyTileLayer.mm
@@ -2034,6 +5122,130 @@ index 564c5a0031..6c6366c6e2 100644
  
  // Scroll Wheel
  @property(nonatomic, readonly) float deltaX;
+diff --git a/Source/WebCore/platform/ios/wak/WAKView.mm b/Source/WebCore/platform/ios/wak/WAKView.mm
+index a14de1fb2a..634d9b092b 100644
+--- a/Source/WebCore/platform/ios/wak/WAKView.mm
++++ b/Source/WebCore/platform/ios/wak/WAKView.mm
+@@ -40,6 +40,8 @@
+ #import "WebEvent.h"
+ #import <wtf/Assertions.h>
+ #import <wtf/NeverDestroyed.h>
++#import <wtf/RetainPtr.h>
++#import <wtf/Vector.h>
+ 
+ WEBCORE_EXPORT NSString *WAKViewFrameSizeDidChangeNotification =   @"WAKViewFrameSizeDidChangeNotification";
+ WEBCORE_EXPORT NSString *WAKViewDidScrollNotification =            @"WAKViewDidScrollNotification";
+@@ -57,6 +59,26 @@ static void setGlobalFocusView(WAKView *view)
+     globalFocusView() = view;
+ }
+ 
++// -[WAKView subviews] builds an autoreleased NSMutableArray of wrappers on every
++// call. The paint and layout paths walk the subviews on every frame and only
++// need a snapshot that keeps the views alive, so they take one on the stack.
++using SubviewSnapshot = Vector<RetainPtr<WAKView>, 8>;
++
++static void snapshotSubviews(WKViewRef viewRef, SubviewSnapshot& result)
++{
++    CFArrayRef subviews = viewRef ? WKViewGetSubviews(viewRef) : nullptr;
++    if (!subviews)
++        return;
++    CFIndex count = CFArrayGetCount(subviews);
++    if (!count)
++        return;
++    result.reserveCapacity(count);
++    for (CFIndex i = 0; i < count; ++i) {
++        if (WAKView *view = WAKViewForWKViewRef(static_cast<WKViewRef>(const_cast<void*>(CFArrayGetValueAtIndex(subviews, i)))))
++            result.append(retainPtr(view));
++    }
++}
++
+ static WAKScrollView *enclosingScrollView(WAKView *view)
+ {
+     view = [view superview];
+@@ -108,11 +130,23 @@ static void notificationCallback (WKViewRef v, WKViewNotificationType type, void
+             break;
+         }
+         case WKViewNotificationViewDidScroll: {
++#if defined(WEBKIT_IOS6)
++            // Posted without stopping the web thread.
++            //
++            // WebThreadRunOnMainThread drops every JS lock, releases the web
++            // lock, wakes the main thread and blocks until it has run the block -
++            // a full main-thread latency for a notification nothing in this
++            // process observes, on a callback that fires while the page is being
++            // scrolled. The frame-size notification next door already concluded
++            // that this ordering is not worth blocking for.
++            WebThreadCallDelegateAsync(invocationForPostNotification(WAKViewDidScrollNotification, view, nil));
++#else
+             WebThreadRunOnMainThread(^ {
+                  [[NSNotificationCenter defaultCenter] postNotificationName:WAKViewDidScrollNotification object:view userInfo:nil];
+             });
++#endif
+             break;
+-        }            
++        }
+         default: {
+             break;
+         }
+@@ -370,11 +404,11 @@ static void _WAKCopyWrapper(const void *value, void *context)
+     if (_isHidden)
+         return;
+ 
+-    WAKWindow *window = [self window];
++    WAKWindow *window = WKViewGetWindow(viewRef);
+     if (!window || CGRectIsEmpty(invalidRect))
+         return;
+ 
+-    CGRect rect = CGRectIntersection(invalidRect, [self bounds]);
++    CGRect rect = CGRectIntersection(invalidRect, WKViewGetBounds(viewRef));
+     if (CGRectIsEmpty(rect))
+         return;
+ 
+@@ -404,7 +438,10 @@ static void _WAKCopyWrapper(const void *value, void *context)
+ 
+ - (void)viewWillDraw
+ {
+-    [[self subviews] makeObjectsPerformSelector:@selector(viewWillDraw)];
++    SubviewSnapshot subviews;
++    snapshotSubviews(viewRef, subviews);
++    for (auto& subview : subviews)
++        [subview.get() viewWillDraw];
+ }
+ 
+ + (WAKView *)focusView
+@@ -495,10 +532,15 @@ static void _WAKCopyWrapper(const void *value, void *context)
+     [self drawRect:dirtyRect];
+ 
+     if (!_drawsOwnDescendants) {
+-        NSArray *subViews = [self subviews];
+-        for (WAKView *subView in subViews) {
+-            NSRect childDirtyRect = [self convertRect:dirtyRect toView:subView];
+-            [subView _drawRect:CGRectIntegral(childDirtyRect) context:context lockFocus:YES];
++        SubviewSnapshot subviews;
++        snapshotSubviews(viewRef, subviews);
++        if (!subviews.isEmpty()) {
++            // One walk up to base for this view instead of one per subview.
++            CGRect dirtyRectInBase = WKViewConvertRectToBase(viewRef, dirtyRect);
++            for (auto& subview : subviews) {
++                NSRect childDirtyRect = WKViewConvertRectFromBase([subview.get() _viewRef], dirtyRectInBase);
++                [subview.get() _drawRect:CGRectIntegral(childDirtyRect) context:context lockFocus:YES];
++            }
+         }
+     }
+ 
+@@ -595,8 +637,10 @@ static void _WAKCopyWrapper(const void *value, void *context)
+         return nil;
+ 
+     CGPoint subviewPoint = WKViewConvertPointFromSuperview(viewRef, point);
+-    for (WAKView *subview in [self subviews]) {
+-        if (WAKView *hitView = [subview hitTest: subviewPoint])
++    SubviewSnapshot subviews;
++    snapshotSubviews(viewRef, subviews);
++    for (auto& subview : subviews) {
++        if (WAKView *hitView = [subview.get() hitTest:subviewPoint])
+             return hitView;
+     }
+ 
 diff --git a/Source/WebCore/platform/ios/wak/WAKWindow.h b/Source/WebCore/platform/ios/wak/WAKWindow.h
 index eb69e45818..acfe9d9ace 100644
 --- a/Source/WebCore/platform/ios/wak/WAKWindow.h
@@ -2055,7 +5267,7 @@ index eb69e45818..acfe9d9ace 100644
  - (CGRect)frame;
  - (void)setContentRect:(CGRect)rect;
 diff --git a/Source/WebCore/platform/ios/wak/WAKWindow.mm b/Source/WebCore/platform/ios/wak/WAKWindow.mm
-index c475cc9ce0..96431eeead 100644
+index c475cc9ce0..1f9bdc406b 100644
 --- a/Source/WebCore/platform/ios/wak/WAKWindow.mm
 +++ b/Source/WebCore/platform/ios/wak/WAKWindow.mm
 @@ -35,6 +35,7 @@
@@ -2110,6 +5322,30 @@ index c475cc9ce0..96431eeead 100644
  - (WAKView *)firstResponder
  {
      return _responderView;
+@@ -478,9 +495,12 @@ static RetainPtr<WebEvent>& currentEvent()
+ 
+     static Class windowClass = NSClassFromString(@"UIWindow");
+ 
+-    while (superlayer && layer != _rootLayer && (!layer.delegate || ![layer.delegate isKindOfClass:windowClass])) {
++    while (superlayer && layer != _rootLayer) {
++        id delegate = [layer delegate];
++        if (delegate && [delegate isKindOfClass:windowClass])
++            break;
+         CGRect rectInSuper = [superlayer convertRect:rect fromLayer:layer];
+-        if ([superlayer masksToBounds] || !respectsMasksToBounds)
++        if (!respectsMasksToBounds || [superlayer masksToBounds])
+             rect = CGRectIntersection([superlayer bounds], rectInSuper);
+         else
+             rect = rectInSuper;
+@@ -618,7 +638,7 @@ static RetainPtr<WebEvent>& currentEvent()
+ 
+ - (void)displayRect:(NSRect)rect
+ {
+-    [[self contentView] displayRect:rect];
++    [_contentView displayRect:rect];
+ }
+ 
+ - (void)willRotate
 diff --git a/Source/WebCore/platform/ios/wak/WKTypes.h b/Source/WebCore/platform/ios/wak/WKTypes.h
 index 701b8bc661..5c6c9fbd18 100644
 --- a/Source/WebCore/platform/ios/wak/WKTypes.h
@@ -2139,7 +5375,7 @@ index 3070c8f1a4..7352c6ba83 100644
  WEBCORE_EXPORT bool WebThreadIsLockedOrDisabledInMainOrWebThread(void);
  
 diff --git a/Source/WebCore/platform/ios/wak/WebCoreThread.mm b/Source/WebCore/platform/ios/wak/WebCoreThread.mm
-index 942406fd91..30fd6708d8 100644
+index 942406fd91..bf2dda2b88 100644
 --- a/Source/WebCore/platform/ios/wak/WebCoreThread.mm
 +++ b/Source/WebCore/platform/ios/wak/WebCoreThread.mm
 @@ -25,6 +25,8 @@
@@ -2236,7 +5472,40 @@ index 942406fd91..30fd6708d8 100644
  }
  
  void WebThreadRunOnMainThread(void(^delegateBlock)())
-@@ -508,6 +567,69 @@ static void MainRunLoopAutoUnlock(CFRunLoopObserverRef, CFRunLoopActivity, void*
+@@ -492,6 +551,25 @@ NSInvocation* WebThreadMakeNSInvocation(id target, SEL selector)
+     return nil;
+ }
+ 
++#if defined(WEBKIT_IOS6)
++// The auto-unlock observer is installed once and left in place.
++//
++// CFRunLoopAddObserver/RemoveObserver for kCFRunLoopCommonModes walks every
++// common mode and edits each one's observer set, and the pair was paid on every
++// single acquisition of the web lock from the main thread - measured at 537
++// attempts from the tile layout pass alone in one scroll. The observer costs
++// nothing to leave installed: it is a C callback that reads one BOOL and returns
++// when there is nothing to unlock, so the flag alone decides.
++static void EnsureMainRunLoopAutoUnlockObserver()
++{
++    static bool installed;
++    if (installed)
++        return;
++    installed = true;
++    CFRunLoopAddObserver(CFRunLoopGetCurrent(), mainRunLoopAutoUnlockObserver().get(), kCFRunLoopCommonModes);
++}
++#endif
++
+ static void MainRunLoopAutoUnlock(CFRunLoopObserverRef, CFRunLoopActivity, void*)
+ {
+     ASSERT(!WebThreadIsCurrent());
+@@ -503,18 +581,86 @@ static void MainRunLoopAutoUnlock(CFRunLoopObserverRef, CFRunLoopActivity, void*
+         return;
+ 
+     mainThreadHasPendingAutoUnlock = NO;
++#if !defined(WEBKIT_IOS6)
+     CFRunLoopRemoveObserver(CFRunLoopGetCurrent(), mainRunLoopAutoUnlockObserver().get(), kCFRunLoopCommonModes);
++#endif
+ 
      _WebThreadUnlock();
  }
  
@@ -2288,10 +5557,9 @@ index 942406fd91..30fd6708d8 100644
 +        return true;
 +
 +    mainThreadHasPendingAutoUnlock = YES;
-+    CFRunLoopAddObserver(CFRunLoopGetCurrent(), mainRunLoopAutoUnlockObserver().get(), kCFRunLoopCommonModes);
++    EnsureMainRunLoopAutoUnlockObserver();
 +
 +    if (!webLock.tryLock()) {
-+        CFRunLoopRemoveObserver(CFRunLoopGetCurrent(), mainRunLoopAutoUnlockObserver().get(), kCFRunLoopCommonModes);
 +        mainThreadHasPendingAutoUnlock = NO;
 +        return false;
 +    }
@@ -2306,10 +5574,25 @@ index 942406fd91..30fd6708d8 100644
  static void _WebThreadAutoLock(void)
  {
      ASSERT(!WebThreadIsCurrent());
-@@ -532,8 +654,39 @@ static void WebRunLoopUnlockInternal(AutoreleasePoolOperation poolOperation)
+ 
+     if (!mainThreadLockCount) {
+         mainThreadHasPendingAutoUnlock = YES;
++#if defined(WEBKIT_IOS6)
++        EnsureMainRunLoopAutoUnlockObserver();
++#else
+         CFRunLoopAddObserver(CFRunLoopGetCurrent(), mainRunLoopAutoUnlockObserver().get(), kCFRunLoopCommonModes);
++#endif
+         _WebThreadLock();
+         CFRunLoopWakeUp(CFRunLoopGetMain());
+     }
+@@ -531,10 +677,42 @@ static void WebRunLoopLockInternal(AutoreleasePoolOperation poolOperation)
+ static void WebRunLoopUnlockInternal(AutoreleasePoolOperation poolOperation)
  {
      ASSERT(sAsyncDelegates());
-     if ([sAsyncDelegates() count]) {
+-    if ([sAsyncDelegates() count]) {
+-        for (NSInvocation* invocation in sAsyncDelegates().get())
++    NSMutableArray *asyncDelegates = sAsyncDelegates().get();
++    if ([asyncDelegates count]) {
 +#if defined(WEBKIT_IOS6)
 +        // Sent without waiting, which is what "async" was supposed to mean.
 +        //
@@ -2329,10 +5612,10 @@ index 942406fd91..30fd6708d8 100644
 +        if (blockOnAsyncDelegates < 0)
 +            blockOnAsyncDelegates = access("/tmp/native-block-async-delegates", F_OK) == 0 ? 1 : 0;
 +        if (blockOnAsyncDelegates) {
-+            for (NSInvocation *invocation in sAsyncDelegates().get())
++            for (NSInvocation *invocation in asyncDelegates)
 +                SendDelegateMessage(invocation);
 +        } else {
-+            for (NSInvocation *invocation in sAsyncDelegates().get()) {
++            for (NSInvocation *invocation in asyncDelegates) {
 +                RetainPtr<NSInvocation> retained = invocation;
 +                RunLoop::mainSingleton().dispatch([retained] {
 +                    [retained invoke];
@@ -2340,13 +5623,15 @@ index 942406fd91..30fd6708d8 100644
 +            }
 +        }
 +#else
-         for (NSInvocation* invocation in sAsyncDelegates().get())
++        for (NSInvocation* invocation in asyncDelegates)
              SendDelegateMessage(invocation);
+-        [sAsyncDelegates() removeAllObjects];
 +#endif
-         [sAsyncDelegates() removeAllObjects];
++        [asyncDelegates removeAllObjects];
      }
  
-@@ -761,8 +914,77 @@ static void _WebThreadLock()
+     if (poolOperation == PushOrPopAutoreleasePool && !perCalloutAutoreleasepoolEnabled)
+@@ -761,8 +939,77 @@ static void _WebThreadLock()
          CRASH();
      }
  
@@ -2424,7 +5709,7 @@ index 942406fd91..30fd6708d8 100644
  #if LOG_WEB_LOCK || LOG_MAIN_THREAD_LOCKING
      lockCount++;
  #if LOG_WEB_LOCK
-@@ -875,6 +1097,20 @@ void _WebThreadUnlock()
+@@ -875,6 +1122,20 @@ void _WebThreadUnlock()
      webLock.unlock();
  }
  
@@ -2446,10 +5731,37 @@ index 942406fd91..30fd6708d8 100644
  {
  #if ENABLE(WEB_THREAD_DISABLEMENT)
 diff --git a/Source/WebCore/platform/ios/wak/WebCoreThreadRun.cpp b/Source/WebCore/platform/ios/wak/WebCoreThreadRun.cpp
-index 37db5c62d5..238c7f75a9 100644
+index 37db5c62d5..e651fe86f0 100644
 --- a/Source/WebCore/platform/ios/wak/WebCoreThreadRun.cpp
 +++ b/Source/WebCore/platform/ios/wak/WebCoreThreadRun.cpp
-@@ -134,8 +134,17 @@ static void HandleRunSource(void *info)
+@@ -79,6 +79,15 @@ public:
+     {
+     }
+ 
++    // Without this the temporary built by every WebThreadRun() call is copied
++    // into the queue - one more Block_copy and Block_release per call - and the
++    // queue's own growth copies every element it already holds.
++    WebThreadBlock(WebThreadBlock&& other)
++        : m_block(std::exchange(other.m_block, nullptr))
++        , m_state(std::exchange(other.m_state, nullptr))
++    {
++    }
++
+     WebThreadBlock& operator=(const WebThreadBlock& other)
+     {
+         void (^oldBlock)() = m_block;
+@@ -127,15 +136,27 @@ static void HandleRunSource(void *info)
+     ASSERT(runSource());
+     ASSERT(runQueue);
+ 
++    // Taking the queue rather than copying it: copying Block_copy'd every queued
++    // block and clearing the original Block_release'd it again, a malloc/free
++    // pair per block on a source that fires for every WebThreadRun.
+     WebThreadRunQueue queueCopy;
+     {
+         Locker locker { runQueueMutex };
+-        queueCopy = *runQueue;
++        queueCopy = WTF::move(*runQueue);
          runQueue->clear();
      }
  

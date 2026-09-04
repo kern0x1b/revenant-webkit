@@ -556,17 +556,32 @@ static void withWebLock(void (^work)(void))
     });
 }
 
+/* Finger-up to reaction, end to end. end.timestamp is CACurrentMediaTime() at the
+ * moment touchesEnded: built this event on the main thread - the earliest point on
+ * this side of the glass for a lifted finger. Both reads below land on the web
+ * thread, after -sendEvent: has returned, which is only true because WebThreadRun()
+ * runs its block inline when it is already on the web thread (WebCoreThreadRun.cpp) -
+ * so "dispatched" here really means the DOM listener, if there was one, already ran. */
 - (void)sendTouchEndThenTapAt:(CGPoint)point
 {
     WAKWindow *window = [_wakWindow retain];
     WebEvent *end = [touchEvent(WebEventTouchEnd, WebEventTouchPhaseEnded, point) retain];
+    CFTimeInterval capturedAt = [end timestamp];
+    static int wantLatencyLog = -1;
+    if (wantLatencyLog < 0)
+        wantLatencyLog = getenv("WEBKIT_IOS6_TAP_LATENCY_LOG") ? 1 : 0;
     WebThreadRun(^{
         [window sendEvent:end];
         BOOL handled = [end wasHandled];
         [end release];
+        if (wantLatencyLog)
+            LOG_STEP("tap latency: capture->touchend dispatched %.1fms (%s)",
+                (CACurrentMediaTime() - capturedAt) * 1000.0, handled ? "handled, no click" : "not handled, click follows");
         if (!handled) {
             [window sendEvent:mouseEvent(WebEventMouseDown, point)];
             [window sendEvent:mouseEvent(WebEventMouseUp, point)];
+            if (wantLatencyLog)
+                LOG_STEP("tap latency: capture->click dispatched %.1fms", (CACurrentMediaTime() - capturedAt) * 1000.0);
         }
         [window release];
     });

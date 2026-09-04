@@ -6,6 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 // UIKit reaches WebKit through absolute system paths, and dyld resolves those
@@ -31,6 +34,32 @@ static void note(NSString *format, ...)
     [line release];
 }
 
+static double millisecondsSinceExec(void)
+{
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+    struct kinfo_proc process;
+    size_t size = sizeof(process);
+    if (sysctl(mib, 4, &process, &size, NULL, 0) != 0 || size == 0)
+        return -1;
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    double started = process.kp_proc.p_starttime.tv_sec
+        + process.kp_proc.p_starttime.tv_usec / 1000000.0;
+    return ((now.tv_sec + now.tv_usec / 1000000.0) - started) * 1000.0;
+}
+
+static void imageArrived(const struct mach_header *header, intptr_t slide)
+{
+    Dl_info where;
+    const char *path = dladdr((const void *)header, &where) ? where.dli_fname : "?";
+    const char *name = strrchr(path, '/');
+    FILE *log = fopen("/tmp/native.log", "a");
+    if (log) {
+        fprintf(log, "%.3f [dyld] %s\n", CFAbsoluteTimeGetCurrent(), name ? name + 1 : path);
+        fclose(log);
+    }
+}
+
 static void bundleDirectory(char *out, size_t size, const char *argv0)
 {
     char self[PATH_MAX];
@@ -44,8 +73,30 @@ static void bundleDirectory(char *out, size_t size, const char *argv0)
 
 int main(int argc, char *argv[])
 {
+    double beforeMain = millisecondsSinceExec();
+
     char bundle[PATH_MAX];
     bundleDirectory(bundle, sizeof(bundle), argv[0]);
+
+    // Everything the engine prints goes nowhere.
+    //
+    // Launched by SpringBoard, this process has no terminal, and the log
+    // machinery WTFLogAlways ends in - os_log - resolves to a compat stub that
+    // discards its argument. So every port probe behind a /tmp flag file wrote
+    // to a closed descriptor: the layout timer, the tile chatter, the option
+    // dump. An investigation into grid layout enabled the layout instrument,
+    // got zero lines, and had to fall back to probing the DOM from JavaScript.
+    //
+    // Pointing the descriptor at a file makes all of them work at once. It is
+    // separate from /tmp/native.log, which the interface writes itself, so the
+    // two do not interleave.
+    freopen("/tmp/native-stderr.log", "a", stderr);
+    setvbuf(stderr, NULL, _IOLBF, 0);
+
+    note(@"[start] main reached %.0f ms after exec, pass %s", beforeMain,
+         getenv("DYLD_FRAMEWORK_PATH") ? "two" : "one");
+    if (getenv("DYLD_FRAMEWORK_PATH") && !access("/tmp/native-watch-images", F_OK))
+        _dyld_register_func_for_add_image(imageArrived);
 
     if (!access("/tmp/native-system-engine", F_OK)) {
         note(@"running against the system engine by request");
@@ -154,7 +205,19 @@ int main(int argc, char *argv[])
 
     char interface[PATH_MAX];
     snprintf(interface, sizeof(interface), "%s/NativeUI.dylib", bundle);
+    double beforeInterface = CFAbsoluteTimeGetCurrent();
     void *image = dlopen(interface, RTLD_LAZY | RTLD_GLOBAL);
+    {
+        struct task_basic_info info;
+        mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+        double resident = 0, virt = 0;
+        if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS) {
+            resident = info.resident_size / 1048576.0;
+            virt = info.virtual_size / 1048576.0;
+        }
+        note(@"[start] interface and UIKit loaded in %.0f ms, %.1f MB in the process, %.1f MB mapped",
+             (CFAbsoluteTimeGetCurrent() - beforeInterface) * 1000.0, resident, virt);
+    }
     if (!image) {
         note(@"failed to load the interface: %s", dlerror());
         return 1;

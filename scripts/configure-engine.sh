@@ -98,6 +98,23 @@ cmake -S $S -B $B -G Ninja \
   -DENABLE_MEDIA_SOURCE=OFF -DENABLE_MEDIA_SOURCE_IN_WORKERS=OFF \
   -DENABLE_ENCRYPTED_MEDIA=OFF -DENABLE_LEGACY_ENCRYPTED_MEDIA=OFF \
   -DENABLE_WEB_AUTHN=OFF -DENABLE_WRITING_TOOLS=OFF -DENABLE_PAYMENT_REQUEST=OFF \
+  `# OptionsIOS.cmake force-defaults these three ON for PORT=IOS even though` \
+  `# WebKitFeatures.cmake's own base default is OFF - upstream aims this override` \
+  `# at real modern iOS, not this port. Verified each still has live, compiled` \
+  `# WebCore sources on this tree (page/PointerLockController.cpp,` \
+  `# Modules/applicationmanifest/ApplicationManifestParser.cpp,` \
+  `# Modules/pictureinpicture/*.cpp), unlike ENABLE_APPLE_PAY* and` \
+  `# ENABLE_WK_WEB_EXTENSIONS/ENABLE_MEMORY_SAMPLER below, which this tree's` \
+  `# SourcesCocoa.txt already comments out or which only exist under` \
+  `# Source/WebKit (built solely when ENABLE_WEBKIT=ON, which we don't use) -` \
+  `# those are no-ops here regardless of their setting, so they are left alone.` \
+  -DENABLE_POINTER_LOCK=OFF -DENABLE_APPLICATION_MANIFEST=OFF -DENABLE_PICTURE_IN_PICTURE_API=OFF \
+  `# Tools/CMakeLists.txt builds a standalone ImageDiff CLI for layout-test` \
+  `# result comparison whenever ENABLE_TOOLS defaults on (it does, Tools/` \
+  `# exists). It is not linked into any of the three shipped frameworks, so` \
+  `# this saves build time only, not app __TEXT - included anyway since it is` \
+  `# dead weight for this port.` \
+  -DENABLE_IMAGE_DIFF=OFF \
   -DICU_UC_LIBRARY=$I/lib/libicuuc.a -DICU_I18N_LIBRARY=$I/lib/libicui18n.a \
   -DICU_DATA_LIBRARY=$I/lib/libicudata.a -DICU_INCLUDE_DIR=$I/include \
   -DCMAKE_SHARED_LINKER_FLAGS="-flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0" \

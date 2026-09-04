@@ -7,6 +7,7 @@
  */
 #include <CoreGraphics/CoreGraphics.h>
 #include <math.h>
+#include <stdint.h>
 
 /* One call that replaced begin-path/add-path/draw. */
 void CGContextDrawPathDirect(CGContextRef context, CGPathDrawingMode mode, CGPathRef path, const CGRect *boundingBox)
@@ -68,13 +69,53 @@ CGGradientRef CGGradientCreateWithColorComponentsAndOptions(CGColorSpaceRef spac
 }
 
 /* A conic gradient has no equivalent here; drawing its first colour beats
- * drawing nothing. */
+ * drawing nothing - which is what this did until now: every parameter cast
+ * to void and no paint call made at all, so a site's conic-gradient background
+ * or Canvas createConicGradient() came out fully transparent instead of the
+ * fallback the comment above already promised.
+ *
+ * The colour is read back from the gradient itself rather than guessed -
+ * CGGradientRef has no accessor for its own stops. One pixel of the gradient
+ * is rendered into an off-screen bitmap and read back; the sampled point is
+ * placed in the region CGContextDrawLinearGradient extends under
+ * kCGGradientDrawsBeforeStartLocation, which CoreGraphics defines as a flat
+ * fill of the gradient's colour at location 0. That makes the pixel exactly
+ * the first stop, not an interpolated colour near it.
+ *
+ * The fill target is the context's own clip, the same CGContextGetClipBoundingBox
+ * this file's caller (GradientCG.cpp) already reads for the linear and radial
+ * cases: Gradient::fill() clips to the shape being painted before any of these
+ * draw calls run. */
 void CGContextDrawConicGradient(CGContextRef context, CGGradientRef gradient, CGPoint center, CGFloat angle)
 {
-    (void)gradient;
     (void)center;
     (void)angle;
-    (void)context;
+    if (!context || !gradient)
+        return;
+
+    uint8_t pixel[4] = { 0, 0, 0, 0 };
+    CGColorSpaceRef sampleSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef sample = CGBitmapContextCreate(pixel, 1, 1, 8, 4, sampleSpace,
+        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGColorSpaceRelease(sampleSpace);
+    if (!sample)
+        return;
+
+    /* The sampled pixel spans device x in [0, 1); the gradient runs from x=4
+     * to x=5, so the whole pixel sits in the "before start" region. */
+    CGContextDrawLinearGradient(sample, gradient, CGPointMake(4, 0), CGPointMake(5, 0),
+        kCGGradientDrawsBeforeStartLocation);
+    CGContextRelease(sample);
+
+    if (!pixel[3])
+        return;
+
+    /* Un-premultiply: the bitmap stores alpha-premultiplied components, and
+     * CGContextSetRGBFillColor wants straight ones plus a separate alpha. */
+    CGFloat alpha = pixel[3] / 255.0;
+    CGContextSetRGBFillColor(context, pixel[0] / 255.0 / alpha, pixel[1] / 255.0 / alpha,
+        pixel[2] / 255.0 / alpha, alpha);
+    CGContextFillRect(context, CGContextGetClipBoundingBox(context));
 }
 
 CGColorRef CGColorCreateSRGB(CGFloat red, CGFloat green, CGFloat blue, CGFloat alpha)

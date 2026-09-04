@@ -33,6 +33,46 @@
     static BOOL said_NSDateComponentsFormatter; if (!said_NSDateComponentsFormatter) { said_NSDateComponentsFormatter = YES; fprintf(stderr, "[ios6] class unavailable: NSDateComponentsFormatter\n"); }
     return [super alloc];
 }
+
+/* The unitsStyle/allowedUnits/formattingContext/maximumUnitCount properties
+ * work - they're auto-synthesized from Foundation.h's real @interface, which
+ * this file has no @interface of its own to override. This method is not a
+ * property, so nothing synthesizes it: WebKit's media accessibility duration
+ * text (RenderThemeCocoa.mm) sets those properties and then calls this, gets
+ * an unrecognized-selector exception, and that killed the process on real
+ * playback/scroll - "WebKit discarding exception" only catches what the
+ * BEGIN_BLOCK_OBJC_EXCEPTIONS wrapper is still inside when it throws, not
+ * whatever runs after. Largest-unit-first, up to maximumUnitCount units,
+ * matching the "full" style's word form since that's the only style this
+ * engine's one caller asks for. */
+- (NSString *)stringFromTimeInterval:(NSTimeInterval)interval
+{
+    if (!(interval >= 0))
+        interval = 0;
+    long long total = (long long)(interval + 0.5);
+    long long hours = total / 3600;
+    long long minutes = (total % 3600) / 60;
+    long long seconds = total % 60;
+
+    NSCalendarUnit allowed = self.allowedUnits;
+    if (!allowed)
+        allowed = NSCalendarUnitHour | NSCalendarUnitMinute | NSCalendarUnitSecond;
+    NSInteger maxUnits = self.maximumUnitCount;
+    if (maxUnits <= 0)
+        maxUnits = 3;
+
+    NSMutableArray *parts = [NSMutableArray array];
+    if ((allowed & NSCalendarUnitHour) && hours)
+        [parts addObject:[NSString stringWithFormat:@"%lld %@", hours, hours == 1 ? @"hour" : @"hours"]];
+    if ((allowed & NSCalendarUnitMinute) && (minutes || (parts.count == 0 && !(allowed & NSCalendarUnitSecond))))
+        [parts addObject:[NSString stringWithFormat:@"%lld %@", minutes, minutes == 1 ? @"minute" : @"minutes"]];
+    if ((allowed & NSCalendarUnitSecond) && (seconds || parts.count == 0))
+        [parts addObject:[NSString stringWithFormat:@"%lld %@", seconds, seconds == 1 ? @"second" : @"seconds"]];
+
+    while ((NSInteger)parts.count > maxUnits)
+        [parts removeLastObject];
+    return [parts componentsJoinedByString:@", "];
+}
 @end
 
 @implementation NSItemProvider
@@ -64,6 +104,22 @@
 {
     static BOOL said_LSAppLink; if (!said_LSAppLink) { said_LSAppLink = YES; fprintf(stderr, "[ios6] class unavailable: LSAppLink\n"); }
     return [super alloc];
+}
+
+/* WebFrameLoaderClient.mm calls this class method directly - no +alloc
+ * involved, so the log-once above never fires for it - whenever WebKit
+ * treats a navigation as an app-link candidate (an outbound link that
+ * looks like it could open a native app instead). No app-link resolver
+ * actually exists on this system to ask, so the honest answer is always
+ * "no", which is exactly what makes the caller fall through to opening the
+ * link in this browser itself - not a crash from an unimplemented class
+ * method. */
++ (void)openWithURL:(NSURL *)url configuration:(id)configuration completionHandler:(void (^)(BOOL success, NSError *error))completionHandler
+{
+    static BOOL said_LSAppLink_open; if (!said_LSAppLink_open) { said_LSAppLink_open = YES; fprintf(stderr, "[ios6] class unavailable: LSAppLink openWithURL:\n"); }
+    (void)url; (void)configuration;
+    if (completionHandler)
+        completionHandler(NO, nil);
 }
 @end
 

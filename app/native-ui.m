@@ -7,6 +7,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <dlfcn.h>
+#include <libkern/OSAtomic.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include <signal.h>
@@ -26,8 +27,42 @@
 // knows for certain, because it is the one publishing the offset.
 __attribute__((visibility("default"))) volatile int g_appIsScrolling = 0;
 
+// A switch file, asked about once and remembered. Every caller here runs on a
+// path that repeats, so the filesystem is touched on the first pass only.
+static bool probeIsPresent(const char *path, int *cache)
+{
+    if (*cache < 0)
+        *cache = access(path, F_OK) == 0 ? 1 : 0;
+    return *cache != 0;
+}
+
+// The lifecycle record, and the one switch that silences it. Callers that have
+// to build a string before they can log ask this first.
+static bool logEnabled(void)
+{
+    static int quiet = -1;
+    return !probeIsPresent("/tmp/native-quiet", &quiet);
+}
+
+static double residentMegabytes(void);
+static void reportMemoryRegions(FILE *log);
+
+static void reportStartupFootprint(const char *where)
+{
+    FILE *log = fopen("/tmp/native.log", "a");
+    if (!log)
+        return;
+    fprintf(log, "%.3f [start] footprint at %s: %.1f MB in the process\n",
+        CFAbsoluteTimeGetCurrent(), where, residentMegabytes());
+    reportMemoryRegions(log);
+    fclose(log);
+}
+
 static void logLine(NSString *format, ...)
 {
+    if (!logEnabled())
+        return;
+
     va_list args;
     va_start(args, format);
     NSString *line = [[NSString alloc] initWithFormat:format arguments:args];
@@ -44,6 +79,48 @@ static void logLine(NSString *format, ...)
     if (log)
         fprintf(log, "%.3f %s\n", CFAbsoluteTimeGetCurrent(), [line UTF8String]);
     [line release];
+}
+
+// Resolved once. dlsym with RTLD_DEFAULT walks the symbol table of every loaded
+// image, and this was being asked on every frame of every scroll.
+typedef void (*WebThreadRunFunction)(void (^)(void));
+
+static WebThreadRunFunction webThreadRun(void)
+{
+    static WebThreadRunFunction function;
+    static bool looked;
+    if (!looked) {
+        looked = true;
+        function = (WebThreadRunFunction)dlsym(RTLD_DEFAULT, "WebThreadRun");
+    }
+    return function;
+}
+
+static OSSpinLock exposedRectLock = OS_SPINLOCK_INIT;
+static CGRect exposedRectToPublish;
+static bool exposedRectPublishQueued;
+
+static void publishExposedRect(id window, CGRect rect)
+{
+    WebThreadRunFunction runOnWebThread = webThreadRun();
+    if (!runOnWebThread)
+        return;
+
+    OSSpinLockLock(&exposedRectLock);
+    exposedRectToPublish = rect;
+    bool alreadyQueued = exposedRectPublishQueued;
+    exposedRectPublishQueued = true;
+    OSSpinLockUnlock(&exposedRectLock);
+    if (alreadyQueued)
+        return;
+
+    runOnWebThread(^{
+        OSSpinLockLock(&exposedRectLock);
+        CGRect latest = exposedRectToPublish;
+        exposedRectPublishQueued = false;
+        OSSpinLockUnlock(&exposedRectLock);
+        ((void (*)(id, SEL, CGRect))objc_msgSend)(window, @selector(setExposedScrollViewRect:), latest);
+    });
 }
 
 
@@ -245,8 +322,14 @@ static CGFloat lastCorrectedOffset = -1;
 
 @implementation TouchLoggingWindow
 
+// A line per touch, written synchronously inside UIKit's delivery path, so it
+// stays behind /tmp/native-watch-touches. This window is now always installed -
+// it is what raises the input-pending flag - and the log must not come with it.
 static FILE *touchLog(void)
 {
+    static int watching = -1;
+    if (!probeIsPresent("/tmp/native-watch-touches", &watching))
+        return NULL;
     static FILE *log;
     if (!log) {
         log = fopen("/tmp/native-touch.log", "w");
@@ -256,11 +339,73 @@ static FILE *touchLog(void)
     return log;
 }
 
+// A touch, announced to the engine before it is delivered.
+//
+// The page's scheduler asks navigator.scheduling.isInputPending() before
+// deciding to keep working, and the answer has to come from here: while the
+// scheduler is inside one of its stretches - eight seconds, measured on this
+// device - nothing in the page runs, so nothing in the page can record that a
+// finger has landed. The flags live in WebCore and are read by the thread
+// running script.
+static volatile int *inputPendingFlag(void)
+{
+    static volatile int *flag;
+    static bool looked;
+    if (!looked) {
+        looked = true;
+        flag = (volatile int *)dlsym(RTLD_DEFAULT, "g_webkitIOS6InputPending");
+        if (!flag)
+            logLine(@"the engine does not export the input-pending flag");
+    }
+    return flag;
+}
+
+static volatile int *continuousInputFlag(void)
+{
+    static volatile int *flag;
+    static bool looked;
+    if (!looked) {
+        looked = true;
+        flag = (volatile int *)dlsym(RTLD_DEFAULT, "g_webkitIOS6ContinuousInputPending");
+    }
+    return flag;
+}
+
 - (void)sendEvent:(UIEvent *)event
 {
-    FILE *log = touchLog();
-    if (log && event.type == UIEventTypeTouches) {
-        UITouch *touch = [[event allTouches] anyObject];
+    BOOL touches = event.type == UIEventTypeTouches;
+    // Asked for once per event, not once per thing that wants it: -allTouches
+    // builds a set every time it is called.
+    NSSet *allTouches = nil;
+
+    if (touches) {
+        volatile int *pending = inputPendingFlag();
+        volatile int *continuous = continuousInputFlag();
+        if (pending || continuous) {
+            allTouches = [event allTouches];
+            bool discrete = false, moving = false;
+            for (UITouch *touch in allTouches) {
+                if (touch.phase == UITouchPhaseBegan || touch.phase == UITouchPhaseEnded)
+                    discrete = true;
+                else if (touch.phase == UITouchPhaseMoved)
+                    moving = true;
+            }
+            // Raised on the touch that starts or ends a gesture - the ones a page
+            // reacts to - and lowered once the engine has had the event. A finger
+            // merely moving is continuous input, which a scheduler only wants to
+            // hear about if it asks.
+            if (pending && discrete)
+                *pending = 1;
+            if (continuous)
+                *continuous = moving ? 1 : 0;
+        }
+    }
+
+    FILE *log = touches ? touchLog() : NULL;
+    if (log) {
+        if (!allTouches)
+            allTouches = [event allTouches];
+        UITouch *touch = [allTouches anyObject];
         CGPoint where = [touch locationInView:self];
         const char *phase = "?";
         switch (touch.phase) {
@@ -272,10 +417,17 @@ static FILE *touchLog(void)
         }
         fprintf(log, "%.3f touch %s %.0f,%.0f\n", CFAbsoluteTimeGetCurrent(), phase, where.x, where.y);
     }
+    if (!log) {
+        // The flag is not lowered here: this returns as soon as the touch is
+        // queued, long before the thread running script has seen it. The engine
+        // lowers it when it answers the page's question.
+        [super sendEvent:event];
+        return;
+    }
     double before = CFAbsoluteTimeGetCurrent();
     [super sendEvent:event];
     double took = CFAbsoluteTimeGetCurrent() - before;
-    if (log && event.type == UIEventTypeTouches && took > 0.05)
+    if (took > 0.05)
         fprintf(log, "%.3f dispatch took %.0f ms\n", CFAbsoluteTimeGetCurrent(), took * 1000);
 }
 
@@ -486,11 +638,19 @@ static bool nameByMethodTable(uintptr_t address, char *out, size_t size)
     return true;
 }
 
+
 static volatile double lastScrollActivity;
 
+static volatile double watchdogResponded;
+
+// Off unless /tmp/native-watch-stalls exists. Asking the question costs a block
+// posted to the main queue twice a second for the life of the session, which
+// wakes an idle interface thread whether or not anything is wrong with it.
 static void *mainThreadWatchdog(void *unused)
 {
     (void)unused;
+    if (access("/tmp/native-watch-stalls", F_OK) != 0)
+        return NULL;
     FILE *log = fopen("/tmp/native-stall.log", "w");
     if (!log)
         return NULL;
@@ -506,13 +666,22 @@ static void *mainThreadWatchdog(void *unused)
 
     while (1) {
         usleep(100000);
-        __block double responded = 0;
+        watchdogResponded = 0;
         double asked = CFAbsoluteTimeGetCurrent();
-        dispatch_async(dispatch_get_main_queue(), ^{ responded = CFAbsoluteTimeGetCurrent(); });
+        dispatch_async(dispatch_get_main_queue(), ^{ watchdogResponded = CFAbsoluteTimeGetCurrent(); });
         usleep(400000);
-        if (responded == 0) {
-            fprintf(log, "%.3f main thread stalled > 400 ms\n", asked);
-            // Captured while suspended, named after resuming.
+        if (watchdogResponded == 0) {
+            fprintf(log, "%.3f main thread stalled > 400 ms\n", (asked + 978307200.0) * 1000.0);
+            // Addresses only, both threads, every time.
+            //
+            // Naming a frame here was worse than useless twice over. dladdr on a
+            // stripped binary answers with the nearest exported symbol, which on
+            // this sparse table is usually a different function said with
+            // confidence; and naming twenty-four frames cost about 2.5 seconds
+            // per detection against a 0.5 second sample interval, so consecutive
+            // records described separate stalls that read as one. The addresses
+            // resolve offline against dist/unstripped with atos, which reads the
+            // function-starts table and is right.
             //
             // dladdr takes the dyld lock and fprintf takes the FILE lock and
             // allocates. Doing either while the main thread is suspended can
@@ -520,50 +689,36 @@ static void *mainThreadWatchdog(void *unused)
             // the instrument turning a stall that would have cleared into a
             // permanent freeze. So the suspend window contains nothing but the
             // register read and the stack walk.
-            uintptr_t mainFrames[24];
+            uintptr_t mainFrames[32];
             int mainDepth = 0;
-            bool waitingForEngine = false;
             if (mainThread != MACH_PORT_NULL && thread_suspend(mainThread) == KERN_SUCCESS) {
-                mainDepth = walkStack(mainThread, mainFrames, 24);
+                mainDepth = walkStack(mainThread, mainFrames, 32);
                 thread_resume(mainThread);
             }
-            for (int i = 0; i < mainDepth; i++) {
-                Dl_info info;
-                bool named = dladdr((void *)mainFrames[i], &info) && info.dli_sname && !strstr(info.dli_sname, "redacted");
-                if (named && strstr(info.dli_sname, "WebThreadLock"))
-                    waitingForEngine = true;
-                char methodName[256];
-                if (named)
-                    fprintf(log, "        %d %s  [%p]\n", i, info.dli_sname, (void *)mainFrames[i]);
-                else if (nameByMethodTable(mainFrames[i], methodName, sizeof(methodName)))
-                    fprintf(log, "        %d %s  [%p]\n", i, methodName, (void *)mainFrames[i]);
-                else
-                    fprintf(log, "        %d %p\n", i, (void *)mainFrames[i]);
+            thread_act_t webThread = findWebThread();
+            uintptr_t webFrames[32];
+            int webDepth = 0;
+            if (webThread != MACH_PORT_NULL && thread_suspend(webThread) == KERN_SUCCESS) {
+                webDepth = walkStack(webThread, webFrames, 32);
+                thread_resume(webThread);
             }
+            fprintf(log, "    main");
+            for (int i = 0; i < mainDepth; i++)
+                fprintf(log, " %p", (void *)mainFrames[i]);
+            fprintf(log, "\n    web");
+            for (int i = 0; i < webDepth; i++)
+                fprintf(log, " %p", (void *)webFrames[i]);
+            fprintf(log, "\n");
 
-            if (waitingForEngine) {
-                thread_act_t webThread = findWebThread();
-                uintptr_t webFrames[24];
-                int webDepth = 0;
-                if (webThread != MACH_PORT_NULL && thread_suspend(webThread) == KERN_SUCCESS) {
-                    webDepth = walkStack(webThread, webFrames, 24);
-                    thread_resume(webThread);
-                }
-                fprintf(log, "    holder: web thread%s\n", webDepth ? "" : " not found");
-                for (int i = 0; i < webDepth; i++) {
-                    Dl_info info;
-                    char webMethodName[256];
-                    if (dladdr((void *)webFrames[i], &info) && info.dli_sname && !strstr(info.dli_sname, "redacted"))
-                        fprintf(log, "        %d %s  [%p]\n", i, info.dli_sname, (void *)webFrames[i]);
-                    else if (nameByMethodTable(webFrames[i], webMethodName, sizeof(webMethodName)))
-                        fprintf(log, "        %d %s  [%p]\n", i, webMethodName, (void *)webFrames[i]);
-                    else
-                        fprintf(log, "        %d %p\n", i, (void *)webFrames[i]);
-                }
+            double waited = 0;
+            while (watchdogResponded == 0 && waited < 60.0) {
+                usleep(50000);
+                waited += 0.05;
             }
-            usleep(2000000);
-        } else if (responded - asked > 0.1)
-            fprintf(log, "%.3f main thread lag %.0f ms\n", asked, (responded - asked) * 1000);
+            double ended = watchdogResponded ? watchdogResponded : CFAbsoluteTimeGetCurrent();
+            fprintf(log, "%.3f stall ended after %.0f ms\n", (ended + 978307200.0) * 1000.0, (ended - asked) * 1000.0);
+        } else if (watchdogResponded - asked > 0.1)
+            fprintf(log, "%.3f main thread lag %.0f ms\n", (asked + 978307200.0) * 1000.0, (watchdogResponded - asked) * 1000);
     }
     return NULL;
 }
@@ -744,9 +899,137 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     int _viewportPublishesSinceRest;
     id _engineFixedContent;
     id _engineWakWindow;
+    id _engineWebView;
+    UIScrollView *_pageScroller;
+    int _bytecodeWrites;
     CGFloat _dragTarget;
     NSInteger _dragStepsLeft;
     BOOL _styleInjected;
+    BOOL _tapPathShortened;
+    BOOL _multiTapObserved;
+    NSMutableArray *_multiTapRecognisers;
+    NSURL *_pendingBarURL;
+    UIButton *_pressedBarButton;
+}
+
+static unsigned long long bytecodeCacheLimitBytes(void)
+{
+    // The compiled form of one of this site's bundles is seven megabytes for a
+    // two megabyte source, so a thirty two megabyte cache holds four of them and
+    // misses everything else - measured, one hit against forty three misses.
+    // The disk has room; the limit does not need to pretend otherwise. A number
+    // written into the switch file overrides this.
+    unsigned long long megabytes = 192;
+    FILE *file = fopen("/tmp/native-bytecode-size", "r");
+    if (file) {
+        char line[32];
+        if (fgets(line, sizeof(line), file)) {
+            unsigned long long asked = strtoull(line, NULL, 10);
+            if (asked >= 8 && asked <= 2048)
+                megabytes = asked;
+        }
+        fclose(file);
+    }
+    return megabytes * 1024ULL * 1024ULL;
+}
+
+// Everything this application stores, under one directory of its own:
+// <Library>/WebKitStorage/<bundle identifier>. The identifier is in the path
+// because these bundles live in /Applications and get no container, so
+// NSHomeDirectory() is /var/mobile for every one of them - without it Threads
+// and Instagram would share one localStorage database.
+static NSString *webAppStorageDirectory(void)
+{
+    NSString *library = [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory,
+        NSUserDomainMask, YES) lastObject];
+    NSString *identifier = [[NSBundle mainBundle] bundleIdentifier] ?: @"LegacyWebApp";
+    return [[library stringByAppendingPathComponent:@"WebKitStorage"]
+        stringByAppendingPathComponent:identifier];
+}
+
+// What the engine calls this origin's store, which is SecurityOriginData's
+// database identifier: scheme, host and port joined by underscores, with the
+// default port written as zero.
+static NSString *storageOriginStem(NSString *urlString)
+{
+    NSURL *url = urlString.length ? [NSURL URLWithString:urlString] : nil;
+    NSString *host = [[url host] lowercaseString];
+    NSString *scheme = [[url scheme] lowercaseString];
+    if (!host.length || !scheme.length)
+        return nil;
+    NSNumber *port = [url port];
+    return [NSString stringWithFormat:@"%@_%@_%d", scheme, host, port ? [port intValue] : 0];
+}
+
+// The store the site has already filled, brought across from wherever the
+// engine's default left it. Answers whether the destination is fit to be used.
+//
+// The three files are copied into a staging directory first and only then
+// renamed into place, the database itself last: the database is what this
+// function tests for and what the engine opens, so until it lands the
+// destination is not a store and the next launch simply tries again. The
+// originals go only after every rename has succeeded. A kill at any point
+// therefore leaves at least one complete copy, and never a database separated
+// from the write-ahead log that holds its most recent rows.
+//
+// A destination that already has a database is left exactly as it is: two
+// stores for one origin cannot be merged, and the one the engine has been
+// opening is the one to keep.
+static BOOL adoptLocalStorage(NSString *stem, NSString *from, NSString *to)
+{
+    NSFileManager *files = [NSFileManager defaultManager];
+    if (![files createDirectoryAtPath:to withIntermediateDirectories:YES attributes:nil error:NULL])
+        return NO;
+    if (!stem || [from isEqualToString:to])
+        return YES;
+
+    NSString *names[3];
+    names[0] = [stem stringByAppendingString:@".localstorage"];
+    names[1] = [names[0] stringByAppendingString:@"-wal"];
+    names[2] = [names[0] stringByAppendingString:@"-shm"];
+
+    // Whatever an interrupted run left behind goes now, whether or not this run
+    // has anything to do: it is only ever a copy of files that still exist.
+    NSString *staging = [to stringByAppendingPathComponent:@".migrating"];
+    [files removeItemAtPath:staging error:NULL];
+
+    if ([files fileExistsAtPath:[to stringByAppendingPathComponent:names[0]]])
+        return YES;
+    if (![files fileExistsAtPath:[from stringByAppendingPathComponent:names[0]]])
+        return YES;
+
+    if (![files createDirectoryAtPath:staging withIntermediateDirectories:YES attributes:nil error:NULL])
+        return NO;
+
+    for (int i = 0; i < 3; i++) {
+        NSString *source = [from stringByAppendingPathComponent:names[i]];
+        if (![files fileExistsAtPath:source])
+            continue;
+        if ([files copyItemAtPath:source toPath:[staging stringByAppendingPathComponent:names[i]] error:NULL])
+            continue;
+        logLine(@"storage migration: could not copy %@", names[i]);
+        [files removeItemAtPath:staging error:NULL];
+        return NO;
+    }
+
+    for (int i = 2; i >= 0; i--) {
+        NSString *staged = [staging stringByAppendingPathComponent:names[i]];
+        if (![files fileExistsAtPath:staged])
+            continue;
+        NSString *destination = [to stringByAppendingPathComponent:names[i]];
+        [files removeItemAtPath:destination error:NULL];
+        if ([files moveItemAtPath:staged toPath:destination error:NULL])
+            continue;
+        logLine(@"storage migration: could not place %@", names[i]);
+        [files removeItemAtPath:staging error:NULL];
+        return NO;
+    }
+
+    for (int i = 0; i < 3; i++)
+        [files removeItemAtPath:[from stringByAppendingPathComponent:names[i]] error:NULL];
+    [files removeItemAtPath:staging error:NULL];
+    logLine(@"storage migration: %@ moved from %@", stem, from);
+    return YES;
 }
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options
@@ -785,14 +1068,61 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     // writes a line to a file inside -sendEvent:, which is UIKit's touch delivery
     // path - synchronous I/O on the main thread for every touch, and it showed up
     // in the stack of a frozen interface.
-    Class windowClass = access("/tmp/native-watch-touches", F_OK) == 0
-        ? [TouchLoggingWindow class] : [UIWindow class];
+    // Always this window now: besides the optional touch log it tells the engine
+    // that a finger has landed, which is what lets the page's scheduler yield.
+    Class windowClass = [TouchLoggingWindow class];
     _window = [[windowClass alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     _window.backgroundColor = [UIColor whiteColor];
 
+    // Where the page's own storage lives, decided before the UIWebView exists.
+    //
+    // -[WebView _commonInitializationWithFrameName:groupName:] does
+    // WebViewGroup::getOrCreate(groupName, [preferences _localStorageDatabasePath]),
+    // which is where the path is captured, and UIWebView constructs its WebView
+    // inside -initWithFrame: below. A path set after that line reaches nothing.
+    //
+    // Left alone, UIKit points the engine at Library/Caches, which the system is
+    // allowed to empty under disk pressure - a login vanishing with no crash and
+    // no message - and which every other application on this device writes into
+    // as well. The store that is already there is brought across first; if that
+    // cannot be done the old path stays, because a site reading an empty store
+    // is worse than a site reading a purgeable one.
+    {
+        NSString *previous = [[NSUserDefaults standardUserDefaults]
+            objectForKey:@"WebKitLocalStorageDatabasePathPreferenceKey"];
+        if (![previous isKindOfClass:[NSString class]] || !previous.length)
+            previous = @"~/Library/WebKit/LocalStorage";
+        previous = [previous stringByStandardizingPath];
+
+        NSString *directory = webAppStorageDirectory();
+        NSString *stem = storageOriginStem([[NSBundle mainBundle]
+            objectForInfoDictionaryKey:@"WebAppStartURL"]);
+        Class storagePreferencesClass = NSClassFromString(@"WebPreferences");
+        id storagePreferences = [storagePreferencesClass respondsToSelector:@selector(standardPreferences)]
+            ? [storagePreferencesClass performSelector:@selector(standardPreferences)] : nil;
+
+        if (adoptLocalStorage(stem, previous, directory)
+            && [storagePreferences respondsToSelector:@selector(_setLocalStorageDatabasePath:)]) {
+            [storagePreferences performSelector:@selector(_setLocalStorageDatabasePath:) withObject:directory];
+            // WebDatabaseProvider and WebDatabaseManager read this key out of
+            // NSUserDefaults by name for WebSQL and IndexedDB, and they read it
+            // lazily at first use rather than at WebView construction - so
+            // unlike the path above it is not order sensitive. It is set here so
+            // that the two live together, and because its own default is the
+            // same purgeable directory.
+            [[NSUserDefaults standardUserDefaults] setObject:directory forKey:@"WebDatabaseDirectory"];
+            logLine(@"page storage at %@", directory);
+        } else
+            logLine(@"page storage left at %@", previous);
+    }
+
     // applicationFrame is the screen minus the status bar; the web view must not
     // sit under it or the page draws over the clock and the battery.
+    CFAbsoluteTime beforeEngine = CFAbsoluteTimeGetCurrent();
     _webView = [[UIWebView alloc] initWithFrame:[[UIScreen mainScreen] applicationFrame]];
+    logLine(@"[start] engine loaded and first WebView built in %.0f ms",
+            (CFAbsoluteTimeGetCurrent() - beforeEngine) * 1000.0);
+    reportStartupFootprint("first WebView built");
     // Page not yet painted should look like page, not like a hole.
     //
     // Painting happens on the web thread behind the web lock, and that thread is
@@ -842,22 +1172,22 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     // read it back instead of parsing, and this port already builds that - it
     // was simply never switched on in this application.
     Class bytecodeWebView = NSClassFromString(@"WebView");
-    // Off by default, and measured that way.
+    // On, for the large bundles only.
     //
-    // Caching the compiled form removes the parsing - the parser's arena is the
-    // largest allocator in the process - but the compiled form then lives in
-    // memory, and on this device that costs more than the parsing saves:
-    // resident 229 and 250 MB with it against 214 without, over comparable
-    // feeds. It stays one flag away for a device with room.
+    // Caching every script cost 31 MB of resident memory to save a second and a
+    // half of the launch, which is why this was off. The site's weight is in
+    // four bundles, and caching only those - the engine's floor is now half a
+    // megabyte of source - brings the feed up in 24.0 seconds against 28.3, for
+    // 7 MB. Removing the switch file turns it off.
     if ([bytecodeWebView respondsToSelector:@selector(_setJavaScriptBytecodeCacheDirectory:maximumSize:)]
-        && access("/tmp/native-bytecode-cache", F_OK) == 0) {
+        && access("/tmp/native-no-bytecode-cache", F_OK) != 0) {
         NSArray *caches = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
         NSString *directory = [[caches count] ? [caches objectAtIndex:0] : @"/tmp"
             stringByAppendingPathComponent:@"bytecode"];
         [[NSFileManager defaultManager] createDirectoryAtPath:directory
             withIntermediateDirectories:YES attributes:nil error:NULL];
         ((void (*)(id, SEL, id, unsigned long long))objc_msgSend)(bytecodeWebView,
-            @selector(_setJavaScriptBytecodeCacheDirectory:maximumSize:), directory, 32ULL * 1024 * 1024);
+            @selector(_setJavaScriptBytecodeCacheDirectory:maximumSize:), directory, bytecodeCacheLimitBytes());
         logLine(@"bytecode cache at %@", directory);
     }
 
@@ -884,12 +1214,9 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     [self performSelector:@selector(loadStartPage) withObject:nil afterDelay:0];
     logLine(@"loading %@", start);
 
-    [self watchForSnapshotRequest];
-    [self watchForEvalRequest];
-    [self watchForTapRequest];
-    [self watchForScrollRequest];
-    [self watchForTypeRequest];
+    [self serveExternalRequests];
     [self servePendingPress];
+
     // Where each framework landed, once, so a stack from a stripped binary can be
     // read offline against the unstripped copy in dist/unstripped:
     //   atos -o dist/unstripped/WebCore -arch armv7 -l <base> <address>
@@ -898,9 +1225,11 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
         if (!name)
             continue;
         if (!strstr(name, "WebCore") && !strstr(name, "JavaScriptCore")
-            && !strstr(name, "WebKit.framework") && !strstr(name, "NativeUI"))
+            && !strstr(name, "WebKit.framework") && !strstr(name, "NativeUI")
+            && !strstr(name, "TLS.dylib") && !strstr(name, "MemProbe"))
             continue;
-        logLine(@"[image] %p %s", _dyld_get_image_header(image), strrchr(name, '/') + 1);
+        const char *slash = strrchr(name, '/');
+        logLine(@"[image] %p %s", _dyld_get_image_header(image), slash ? slash + 1 : name);
     }
 
     // Images held back until the document is parsed - off unless asked for.
@@ -1009,7 +1338,7 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
         @"(function(){var s=document.getElementById('__appchrome');if(!s){s=document.createElement('style');"
          "s.id='__appchrome';document.documentElement.appendChild(s);}s.textContent=%@;})()",
         [self quoteForJavaScript:css]] : nil;
-    void (*runOnWebThread)(void (^)(void)) = (void (*)(void (^)(void)))dlsym(RTLD_DEFAULT, "WebThreadRun");
+    WebThreadRunFunction runOnWebThread = webThreadRun();
     if (!runOnWebThread) {
         if (styleScript)
             [_webView stringByEvaluatingJavaScriptFromString:styleScript];
@@ -1043,9 +1372,16 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
 // phone was visibly stuttering: the interface is composited on the main thread,
 // so that is where frames must be counted. A display link fires once per screen
 // refresh; how many of those the main thread manages to service is the number.
+// Counting is behind /tmp/native-fps; publishing the viewport is not, because
+// the page does not learn that it scrolled any other way.
 - (void)countFrame:(id)link
 {
     [self publishViewportToEngine];
+
+    static int counting = -1;
+    if (!probeIsPresent("/tmp/native-fps", &counting))
+        return;
+
     _framesThisSecond++;
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     if (now - _frameWindowStart < 2.0)
@@ -1125,6 +1461,8 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
 
 - (void)installPinnedLayerObserver
 {
+    if (stockFixedBehaviour())
+        return;
     // Just below CoreAnimation's own commit observer, which this version of
     // UIKit runs at order 2000000.
     CFRunLoopObserverContext context = {0, self, NULL, NULL, NULL};
@@ -1201,14 +1539,32 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     }
     [scriptObject setValue:_bridge forKey:@"appchrome"];
     logLine(@"bridge installed");
+
+    // Write the compiled form of the site's scripts out now.
+    //
+    // The cache commits an entry when the engine drops the script's source
+    // provider, and the provider for a bundle the page keeps alive is dropped
+    // only when the process ends - which for this application means never,
+    // since it is killed rather than asked to quit. So the two largest bundles,
+    // the ones worth caching, were re-compiled on every launch and never
+    // stored. Asking for the write here costs one pass over the entries at a
+    // moment when the page has just finished loading.
+    [self writeBytecodeCache];
 }
 
 - (BOOL)webView:(UIWebView *)webView shouldStartLoadWithRequest:(NSURLRequest *)request navigationType:(UIWebViewNavigationType)navigationType
 {
     NSURL *url = [request URL];
-    logLine(@"navigation request: %@", [[url absoluteString] length] > 60 ? [[url absoluteString] substringToIndex:60] : [url absoluteString]);
-    if (navigationType != UIWebViewNavigationTypeOther || [[url scheme] hasPrefix:@"http"])
+    // The substring is built before logLine can decide anything, so the decision
+    // is made here instead.
+    if (logEnabled()) {
+        NSString *text = [url absoluteString];
+        logLine(@"navigation request: %@", text.length > 60 ? [text substringToIndex:60] : text);
+    }
+    if (navigationType != UIWebViewNavigationTypeOther || [[url scheme] hasPrefix:@"http"]) {
         _injectedForThisDocument = NO;
+        _tapPathShortened = NO;
+    }
     // The promoted chrome belongs to the site it was read from.
     //
     // The bar is a real UIKit view in the window, so nothing removes it when the
@@ -1323,6 +1679,7 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     if (!start.length)
         start = @"https://www.threads.com/";
     logLine(@"loading %@", start);
+    reportStartupFootprint("first page request");
     [_webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:start]]];
 }
 
@@ -1343,10 +1700,22 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     return [scriptObject respondsToSelector:@selector(evaluateWebScript:)] ? scriptObject : nil;
 }
 
+// Remembered once it exists.
+//
+// -valueForKey: on a private ivar name is a key-value coding search - four
+// selector probes and an ivar lookup - and this was being asked twice on every
+// frame of every scroll. The engine's WebView outlives the documents it shows:
+// _documentView is replaced on a navigation, the WebView that owns it is not.
 - (id)engineWebView
 {
+    if (_engineWebView)
+        return _engineWebView;
     id documentView = [_webView valueForKey:@"_documentView"];
-    return [documentView respondsToSelector:@selector(webView)] ? [documentView performSelector:@selector(webView)] : nil;
+    id webView = [documentView respondsToSelector:@selector(webView)]
+        ? [documentView performSelector:@selector(webView)] : nil;
+    if (webView)
+        _engineWebView = [webView retain];
+    return webView;
 }
 
 // Telling the engine where the window is.
@@ -1377,15 +1746,21 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
         lastScrollActivity = CFAbsoluteTimeGetCurrent();
     }
 
-    static CFAbsoluteTime lastTrace;
-    CFAbsoluteTime traceNow = CFAbsoluteTimeGetCurrent();
-    if (traceNow - lastTrace > 2.0) {
-        lastTrace = traceNow;
-        id documentView = [_webView valueForKey:@"_documentView"];
-        CGRect documentFrame = documentView ? [documentView frame] : CGRectZero;
-        logLine(@"[viewport] offset %.0f bounds %.0fx%.0f contentSize %.0f document %.0f",
-            offset.y, viewport.width, viewport.height,
-            scroller ? scroller.contentSize.height : 0, documentFrame.size.height);
+    // Behind /tmp/native-viewport-trace: the line itself is one every two
+    // seconds, but reaching the document view is a key-value lookup on a private
+    // ivar and this runs on the frame callback.
+    static int tracing = -1;
+    if (probeIsPresent("/tmp/native-viewport-trace", &tracing)) {
+        static CFAbsoluteTime lastTrace;
+        CFAbsoluteTime traceNow = CFAbsoluteTimeGetCurrent();
+        if (traceNow - lastTrace > 2.0) {
+            lastTrace = traceNow;
+            id documentView = [_webView valueForKey:@"_documentView"];
+            CGRect documentFrame = documentView ? [documentView frame] : CGRectZero;
+            logLine(@"[viewport] offset %.0f bounds %.0fx%.0f contentSize %.0f document %.0f",
+                offset.y, viewport.width, viewport.height,
+                scroller ? scroller.contentSize.height : 0, documentFrame.size.height);
+        }
     }
 
     if (!scroller || viewport.width < 1 || viewport.height < 1)
@@ -1407,6 +1782,16 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
             id fixedContent = [self engineFixedContent];
             if ([fixedContent respondsToSelector:@selector(didFinishScrollingOrZooming)])
                 [fixedContent performSelector:@selector(didFinishScrollingOrZooming)];
+
+            // Ask for the tiles the flick outran.
+            //
+            // Where the page stops is often page the engine has laid out and
+            // never painted: the layout passes that would have made those tiles
+            // were skipped while the engine held the lock, and nothing invalidates
+            // afterwards, so the reader is left looking at white with the content
+            // behind it. Scrolling by two pixels used to be enough to bring it
+            // back, which is what this asks for without moving anything.
+            [self markTilesAsNeedingLayout];
         }
         return;
     }
@@ -1437,16 +1822,12 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     // a feed that does not load more.
     if (!_engineWakWindow)
         _engineWakWindow = [[self engineWindow] retain];
-    if ([_engineWakWindow respondsToSelector:@selector(setExposedScrollViewRect:)]
-        && access("/tmp/native-no-exposed-rect", F_OK) != 0) {
-        void (*runOnWebThread)(void (^)(void)) = (void (*)(void (^)(void)))dlsym(RTLD_DEFAULT, "WebThreadRun");
-        id window = _engineWakWindow;
-        if (runOnWebThread) {
-            runOnWebThread(^{
-                ((void (*)(id, SEL, CGRect))objc_msgSend)(window, @selector(setExposedScrollViewRect:), onScreen);
-            });
-        }
-    }
+    static int noExposedRect = -1;
+    bool respondsToExposedRect = [_engineWakWindow respondsToSelector:@selector(setExposedScrollViewRect:)];
+    if (getenv("WEBKIT_IOS6_DEBUG_EXPOSED_RECT"))
+        NSLog(@"[exposedrect] publish gate: noExposedRect=%d responds=%d", probeIsPresent("/tmp/native-no-exposed-rect", &noExposedRect), respondsToExposedRect);
+    if (!probeIsPresent("/tmp/native-no-exposed-rect", &noExposedRect) && respondsToExposedRect)
+        publishExposedRect(_engineWakWindow, onScreen);
 
     // And the rectangle visibility is measured against.
     //
@@ -1465,16 +1846,19 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     // measured spread over 1592 px. The expense was never the storing of the
     // rectangle but the layout it used to trigger, and that is now off, so this
     // can run at frame rate.
-    static CFAbsoluteTime lastLayoutViewportPublish;
-    CFAbsoluteTime publishNow = CFAbsoluteTimeGetCurrent();
-    double publishInterval = access("/tmp/native-slow-layout-viewport", F_OK) == 0 ? 0.0 : 0.25;
-    if (publishNow - lastLayoutViewportPublish >= publishInterval) {
-        lastLayoutViewportPublish = publishNow;
-        id viewportTarget = [self engineWebView];
-        SEL setLayoutViewport = @selector(_setLayoutViewportRect:);
-        if ([viewportTarget respondsToSelector:setLayoutViewport] && !stockFixedBehaviour()
-            && access("/tmp/native-no-layout-viewport", F_OK) != 0)
-            ((void (*)(id, SEL, CGRect))objc_msgSend)(viewportTarget, setLayoutViewport, onScreen);
+    static int slowLayoutViewport = -1;
+    static int noLayoutViewport = -1;
+    if (!probeIsPresent("/tmp/native-no-layout-viewport", &noLayoutViewport) && !stockFixedBehaviour()) {
+        static CFAbsoluteTime lastLayoutViewportPublish;
+        CFAbsoluteTime publishNow = CFAbsoluteTimeGetCurrent();
+        double publishInterval = probeIsPresent("/tmp/native-slow-layout-viewport", &slowLayoutViewport) ? 0.0 : 0.25;
+        if (publishNow - lastLayoutViewportPublish >= publishInterval) {
+            lastLayoutViewportPublish = publishNow;
+            id viewportTarget = [self engineWebView];
+            SEL setLayoutViewport = @selector(_setLayoutViewportRect:);
+            if ([viewportTarget respondsToSelector:setLayoutViewport])
+                ((void (*)(id, SEL, CGRect))objc_msgSend)(viewportTarget, setLayoutViewport, onScreen);
+        }
     }
 
     // scrollOrZoomChanged: wraps its own layer moves in a transaction with
@@ -1484,10 +1868,62 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
         ((void (*)(id, SEL, CGRect))objc_msgSend)(fixedContent, @selector(scrollOrZoomChanged:), onScreen);
     lastCorrectedOffset = offset.y;
 
+    if (stockFixedBehaviour())
+        return;
     id engineWebView = [self engineWebView];
     SEL publish = @selector(_setCustomFixedPositionLayoutRectInWebThread:synchronize:);
-    if ([engineWebView respondsToSelector:publish] && !stockFixedBehaviour())
+    if ([engineWebView respondsToSelector:publish])
         ((void (*)(id, SEL, CGRect, BOOL))objc_msgSend)(engineWebView, publish, onScreen, NO);
+}
+
+- (void)writeBytecodeCache
+{
+    // Written again as the page keeps compiling.
+    //
+    // The engine compiles a function the first time it is called, so the blob
+    // written when the page finished loading holds only what had run by then -
+    // and the profile of a launch is a third lazy compilation. Writing again
+    // while the page is in use appends what has been compiled since; each write
+    // only appends the new entries, so the cost is a walk of the list.
+    //
+    // Bounded to the first ten minutes. Each write is disk I/O on the web
+    // thread, behind the lock UIKit wants on every frame, and what a launch
+    // compiles lazily it has compiled long before then; repeating it for the
+    // life of the session buys nothing and is paid on every one of them.
+    Class bytecodeWebView = NSClassFromString(@"WebView");
+    WebThreadRunFunction runOnWebThread = webThreadRun();
+    if (runOnWebThread && [bytecodeWebView respondsToSelector:@selector(_flushJavaScriptBytecodeCache)]) {
+        runOnWebThread(^{
+            [bytecodeWebView performSelector:@selector(_flushJavaScriptBytecodeCache)];
+        });
+    }
+    if (++_bytecodeWrites < 20)
+        [self performSelector:@selector(writeBytecodeCache) withObject:nil afterDelay:30.0];
+}
+
+- (void)markTilesAsNeedingLayout
+{
+    static Class tiledViewClass;
+    if (!tiledViewClass)
+        tiledViewClass = objc_getClass("UIWebTiledView");
+    if (!tiledViewClass)
+        return;
+
+    NSMutableArray *pending = [NSMutableArray arrayWithObject:_webView];
+    while (pending.count) {
+        UIView *view = [pending lastObject];
+        [pending removeLastObject];
+        if ([view isKindOfClass:tiledViewClass]) {
+            [view setNeedsLayout];
+            [view setNeedsDisplay];
+            static int announced;
+            if (!announced++)
+                logLine(@"[tiles] asking %@ for a layout pass when the scroll stops", NSStringFromClass([view class]));
+            return;
+        }
+        for (UIView *child in view.subviews)
+            [pending addObject:child];
+    }
 }
 
 - (id)engineFixedContent
@@ -1509,6 +1945,74 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     id documentView = [_webView valueForKey:@"_documentView"];
     id webView = [documentView respondsToSelector:@selector(webView)] ? [documentView performSelector:@selector(webView)] : nil;
     return [webView respondsToSelector:@selector(window)] ? [webView performSelector:@selector(window)] : nil;
+}
+
+- (void)shortenTheTapPath
+{
+    if (_tapPathShortened)
+        return;
+    static int keepDelay = -1;
+    if (probeIsPresent("/tmp/native-keep-tap-delay", &keepDelay)) {
+        _tapPathShortened = YES;
+        return;
+    }
+
+    UIScrollView *scroller = [self pageScroller];
+    if (!scroller)
+        return;
+
+    if ([scroller respondsToSelector:@selector(setDelaysContentTouches:)])
+        [scroller setDelaysContentTouches:NO];
+
+    unsigned recognisers = 0;
+    if (!_multiTapRecognisers)
+        _multiTapRecognisers = [[NSMutableArray alloc] init];
+    [_multiTapRecognisers removeAllObjects];
+
+    if (!_webView.scalesPageToFit) {
+        NSMutableArray *pending = [NSMutableArray arrayWithObject:_webView];
+        while (pending.count) {
+            UIView *view = [pending lastObject];
+            [pending removeLastObject];
+            for (UIGestureRecognizer *recogniser in [view gestureRecognizers]) {
+                recognisers++;
+                if (![recogniser isKindOfClass:[UITapGestureRecognizer class]])
+                    continue;
+                if ([(UITapGestureRecognizer *)recogniser numberOfTapsRequired] < 2)
+                    continue;
+                if (![recogniser isEnabled])
+                    continue;
+                [_multiTapRecognisers addObject:recogniser];
+            }
+            for (UIView *child in view.subviews)
+                [pending addObject:child];
+        }
+    }
+
+    if (!_multiTapObserved) {
+        _multiTapObserved = YES;
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(restoreMultiTapGestures)
+            name:UIKeyboardWillShowNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(suppressMultiTapGestures)
+            name:UIKeyboardDidHideNotification object:nil];
+    }
+
+    [self suppressMultiTapGestures];
+    _tapPathShortened = YES;
+    logLine(@"tap path shortened: content touches undelayed, %u of %u recognisers under the web view were multi-tap and are off",
+        (unsigned)_multiTapRecognisers.count, recognisers);
+}
+
+- (void)suppressMultiTapGestures
+{
+    for (UIGestureRecognizer *recogniser in _multiTapRecognisers)
+        [recogniser setEnabled:NO];
+}
+
+- (void)restoreMultiTapGestures
+{
+    for (UIGestureRecognizer *recogniser in _multiTapRecognisers)
+        [recogniser setEnabled:YES];
 }
 
 // The bridge records what the page asked for; this runs on the main thread and
@@ -1533,8 +2037,9 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     Class serialization = NSClassFromString(@"NSJSONSerialization");
     if ([serialization respondsToSelector:@selector(JSONObjectWithData:options:error:)]) {
         NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
-        parsed = [serialization performSelector:@selector(JSONObjectWithData:options:error:)
-                                    withObject:data withObject:nil];
+        id (*jsonObjectWithData)(id, SEL, id, NSUInteger, NSError **) =
+            (id (*)(id, SEL, id, NSUInteger, NSError **))[serialization methodForSelector:@selector(JSONObjectWithData:options:error:)];
+        parsed = jsonObjectWithData(serialization, @selector(JSONObjectWithData:options:error:), data, 0, NULL);
     }
     if (![parsed isKindOfClass:[NSDictionary class]]) {
         logLine(@"could not read the chrome description");
@@ -1579,7 +2084,11 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
         button.tag = (NSInteger)i;
         [button setTitle:(label.length ? label : @"?") forState:UIControlStateNormal];
         [button setTitleColor:[UIColor colorWithWhite:0.35 alpha:1] forState:UIControlStateNormal];
+        [button setTitleColor:[UIColor blackColor] forState:UIControlStateHighlighted];
         button.titleLabel.font = [UIFont systemFontOfSize:11];
+        [button addTarget:self action:@selector(bottomBarItemTouched:) forControlEvents:UIControlEventTouchDown];
+        [button addTarget:self action:@selector(bottomBarItemReleased:)
+            forControlEvents:UIControlEventTouchUpOutside | UIControlEventTouchCancel];
         [button addTarget:self action:@selector(bottomBarItemPressed:) forControlEvents:UIControlEventTouchUpInside];
         [_bottomBar addSubview:button];
     }
@@ -1600,19 +2109,54 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
         (int)[UIApplication sharedApplication].statusBarHidden);
 }
 
+- (void)bottomBarItemTouched:(UIButton *)button
+{
+    button.backgroundColor = [UIColor colorWithWhite:0.88 alpha:1];
+}
+
+- (void)bottomBarItemReleased:(UIButton *)button
+{
+    button.backgroundColor = nil;
+}
+
 - (void)bottomBarItemPressed:(UIButton *)button
 {
     NSUInteger index = (NSUInteger)button.tag;
-    if (index >= _bottomBarTargets.count)
+    if (index >= _bottomBarTargets.count) {
+        [self bottomBarItemReleased:button];
         return;
+    }
     NSString *href = [_bottomBarTargets objectAtIndex:index];
-    if (!href.length)
+    if (!href.length) {
+        [self bottomBarItemReleased:button];
         return;
+    }
     NSURL *url = [NSURL URLWithString:href relativeToURL:[_webView.request URL]];
+    if (!url) {
+        [self bottomBarItemReleased:button];
+        return;
+    }
+
+    button.backgroundColor = [UIColor colorWithWhite:0.88 alpha:1];
+    [_pendingBarURL release];
+    _pendingBarURL = [url retain];
+    [_pressedBarButton release];
+    _pressedBarButton = [button retain];
+    [self performSelector:@selector(navigateToPressedBarItem) withObject:nil afterDelay:0];
+}
+
+- (void)navigateToPressedBarItem
+{
+    NSURL *url = _pendingBarURL;
     if (!url)
         return;
     logLine(@"native bar navigating to %@", [url absoluteString]);
     [_webView loadRequest:[NSURLRequest requestWithURL:url]];
+    [_pendingBarURL release];
+    _pendingBarURL = nil;
+    _pressedBarButton.backgroundColor = nil;
+    [_pressedBarButton release];
+    _pressedBarButton = nil;
 }
 
 - (void)servePendingPress
@@ -1642,6 +2186,8 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
             }
         }
     }
+
+    [self shortenTheTapPath];
 
     if (!_injectedForThisDocument) {
         UIScrollView *scroller = [self pageScroller];
@@ -1739,15 +2285,23 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     _restoreOffset = 0;
 }
 
+// The synthetic-input and screenshot triggers, behind /tmp/native-harness.
+//
+// Between them they used to be eleven stat() calls twice a second for the life
+// of every session, on a device where nobody is writing those files unless a
+// measurement is being run. The two that drive the application rather than
+// measure it - /tmp/native-eval and /tmp/native-url - are not behind this.
+static bool harnessEnabled(void)
+{
+    static int harness = -1;
+    return probeIsPresent("/tmp/native-harness", &harness);
+}
+
 - (void)watchForTypeRequest
 {
-    // Whatever happens in here, the timer must be armed again. One
-    // exception used to end the chain silently and every trigger it serves
-    // stopped working - measured as a flick harness that fired once after a
-    // launch and never again, which quietly invalidated every measurement
-    // that used it.
+    if (!harnessEnabled())
+        return;
     @try {
-        struct stat marker;
         static time_t lastRequest;
         static BOOL seeded1;
         if (triggerFired("/tmp/native-type", &lastRequest, &seeded1)) {
@@ -1781,21 +2335,63 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     } @catch (id chainError) {
         logLine(@"watchForTypeRequest raised %@", chainError);
     }
-    [self performSelector:@selector(watchForTypeRequest) withObject:nil afterDelay:0.5];
+}
+
+- (void)captureScreenBurst:(NSNumber *)indexObject
+{
+    static CGImageRef (*screenImage)(void);
+    static BOOL looked;
+    if (!looked) {
+        looked = YES;
+        screenImage = (CGImageRef (*)(void))dlsym(RTLD_DEFAULT, "UIGetScreenImage");
+        if (!screenImage)
+            logLine(@"[shot] the system does not offer a screen image");
+    }
+    if (!screenImage)
+        return;
+
+    int index = [indexObject intValue];
+    CGImageRef image = screenImage();
+    if (image) {
+        UIImage *shot = [UIImage imageWithCGImage:image];
+        CGImageRelease(image);
+        NSData *png = UIImagePNGRepresentation(shot);
+        NSString *path = [NSString stringWithFormat:@"/tmp/native-shot-%d.png", index];
+        if ([png writeToFile:path atomically:YES])
+            logLine(@"[shot] %d: %lu bytes", index, (unsigned long)png.length);
+    }
+    if (index < 7)
+        [self performSelector:@selector(captureScreenBurst:) withObject:@(index + 1) afterDelay:0.25];
+}
+
+// The one trigger that is not a measurement: it is how a session is pointed at a
+// page from outside, so it is polled whether or not the harness is on.
+- (void)watchForURLRequest
+{
+    @try {
+        static time_t lastURL;
+        static BOOL seededURL;
+        if (triggerFired("/tmp/native-url", &lastURL, &seededURL)) {
+            NSString *text = [NSString stringWithContentsOfFile:@"/tmp/native-url" encoding:NSUTF8StringEncoding error:NULL];
+            NSString *trimmed = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            NSURL *url = [NSURL URLWithString:trimmed];
+            if (url) {
+                logLine(@"loading %@", trimmed);
+                [_webView loadRequest:[NSURLRequest requestWithURL:url]];
+            }
+        }
+    } @catch (id chainError) {
+        logLine(@"watchForURLRequest raised %@", chainError);
+    }
 }
 
 - (void)watchForScrollRequest
 {
-    // Whatever happens in here, the timer must be armed again. One
-    // exception used to end the chain silently and every trigger it serves
-    // stopped working - measured as a flick harness that fired once after a
-    // launch and never again, which quietly invalidated every measurement
-    // that used it.
+    if (!harnessEnabled())
+        return;
     @try {
-        struct stat marker;
         static time_t lastRequest;
         static time_t lastDrag;
-        static time_t lastURL;
         static BOOL seeded2;
         if (triggerFired("/tmp/native-scroll", &lastRequest, &seeded2)) {
             NSString *value = [NSString stringWithContentsOfFile:@"/tmp/native-scroll" encoding:NSUTF8StringEncoding error:NULL];
@@ -1810,7 +2406,6 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
             } else
                 logLine(@"no scroll view found");
         }
-        static BOOL seeded3;
         static time_t lastFlick;
         static BOOL seededFlick;
         if (triggerFired("/tmp/native-flick", &lastFlick, &seededFlick)) {
@@ -1850,14 +2445,10 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
             }
         }
 
-        if (triggerFired("/tmp/native-url", &lastURL, &seeded3)) {
-            NSString *text = [NSString stringWithContentsOfFile:@"/tmp/native-url" encoding:NSUTF8StringEncoding error:NULL];
-            NSString *trimmed = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            NSURL *url = [NSURL URLWithString:trimmed];
-            if (url) {
-                logLine(@"loading %@", trimmed);
-                [_webView loadRequest:[NSURLRequest requestWithURL:url]];
-            }
+        static time_t lastShot;
+        static BOOL seeded5;
+        if (triggerFired("/tmp/native-shot", &lastShot, &seeded5)) {
+            [self captureScreenBurst:0];
         }
 
         static BOOL seeded4;
@@ -1870,15 +2461,28 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     } @catch (id chainError) {
         logLine(@"watchForScrollRequest raised %@", chainError);
     }
-    [self performSelector:@selector(watchForScrollRequest) withObject:nil afterDelay:0.5];
 }
 
+// Remembered, and checked with one message send rather than re-found.
+//
+// -subviews hands back a fresh array every time it is called, and this is asked
+// on the frame callback, before every commit, and three times in each pass of
+// the request server. The scroll view is created with the web view and stays;
+// the superview check is there so a UIKit that replaced it is still followed.
 - (UIScrollView *)pageScroller
 {
-    for (UIView *view in _webView.subviews)
-        if ([view isKindOfClass:[UIScrollView class]])
-            return (UIScrollView *)view;
-    return nil;
+    if (_pageScroller && [_pageScroller superview] == _webView)
+        return _pageScroller;
+
+    [_pageScroller release];
+    _pageScroller = nil;
+    for (UIView *view in _webView.subviews) {
+        if ([view isKindOfClass:[UIScrollView class]]) {
+            _pageScroller = [(UIScrollView *)view retain];
+            break;
+        }
+    }
+    return _pageScroller;
 }
 
 - (void)fingerStep
@@ -1947,13 +2551,9 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
 
 - (void)watchForTapRequest
 {
-    // Whatever happens in here, the timer must be armed again. One
-    // exception used to end the chain silently and every trigger it serves
-    // stopped working - measured as a flick harness that fired once after a
-    // launch and never again, which quietly invalidated every measurement
-    // that used it.
+    if (!harnessEnabled())
+        return;
     @try {
-        struct stat marker;
         static time_t lastRequest;
         static BOOL seeded5;
         if (triggerFired("/tmp/native-tap", &lastRequest, &seeded5)) {
@@ -1964,6 +2564,12 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
                 id window = [self engineWindow];
                 Class eventClass = NSClassFromString(@"WebEvent");
                 if (window && eventClass) {
+                    // A tap asked for from outside stands for a finger, so it
+                    // raises the same flag a finger does. Without this the
+                    // measurement of the flag measures the harness instead.
+                    volatile int *pending = inputPendingFlag();
+                    if (pending)
+                        *pending = 1;
                     for (int type = 0; type <= 1; type++) {
                         id event = [[eventClass alloc] initWithMouseEventType:type timeStamp:CFAbsoluteTimeGetCurrent() location:where];
                         [window sendEvent:event];
@@ -1977,18 +2583,13 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     } @catch (id chainError) {
         logLine(@"watchForTapRequest raised %@", chainError);
     }
-    [self performSelector:@selector(watchForTapRequest) withObject:nil afterDelay:0.5];
 }
 
+// Not behind the harness switch: this is the one way to ask a running session a
+// question from outside, and it is what turns the rest of them on.
 - (void)watchForEvalRequest
 {
-    // Whatever happens in here, the timer must be armed again. One
-    // exception used to end the chain silently and every trigger it serves
-    // stopped working - measured as a flick harness that fired once after a
-    // launch and never again, which quietly invalidated every measurement
-    // that used it.
     @try {
-        struct stat marker;
         static time_t lastRequest;
         static BOOL seeded6;
         if (triggerFired("/tmp/native-eval", &lastRequest, &seeded6)) {
@@ -1999,18 +2600,13 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     } @catch (id chainError) {
         logLine(@"watchForEvalRequest raised %@", chainError);
     }
-    [self performSelector:@selector(watchForEvalRequest) withObject:nil afterDelay:0.5];
 }
 
 - (void)watchForSnapshotRequest
 {
-    // Whatever happens in here, the timer must be armed again. One
-    // exception used to end the chain silently and every trigger it serves
-    // stopped working - measured as a flick harness that fired once after a
-    // launch and never again, which quietly invalidated every measurement
-    // that used it.
+    if (!harnessEnabled())
+        return;
     @try {
-        struct stat marker;
         static time_t lastRequest;
         static BOOL seeded7;
         if (triggerFired("/tmp/native-snap", &lastRequest, &seeded7))
@@ -2023,7 +2619,33 @@ static void correctPinnedLayersBeforeCommit(CFRunLoopObserverRef observer, CFRun
     } @catch (id chainError) {
         logLine(@"watchForSnapshotRequest raised %@", chainError);
     }
-    [self performSelector:@selector(watchForSnapshotRequest) withObject:nil afterDelay:1.0];
+}
+
+// One timer where there were five.
+//
+// Each of these used to re-arm itself, so an idle session carried five run-loop
+// timers and built five NSTimers a second between them, on top of the polling
+// they do. Whatever happens in any one of them, this must arm again: an
+// exception that ended a chain silently used to stop every trigger it served -
+// measured as a flick harness that fired once after a launch and never again,
+// which quietly invalidated every measurement that used it.
+- (void)serveExternalRequests
+{
+    @try {
+        [self watchForEvalRequest];
+        [self watchForURLRequest];
+        [self watchForTapRequest];
+        [self watchForTypeRequest];
+        [self watchForScrollRequest];
+
+        // The snapshot triggers were polled at half the rate of the rest.
+        static int pass;
+        if (!(pass++ & 1))
+            [self watchForSnapshotRequest];
+    } @catch (id chainError) {
+        logLine(@"serveExternalRequests raised %@", chainError);
+    }
+    [self performSelector:@selector(serveExternalRequests) withObject:nil afterDelay:0.5];
 }
 
 // Where the bars are painted, three frames apart.
@@ -2121,12 +2743,34 @@ int NativeAppMain(int argc, char *argv[]);
 // instruction, and the registers feeding it.
 static void reportSignal(int number);
 
+// Read from a signal handler, so kept in a form the handler may safely ask for.
+static time_t processStartedAt;
+
 static void reportSignalDetailed(int number, siginfo_t *info, void *contextPointer)
 {
     FILE *log = fopen("/tmp/native-death.log", "a");
     if (log) {
         fprintf(log, "signal %d code %d at %p\n", number, info ? info->si_code : 0,
             info ? info->si_addr : NULL);
+        // What the process was carrying when it went. A fault in the graphics
+        // driver and a fault in the allocator look the same in a backtrace and
+        // different in this line.
+        //
+        // Nothing here sends an Objective-C message or asks CoreFoundation the
+        // time. A handler for SIGSEGV runs on whichever thread faulted, and that
+        // thread may already hold the runtime's lock or the allocator's - a
+        // message send from here can hang the process instead of reporting it,
+        // which turns a crash log into a phone that has to be held down.
+        // task_info is a kernel call, time and pthread_main_np are safe to ask.
+        {
+            struct task_basic_info memory;
+            mach_msg_type_number_t count = TASK_BASIC_INFO_COUNT;
+            if (task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&memory, &count) == KERN_SUCCESS)
+                fprintf(log, "  resident %.1f MB after %ld s on thread %s\n",
+                    memory.resident_size / 1048576.0,
+                    (long)(time(NULL) - processStartedAt),
+                    pthread_main_np() ? "main" : "another");
+        }
         // The thread state, at its documented place in the context.
         //
         // On armv7 Darwin a ucontext_t is: onstack, sigmask, stack (three
@@ -2200,6 +2844,10 @@ static void reportExit(void)
 // engine's answer is a plain flag read, no lock involved.
 static void (*originalTiledLayoutSubviews)(id, SEL);
 
+static unsigned skippedTileLayouts;
+static unsigned ranTileLayouts;
+static CFAbsoluteTime tileLayoutRetryArmedAt;
+
 static void tiledLayoutSubviews(id self, SEL selector)
 {
     // Ask the engine for the lock; do not wait for it.
@@ -2226,8 +2874,63 @@ static void tiledLayoutSubviews(id self, SEL selector)
     // engine needs.
     // The engine-side tile layer already asks the web thread for the pass it is
     // owed; here it is enough never to wait.
-    if (webThreadTryLockForFrame && !webThreadTryLockForFrame())
+    // Skipping is bounded in time, not by the lock alone.
+    //
+    // The engine holds the web lock for most of a second on this device - counted
+    // here, 527 layout passes were skipped against 10 that ran - and this method
+    // is where tiles for newly exposed page are made. Skipping whenever the lock
+    // is busy therefore means almost never painting: the reader flicks and is
+    // left looking at white with the content laid out behind it, and it stays
+    // white until something else moves. So the pass is skipped while a recent one
+    // has succeeded, and after a quarter of a second without one this waits for
+    // the engine however long it takes.
+    static CFAbsoluteTime lastRealPass;
+    CFAbsoluteTime passNow = CFAbsoluteTimeGetCurrent();
+    bool waitedLongEnough = passNow - lastRealPass > 0.25;
+
+    if (!waitedLongEnough && webThreadTryLockForFrame && !webThreadTryLockForFrame()) {
+        // Come back for the pass that was skipped.
+        //
+        // The engine invalidating the tiles is what normally brings UIKit back
+        // here, and it does not always have anything to invalidate: after a
+        // flick the page is laid out for the new position and the tiles for it
+        // were simply never made, so the reader is left looking at white with
+        // the content behind it. Measured over six flicks, one frame in five was
+        // blank for this reason.
+        //
+        // Asked for at most once every other frame, rather than cancelled and
+        // re-armed on every one.
+        //
+        // +cancelPreviousPerformRequestsWithTarget:… walks the run loop's whole
+        // list of pending performs, and it ran on each skipped pass - during a
+        // busy stretch, every frame. It also pushed the retry a frame further
+        // away each time it was asked for, so the retry that a continuously
+        // skipping path was waiting for never arrived. The interval is the
+        // limit instead: it cannot latch, because nothing has to clear it.
+        //
+        // The limit is half the delay, so the pass the retry itself produces is
+        // always old enough to arm the next one. At a limit equal to or above
+        // the delay the chain stops after a single hop - the retry lands inside
+        // its own guard - which is the case this exists for: scroll stopped,
+        // engine holding the lock, nothing else about to invalidate a tile.
+        if (passNow - tileLayoutRetryArmedAt > 1.0 / 120.0) {
+            tileLayoutRetryArmedAt = passNow;
+            [self performSelector:@selector(setNeedsLayout) withObject:nil afterDelay:1.0 / 60.0];
+        }
+        skippedTileLayouts++;
+        static int reporting = -1;
+        if (probeIsPresent("/tmp/native-tile-counts", &reporting)) {
+            static CFAbsoluteTime lastReport;
+            CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+            if (now - lastReport > 3.0) {
+                lastReport = now;
+                logLine(@"[tiles] layout passes: %u skipped, %u ran", skippedTileLayouts, ranTileLayouts);
+            }
+        }
         return;
+    }
+    ranTileLayouts++;
+    lastRealPass = passNow;
     originalTiledLayoutSubviews(self, selector);
 }
 
@@ -2256,6 +2959,7 @@ static void installDeathTraps(void)
     int signals[] = { SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP, SIGFPE, SIGPIPE, SIGTERM };
     struct sigaction action;
     memset(&action, 0, sizeof(action));
+    processStartedAt = time(NULL);
     action.sa_sigaction = reportSignalDetailed;
     action.sa_flags = SA_SIGINFO;
     sigemptyset(&action.sa_mask);
@@ -2311,8 +3015,29 @@ static void *webThreadSampler(void *unused)
     volatile int *insideScript = (volatile int *)dlsym(RTLD_DEFAULT, "g_webkitIOS6InsideScript");
     fprintf(log, "web thread found, script counter %s\n", insideScript ? "available" : "MISSING");
 
+    unsigned sampleCount = 0;
     while (1) {
         usleep(20000);
+        if (!(sampleCount++ % 500)) {
+            vm_address_t regionAddress = 0;
+            natural_t regionDepth = 0;
+            while (1) {
+                vm_size_t regionSize = 0;
+                vm_region_submap_info_data_64_t regionInfo;
+                mach_msg_type_number_t regionCount = VM_REGION_SUBMAP_INFO_COUNT_64;
+                if (vm_region_recurse_64(mach_task_self(), &regionAddress, &regionSize, &regionDepth,
+                        (vm_region_recurse_info_t)&regionInfo, &regionCount) != KERN_SUCCESS)
+                    break;
+                if (regionInfo.is_submap) {
+                    regionDepth++;
+                    continue;
+                }
+                if (regionInfo.user_tag == 64 || regionInfo.user_tag == 65)
+                    fprintf(log, "region %p %p tag %u\n", (void *)regionAddress,
+                        (void *)(regionAddress + regionSize), regionInfo.user_tag);
+                regionAddress += regionSize;
+            }
+        }
         // While script is running, or - when the whole window is what is being
         // studied, as during a load - unconditionally.
         static int scopedToScript = -1;
@@ -2320,14 +3045,20 @@ static void *webThreadSampler(void *unused)
             scopedToScript = access("/tmp/native-profile-scoped", F_OK) == 0 ? 1 : 0;
         if (scopedToScript && insideScript && !*insideScript)
             continue;
+        struct thread_basic_info basicBefore;
+        mach_msg_type_number_t basicCount = THREAD_BASIC_INFO_COUNT;
+        int runState = 0;
+        if (thread_info(webThread, THREAD_BASIC_INFO, (thread_info_t)&basicBefore, &basicCount) == KERN_SUCCESS)
+            runState = basicBefore.run_state;
+        int scriptDepth = insideScript ? *insideScript : -1;
         if (thread_suspend(webThread) != KERN_SUCCESS)
             break;
 
         _STRUCT_ARM_THREAD_STATE state;
         mach_msg_type_number_t count = ARM_THREAD_STATE_COUNT;
         if (thread_get_state(webThread, ARM_THREAD_STATE, (thread_state_t)&state, &count) == KERN_SUCCESS) {
-            uintptr_t frames[12];
-            int depth = walkStack(webThread, frames, 12);
+            uintptr_t frames[64];
+            int depth = walkStack(webThread, frames, 64);
             thread_resume(webThread);
 
             // Addresses only. dladdr walks a symbol table on every frame of
@@ -2335,8 +3066,26 @@ static void *webThreadSampler(void *unused)
             // pauses it was measuring - eleven seconds became five with it off.
             // The addresses resolve offline against dist/unstripped using the
             // image bases the application logs at launch.
+            // The moment the sample was taken, so a profile can be lined up
+            // against what the page reports about itself. The page measures in
+            // milliseconds since 1970; this is the same clock.
+            fprintf(log, "%.0f r%d s%d ", (CFAbsoluteTimeGetCurrent() + 978307200.0) * 1000.0, runState, scriptDepth);
             for (int i = 0; i < depth; i++)
                 fprintf(log, "%s%p", i ? ";" : "", (void *)frames[i]);
+            // The library the top frame belongs to, when it is not one of ours.
+            //
+            // Samples outside our frameworks land in the shared cache, whose
+            // addresses cannot be mapped to a library offline without the slide
+            // the loader chose. Asking here costs one lookup per sample and
+            // answers the question the profile could not: which system library
+            // the time is in.
+            if (depth > 0) {
+                Dl_info info;
+                if (dladdr((const void *)frames[0], &info) && info.dli_fname) {
+                    const char *slash = strrchr(info.dli_fname, '/');
+                    fprintf(log, " @%s", slash ? slash + 1 : info.dli_fname);
+                }
+            }
             fprintf(log, "\n");
         } else
             thread_resume(webThread);
@@ -2347,9 +3096,18 @@ static void *webThreadSampler(void *unused)
 
 static int profileFileDescriptor = -1;
 
+// Off unless /tmp/native-profile exists.
+//
+// Twenty times a second this enumerated every thread in the task, asked each one
+// for its basic info, suspended the busiest, read its registers and wrote a
+// line - on the order of fifty Mach round trips and a file write per tick,
+// forever, and the thread it suspends during a scroll is the one drawing the
+// page. /tmp/native-profile-off still pauses a running sampler.
 static void *sampler(void *unused)
 {
     (void)unused;
+    if (access("/tmp/native-profile", F_OK) != 0)
+        return NULL;
     profileFileDescriptor = open("/tmp/native-prof.log", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     char header[4096];
     int used = 0;
@@ -2408,15 +3166,27 @@ static void *sampler(void *unused)
                 char line[512];
                 Dl_info info;
                 int n;
+                // Which thread this is, not just where it stands. A stack
+                // symbolised to the nearest exported name is a guess; the thread
+                // that owns it is a fact, and it decides what the fix is - the
+                // compiler's own thread and the one running the page call for
+                // opposite remedies.
+                char threadName[64] = "";
+                pthread_t owner = pthread_from_mach_thread_np(busiest);
+                if (owner)
+                    pthread_getname_np(owner, threadName, sizeof(threadName));
                 if (dladdr((void *)state.__pc, &info) && info.dli_sname) {
-                    n = snprintf(line, sizeof(line), "sym %s +%u\n", info.dli_sname,
+                    n = snprintf(line, sizeof(line), "[%s] %p sym %s +%u\n",
+                        threadName[0] ? threadName : "?", (void *)state.__pc, info.dli_sname,
                         (unsigned)((uintptr_t)state.__pc - (uintptr_t)info.dli_saddr));
                 } else {
                     Dl_info caller;
                     if (dladdr((void *)state.__lr, &caller) && caller.dli_sname)
-                        n = snprintf(line, sizeof(line), "sym (unnamed via %s)\n", caller.dli_sname);
+                        n = snprintf(line, sizeof(line), "[%s] %p via %s\n",
+                            threadName[0] ? threadName : "?", (void *)state.__pc, caller.dli_sname);
                     else
-                        n = snprintf(line, sizeof(line), "pc %08x\n", (unsigned)state.__pc);
+                        n = snprintf(line, sizeof(line), "[%s] %p\n",
+                            threadName[0] ? threadName : "?", (void *)state.__pc);
                 }
                 write(profileFileDescriptor, line, n);
             }
@@ -2444,11 +3214,19 @@ static const char *nameForMemoryTag(unsigned tag)
     case 6: return "malloc realloc";
     case 7: return "malloc tiny";
     case 8: case 9: return "malloc large reusable";
-    case 11: return "analysis";
-    case 20: return "IOKit";
+    case 10: return "analysis";
+    case 11: return "malloc nano";
+    case 12: return "malloc medium";
+    case 20: return "mach messages";
+    case 21: return "IOKit surfaces";
     case 30: return "thread stacks";
+    case 31: return "guard pages";
+    case 32: return "shared pmap";
     case 33: return "dylib data";
-    case 40: case 41: return "Foundation";
+    case 34: return "objc dispatchers";
+    case 35: return "unshared pmap";
+    case 40: return "AppKit";
+    case 41: return "Foundation";
     case 42: return "CoreGraphics";
     case 50: return "fonts";
     case 51: return "CoreAnimation layers";
@@ -2458,10 +3236,11 @@ static const char *nameForMemoryTag(unsigned tag)
     case 56: return "framebuffers";
     case 57: return "layer backing stores";
     case 60: case 61: return "dyld";
-    case 63: return "sqlite";
-    case 64: return "JavaScriptCore heap";
-    case 65: return "JIT code";
-    case 66: return "JIT register file";
+    case 62: return "sqlite";
+    case 63: return "JavaScriptCore heap";
+    case 64: return "JIT executable";
+    case 65: return "JIT register file";
+    case 66: return "GLSL";
     case 74: return "ImageIO";
     case 0: return "untagged";
     default: return NULL;
@@ -2479,7 +3258,7 @@ static pthread_mutex_t g_engineMemoryLock = PTHREAD_MUTEX_INITIALIZER;
 
 static void requestEngineMemoryReport(void)
 {
-    void (*runOnWebThread)(void (^)(void)) = dlsym(RTLD_DEFAULT, "WebThreadRun");
+    WebThreadRunFunction runOnWebThread = webThreadRun();
     if (!runOnWebThread)
         return;
     runOnWebThread(^{
@@ -2543,6 +3322,19 @@ static void reportEngineMemory(FILE *log)
 // call the system makes under memory pressure. It is not free: the pages have to
 // be faulted in again if the allocator wants them, so this runs on a slow
 // cadence rather than every turn.
+// The reporting half of the pulse, behind /tmp/native-memory-detail.
+//
+// Walking the whole VM map is hundreds of vm_region_recurse_64 calls, asking the
+// engine for its own accounting is a block on the web thread that reads the
+// resource cache under the lock UIKit wants on every frame, and the thread table
+// is a Mach round trip per thread. None of it decides anything; the releases
+// below it do, and they keep running.
+static bool detailedMemoryReports(void)
+{
+    static int detailed = -1;
+    return probeIsPresent("/tmp/native-memory-detail", &detailed);
+}
+
 static void returnFreePages(void)
 {
     static int enabled = -1;
@@ -2557,6 +3349,13 @@ static void returnFreePages(void)
         return;
     for (unsigned i = 0; i < count; i++)
         malloc_zone_pressure_relief((malloc_zone_t *)zones[i], 0);
+}
+
+static double memoryValveThreshold(const char *name, double fallback)
+{
+    const char *text = getenv(name);
+    double value = text ? atof(text) : 0;
+    return value > 0 ? value : fallback;
 }
 
 // How much the process is charged for right now, in megabytes.
@@ -2613,7 +3412,9 @@ static void reportMemoryRegions(FILE *log)
     enum { kTagLimit = 80 };
     uint64_t residentByTag[kTagLimit] = {0};
     unsigned regionsByTag[kTagLimit] = {0};
-    uint64_t residentOther = 0, residentMapped = 0;
+    uint64_t mappedByTag[kTagLimit] = {0};
+    unsigned mappedRegionsByTag[kTagLimit] = {0};
+    uint64_t residentOther = 0, residentMapped = 0, mappedOther = 0;
 
     while (1) {
         vm_size_t size = 0;
@@ -2627,11 +3428,19 @@ static void reportMemoryRegions(FILE *log)
             continue;
         }
         uint64_t resident = (uint64_t)info.pages_resident * vm_page_size;
-        // Anything backed by a file on disk is the frameworks and the shared
-        // cache; it is not what grows while a feed is read.
-        if (info.share_mode == SM_TRUESHARED || info.external_pager)
-            residentMapped += resident;
-        else if (info.user_tag < kTagLimit) {
+        // Only untagged mapped regions are the frameworks and the shared cache.
+        // A mapped region that carries a tag is an allocator's, and on this
+        // device the IOKit-tagged ones are graphics surfaces that grow with the
+        // page - calling them file-backed hid fifty megabytes.
+        if (info.share_mode == SM_TRUESHARED || info.external_pager) {
+            if (info.user_tag && info.user_tag < kTagLimit) {
+                mappedByTag[info.user_tag] += resident;
+                mappedRegionsByTag[info.user_tag]++;
+            } else if (info.user_tag)
+                mappedOther += resident;
+            else
+                residentMapped += resident;
+        } else if (info.user_tag < kTagLimit) {
             residentByTag[info.user_tag] += resident;
             regionsByTag[info.user_tag]++;
         } else
@@ -2652,6 +3461,189 @@ static void reportMemoryRegions(FILE *log)
     if (residentOther >= 1048576)
         fprintf(log, " other %.1f MB;", residentOther / 1048576.0);
     fprintf(log, "\n");
+
+    fprintf(log, "    mapped:");
+    for (unsigned tag = 0; tag < kTagLimit; tag++) {
+        if (mappedByTag[tag] < 1048576)
+            continue;
+        const char *name = nameForMemoryTag(tag);
+        if (name)
+            fprintf(log, " %s %.1f MB (%u);", name, mappedByTag[tag] / 1048576.0, mappedRegionsByTag[tag]);
+        else
+            fprintf(log, " tag %u %.1f MB (%u);", tag, mappedByTag[tag] / 1048576.0, mappedRegionsByTag[tag]);
+    }
+    if (mappedOther >= 1048576)
+        fprintf(log, " other %.1f MB;", mappedOther / 1048576.0);
+    fprintf(log, "\n");
+}
+
+static bool ownershipReportsEnabled(void)
+{
+    static int enabled = -1;
+    return probeIsPresent("/tmp/native-memory-ownership", &enabled);
+}
+
+static const char *shareModeName(unsigned char mode)
+{
+    switch (mode) {
+    case SM_COW: return "cow";
+    case SM_PRIVATE: return "private";
+    case SM_EMPTY: return "empty";
+    case SM_SHARED: return "shared";
+    case SM_TRUESHARED: return "trueshared";
+    case SM_PRIVATE_ALIASED: return "private-aliased";
+    case SM_SHARED_ALIASED: return "shared-aliased";
+    case SM_LARGE_PAGE: return "large-page";
+    default: return "?";
+    }
+}
+
+static void reportMemoryOwnership(FILE *log, double residentTotalMB)
+{
+    vm_address_t address = 0;
+    natural_t depth = 0;
+
+    uint64_t privateDirtyBytes = 0;
+    uint64_t sharedCowCleanBytes = 0;
+    uint64_t fileBackedCleanBytes = 0;
+    uint64_t anonymousDirtyBytes = 0;
+    uint64_t swappedBytes = 0;
+    unsigned regionCount = 0;
+
+    enum { kTopRegions = 6 };
+    struct {
+        vm_address_t address;
+        vm_size_t size;
+        uint64_t residentBytes;
+        unsigned tag;
+        unsigned char shareMode;
+    } top[kTopRegions];
+    memset(top, 0, sizeof(top));
+
+    // The top-6-by-single-region view above misses a scattered allocator: 980
+    // regions at 175 MB private dirty, biggest single region 21 MB, means most
+    // of it is many small-to-medium regions sharing a tag. Same walk, one more
+    // bucket per region, keyed by the kernel tag rather than by address.
+    enum { kTagLimit = 80 };
+    uint64_t tagResidentBytes[kTagLimit] = {0};
+    uint64_t tagDirtyBytes[kTagLimit] = {0};
+    unsigned tagRegionCount[kTagLimit] = {0};
+    uint64_t tagOtherResidentBytes = 0, tagOtherDirtyBytes = 0;
+    unsigned tagOtherRegionCount = 0;
+
+    while (1) {
+        vm_size_t size = 0;
+        vm_region_submap_info_data_64_t info;
+        mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+        if (vm_region_recurse_64(mach_task_self(), &address, &size, &depth,
+                (vm_region_recurse_info_t)&info, &count) != KERN_SUCCESS)
+            break;
+        if (info.is_submap) {
+            depth++;
+            continue;
+        }
+
+        regionCount++;
+        uint64_t residentBytes = (uint64_t)info.pages_resident * vm_page_size;
+        uint64_t dirtyBytes = (uint64_t)info.pages_dirtied * vm_page_size;
+        uint64_t cleanBytes = residentBytes > dirtyBytes ? residentBytes - dirtyBytes : 0;
+        swappedBytes += (uint64_t)info.pages_swapped_out * vm_page_size;
+
+        if (info.user_tag < kTagLimit) {
+            tagResidentBytes[info.user_tag] += residentBytes;
+            tagDirtyBytes[info.user_tag] += dirtyBytes;
+            tagRegionCount[info.user_tag]++;
+        } else {
+            tagOtherResidentBytes += residentBytes;
+            tagOtherDirtyBytes += dirtyBytes;
+            tagOtherRegionCount++;
+        }
+
+        if (info.share_mode != SM_SHARED && info.share_mode != SM_TRUESHARED)
+            privateDirtyBytes += dirtyBytes;
+        if (info.share_mode == SM_COW || info.share_mode == SM_SHARED || info.share_mode == SM_TRUESHARED)
+            sharedCowCleanBytes += cleanBytes;
+        if (info.external_pager)
+            fileBackedCleanBytes += cleanBytes;
+        else
+            anonymousDirtyBytes += dirtyBytes;
+
+        if (residentBytes > 0) {
+            unsigned slot = kTopRegions;
+            for (unsigned i = 0; i < kTopRegions; i++) {
+                if (residentBytes > top[i].residentBytes) {
+                    slot = i;
+                    break;
+                }
+            }
+            if (slot < kTopRegions) {
+                for (unsigned i = kTopRegions - 1; i > slot; i--)
+                    top[i] = top[i - 1];
+                top[slot].address = address;
+                top[slot].size = size;
+                top[slot].residentBytes = residentBytes;
+                top[slot].tag = info.user_tag;
+                top[slot].shareMode = info.share_mode;
+            }
+        }
+
+        address += size;
+    }
+
+    fprintf(log, "    ownership: resident %.1f MB (task_basic_info); private dirty %.1f MB; shared/cow clean %.1f MB; "
+        "file-backed clean %.1f MB; anonymous dirty %.1f MB; swapped %.1f MB; regions %u\n",
+        residentTotalMB, privateDirtyBytes / 1048576.0, sharedCowCleanBytes / 1048576.0,
+        fileBackedCleanBytes / 1048576.0, anonymousDirtyBytes / 1048576.0, swappedBytes / 1048576.0, regionCount);
+
+    for (unsigned i = 0; i < kTopRegions && top[i].residentBytes > 0; i++) {
+        const char *name = nameForMemoryTag(top[i].tag);
+        if (name)
+            fprintf(log, "      #%u %6.1f MB resident (%6.1f MB mapped) tag %u (%s) share %s at %p\n",
+                i + 1, top[i].residentBytes / 1048576.0, top[i].size / 1048576.0, top[i].tag, name,
+                shareModeName(top[i].shareMode), (void *)top[i].address);
+        else
+            fprintf(log, "      #%u %6.1f MB resident (%6.1f MB mapped) tag %u share %s at %p\n",
+                i + 1, top[i].residentBytes / 1048576.0, top[i].size / 1048576.0, top[i].tag,
+                shareModeName(top[i].shareMode), (void *)top[i].address);
+    }
+
+    struct { unsigned tag; uint64_t residentBytes; uint64_t dirtyBytes; unsigned regions; } byTag[kTagLimit + 1];
+    unsigned tagsKept = 0;
+    for (unsigned tag = 0; tag < kTagLimit; tag++) {
+        if (!tagRegionCount[tag])
+            continue;
+        byTag[tagsKept].tag = tag;
+        byTag[tagsKept].residentBytes = tagResidentBytes[tag];
+        byTag[tagsKept].dirtyBytes = tagDirtyBytes[tag];
+        byTag[tagsKept].regions = tagRegionCount[tag];
+        tagsKept++;
+    }
+    if (tagOtherRegionCount) {
+        byTag[tagsKept].tag = kTagLimit;
+        byTag[tagsKept].residentBytes = tagOtherResidentBytes;
+        byTag[tagsKept].dirtyBytes = tagOtherDirtyBytes;
+        byTag[tagsKept].regions = tagOtherRegionCount;
+        tagsKept++;
+    }
+    for (unsigned a = 0; a + 1 < tagsKept; a++)
+        for (unsigned b = a + 1; b < tagsKept; b++)
+            if (byTag[b].residentBytes > byTag[a].residentBytes) {
+                __typeof__(byTag[0]) swap = byTag[a];
+                byTag[a] = byTag[b];
+                byTag[b] = swap;
+            }
+
+    enum { kTopTags = 15 };
+    fprintf(log, "    by tag (top %u of %u, resident/dirty MB, regions):\n", kTopTags, tagsKept);
+    for (unsigned i = 0; i < tagsKept && i < kTopTags; i++) {
+        const char *name = byTag[i].tag < kTagLimit ? nameForMemoryTag(byTag[i].tag) : "other/out of range";
+        if (name)
+            fprintf(log, "      tag %-3u %-22s %7.1f MB resident %7.1f MB dirty  %4u regions\n",
+                byTag[i].tag, name, byTag[i].residentBytes / 1048576.0, byTag[i].dirtyBytes / 1048576.0, byTag[i].regions);
+        else
+            fprintf(log, "      tag %-3u %-22s %7.1f MB resident %7.1f MB dirty  %4u regions\n",
+                byTag[i].tag, "?", byTag[i].residentBytes / 1048576.0, byTag[i].dirtyBytes / 1048576.0, byTag[i].regions);
+    }
 }
 
 static void *heartbeat(void *unused)
@@ -2681,11 +3673,41 @@ static void *heartbeat(void *unused)
             // under the web lock and held the interface near one frame per
             // second. So the routine answer is a collection and the cheap
             // caches, and the strong one waits until the kill is actually near.
+            //
+            // That 175 MB is stale, and leaving it stale turned this valve into
+            // the failure its own comment warns about. Measured since: the
+            // process lives at 204-244 MB and is not killed there at all - it
+            // dies at 236-243 inside IMGSGX543GLDriver, a null surface, which is
+            // a graphics limit rather than jetsam. So 148 and 162 were satisfied
+            // permanently, the strong release ran every sixty seconds for the
+            // whole session, and a census caught all compiled code being
+            // discarded twice per 160-second scroll - 4,536 full baseline
+            // compilations, forty-five machine-code compilations a second on one
+            // thread at priority -8, none of them shared because baseline code
+            // sharing is off on 32-bit.
+            //
+            // Raising these to 205/225 was tried and is reverted. It was one leg
+            // of a set of changes made on the belief that memoryFootprint() had
+            // been switched to the task's own anonymous memory; it had not - the
+            // new reading returned resident size to the megabyte on every call,
+            // so the whole set was recalibrated onto a scale it was already on.
+            // The soak that followed died twice and wiped code seven times.
+            //
+            // 148/162 are what survived a fifteen-minute soak with 29 stalls.
+            // NATIVE_RELEASE_GENTLE_MB and NATIVE_RELEASE_FULL_MB move them, and
+            // anything tied to resident size has to be re-derived whenever the
+            // size of the process moves - that is what went wrong here twice in
+            // one session.
             double residentMB = info.resident_size / 1048576.0;
             static double lastSqueeze;
             static double lastHardSqueeze;
+            static double gentleThresholdMB, fullThresholdMB;
+            if (!fullThresholdMB) {
+                gentleThresholdMB = memoryValveThreshold("NATIVE_RELEASE_GENTLE_MB", 148);
+                fullThresholdMB = memoryValveThreshold("NATIVE_RELEASE_FULL_MB", 162);
+            }
             double now = CFAbsoluteTimeGetCurrent();
-            if (residentMB > 162 && now - lastHardSqueeze > 60) {
+            if (residentMB > fullThresholdMB && now - lastHardSqueeze > 60) {
                 lastHardSqueeze = now;
                 lastSqueeze = now;
                 fprintf(log, "    resident %.1f MB - full release\n", residentMB);
@@ -2696,13 +3718,12 @@ static void *heartbeat(void *unused)
                 });
             }
 
-            // A standing cap on decoded images, not a response to pressure.
-            // They are the largest block in the process and they only ever grow
-            // on a feed that never removes a post, so waiting for pressure means
-            // waiting for the kill.
-            // Ask the engine what it is actually holding, every twenty seconds.
+            // Ask the engine what it is actually holding, every twenty seconds -
+            // behind /tmp/native-memory-detail, because the answer is assembled
+            // inside the engine and the question is posted to the thread that
+            // draws the page.
             static double lastBreakdown;
-            if (now - lastBreakdown > 20) {
+            if (detailedMemoryReports() && now - lastBreakdown > 20) {
                 lastBreakdown = now;
                 dispatch_async(dispatch_get_main_queue(), ^{
                     Class webViewClass = NSClassFromString(@"WebView");
@@ -2727,7 +3748,7 @@ static void *heartbeat(void *unused)
             // no CoreAnimation backing stores worth naming: it has 87 MB of large
             // malloc blocks.
 
-            if (residentMB > 148 && now - lastSqueeze > 20) {
+            if (residentMB > gentleThresholdMB && now - lastSqueeze > 20) {
                 lastSqueeze = now;
                 fprintf(log, "    resident %.1f MB - gentle release\n", residentMB);
                 dispatch_async(dispatch_get_main_queue(), ^{
@@ -2753,7 +3774,12 @@ static void *heartbeat(void *unused)
             int period = held > 200 ? 2 : held > 160 ? 5 : 30;
             if (!(second % period))
                 returnFreePages();
+            if (ownershipReportsEnabled() && !(second % 20))
+                reportMemoryOwnership(log, held);
         }
+
+        if (!detailedMemoryReports())
+            continue;
 
         if (!(second % 20)) {
             reportMemoryRegions(log);
@@ -2812,6 +3838,7 @@ int NativeAppMain(int argc, char *argv[])
     pthread_t webProfiler;
     pthread_create(&webProfiler, &small, webThreadSampler, NULL);
     pthread_detach(profiler);
+    pthread_detach(webProfiler);
 
     pthread_t watchdog;
     pthread_create(&watchdog, &small, mainThreadWatchdog, NULL);
@@ -2819,7 +3846,7 @@ int NativeAppMain(int argc, char *argv[])
 
     installDeathTraps();
     deferTileLayoutWhileEngineIsBusy();
-    freopen("/tmp/native-stderr.log", "w", stderr);
+    freopen("/tmp/native-stderr.log", "a", stderr);
     setvbuf(stderr, NULL, _IONBF, 0);
     logLine(@"entering UIApplicationMain");
     @autoreleasepool {

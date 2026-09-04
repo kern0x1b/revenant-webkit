@@ -180,6 +180,36 @@ bool os_variant_allows_internal_security_policies(const char *subsystem)
     return false;
 }
 
+/* ---- SecTrustGetTrustResult (iOS 7) and SecTrustEvaluateWithError (iOS 12),
+ * in terms of SecTrustEvaluate, present since iOS 2. Both are declared with
+ * real prototypes in newer SDKs, which is why they were stubs in
+ * ios6_missing.c instead of failing to link - and both are load-bearing:
+ * they are the step app/tls-openssl.c's own file comment describes as "the
+ * system evaluates it against its own trust store exactly as before", the
+ * actual accept/reject decision for every WebSocket connection and for
+ * ResourceResponseCocoa.mm's certificate metadata. Stubbed, that step never
+ * ran.
+ */
+#include <Security/Security.h>
+OSStatus SecTrustGetTrustResult(SecTrustRef trust, SecTrustResultType *result)
+{
+    if (!trust || !result)
+        return errSecParam;
+    return SecTrustEvaluate(trust, result);
+}
+
+bool SecTrustEvaluateWithError(SecTrustRef trust, CFErrorRef *error)
+{
+    if (error)
+        *error = NULL;
+    if (!trust)
+        return false;
+    SecTrustResultType result = kSecTrustResultInvalid;
+    if (SecTrustEvaluate(trust, &result) != errSecSuccess)
+        return false;
+    return result == kSecTrustResultProceed || result == kSecTrustResultUnspecified;
+}
+
 /* ---- SecTrustCopyCertificateChain is iOS 14 ---- */
 #include <Security/Security.h>
 CFArrayRef SecTrustCopyCertificateChain(SecTrustRef trust)

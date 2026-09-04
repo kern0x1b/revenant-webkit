@@ -13,7 +13,9 @@ DEVICE_HOST=${DEVICE_HOST:-127.0.0.1}
 DEVICE_PORT=${DEVICE_PORT:-2222}
 
 DEVICE_SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-                 -o LogLevel=ERROR -o ConnectTimeout=8)
+                 -o LogLevel=ERROR -o ConnectTimeout=8
+                 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa
+                 -o KexAlgorithms=+diffie-hellman-group1-sha1 -o Ciphers=+aes128-cbc)
 
 # Runs a command on the device. First argument is a timeout in seconds.
 device_run() {
