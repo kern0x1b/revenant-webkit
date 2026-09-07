@@ -71,9 +71,10 @@ cmake -S $S -B $B -G Ninja \
   `# sync (_preferencesChanged:) never grew a line copying it there - it was` \
   `# silently unreachable regardless of the WebPreferences value. Patched.` \
   `#` \
-  `# Web notifications stay off for now - needs the same kind of` \
-  `# WebCore<->UIKit bridge, not yet written.` \
-  -DENABLE_NOTIFICATIONS=OFF -DENABLE_FULLSCREEN_API=ON \
+  `# Web notifications: ENABLE(NOTIFICATIONS) on, WK1 WebNotificationClient wired in` \
+  `# WebView.mm, and NotificationsEnabled pref defaulted true for iOS in the yaml -` \
+  `# window.Notification / requestPermission are exposed and permission is granted.` \
+  -DENABLE_NOTIFICATIONS=ON -DENABLE_FULLSCREEN_API=ON \
   -DENABLE_WEBGPU=OFF -DENABLE_WEBDRIVER=OFF -DENABLE_WEBINSPECTORUI=OFF \
   -DENABLE_API_TESTS=OFF -DENABLE_MINIBROWSER=OFF \
   -DENABLE_WEB_RTC=OFF -DUSE_LIBWEBRTC=OFF -DENABLE_MEDIA_STREAM=ON \
