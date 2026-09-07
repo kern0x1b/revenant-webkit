@@ -1,24 +1,13 @@
 /*
  * CoreGraphics entry points WebKit draws through that this system does not have.
  *
- * These are not optional. CGContextDrawPathDirect is the single call behind
- * every fill and stroke WebKit performs; as a stub that returns zero it leaves
- * the page blank while every layer above it reports success.
+ * CGContextDrawPathDirect is no longer here: GraphicsContextCG now issues the
+ * native begin-path/add-path/draw sequence iOS 6 already provides, so the shim
+ * was removed and the drawing goes straight to the system CoreGraphics.
  */
 #include <CoreGraphics/CoreGraphics.h>
 #include <math.h>
 #include <stdint.h>
-
-/* One call that replaced begin-path/add-path/draw. */
-void CGContextDrawPathDirect(CGContextRef context, CGPathDrawingMode mode, CGPathRef path, const CGRect *boundingBox)
-{
-    (void)boundingBox;
-    if (!context || !path)
-        return;
-    CGContextBeginPath(context);
-    CGContextAddPath(context, path);
-    CGContextDrawPath(context, mode);
-}
 
 /* Corner radii, one per corner, in the order CoreGraphics uses:
  * top-left, top-right, bottom-right, bottom-left. */
