@@ -2180,7 +2180,16 @@ typedef enum {
 + (BOOL)install
 {
     NSString *authorities = [[NSBundle mainBundle] pathForResource:@"cacert" ofType:@"pem"];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:authorities])
+    // A host without a resource bundle (the out-of-process write helper) has no
+    // bundled cacert; fall back to an explicit path so it can still install.
+    if (![authorities length] || ![[NSFileManager defaultManager] fileExistsAtPath:authorities]) {
+        const char *envCA = getenv("MODERN_TLS_CA");
+        NSString *fallback = envCA ? [NSString stringWithUTF8String:envCA]
+                                   : @"/Library/RevenantWebKit/cacert.pem";
+        if ([[NSFileManager defaultManager] fileExistsAtPath:fallback])
+            authorities = fallback;
+    }
+    if (![authorities length] || ![[NSFileManager defaultManager] fileExistsAtPath:authorities])
         return NO;
     gCertificateAuthorities = [authorities copy];
     gLog = getenv("MODERN_TLS_LOG") != NULL;

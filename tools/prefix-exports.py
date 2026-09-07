@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply the LegacyIOS class prefix to a linker exported-symbols list.
+"""Apply the Rev class prefix to a linker exported-symbols list.
 
 The classes are renamed by a force-included header, which the .exp file knows
 nothing about, so every _OBJC_CLASS_$_Foo it names has to be renamed too.
@@ -9,7 +9,7 @@ import sys
 
 header, source, dest = sys.argv[1:4]
 
-renames = dict(re.findall(r'^#define (\w+) (LegacyIOS\w+)$', open(header).read(), re.M))
+renames = dict(re.findall(r'^#define (\w+) (Rev\w+)$', open(header).read(), re.M))
 
 out = []
 for line in open(source):

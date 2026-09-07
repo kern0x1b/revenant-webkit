@@ -12,6 +12,15 @@
 
 typedef uint16_t UTF16Char;
 
+/* These fill-ins share names with functions the system CoreText also exports
+ * (e.g. CTFontDescriptorCreateForUIType, CTFontShapeGlyphs). If they are exported
+ * from WebCore they INTERPOSE the system ones for the whole process, and UIKit -
+ * which resolves the system font through CTFontDescriptorCreateForUIType - then
+ * runs OUR version and every UILabel, text field and the status bar clock render
+ * blank while WebKit's own text still works. Hiding them keeps WebCore using these
+ * internally without shadowing the process's CoreText, which restores UIKit text. */
+#pragma GCC visibility push(hidden)
+
 extern const CFStringRef kCTFontCSSFamilyCursive;
 extern const CFStringRef kCTFontCSSFamilyFantasy;
 extern const CFStringRef kCTFontCSSFamilyMonospace;
@@ -468,3 +477,5 @@ void CTParagraphStyleSetCompositionLanguage(CTParagraphStyleRef style, uint8_t l
 void GSFontPurgeFontCache(void)
 {
 }
+
+#pragma GCC visibility pop

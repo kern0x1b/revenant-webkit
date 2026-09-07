@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Configure the engine WITH the Rev class prefix, into build-254-rev.
+#
+# The prefix exists so this engine can sit in a process next to the system
+# one: UIKit statically links the real WebKit as a transitive dependency of
+# its own Mach-O, loaded before any of our code runs, so the system engine
+# cannot be kept out of the process. This build's classes are renamed instead
+# (WebView -> RevWebView etc., compat/stubs/ios6_class_prefix.h, force-included
+# below) so the two coexist in one process without an Objective-C runtime
+# class-table collision. See scripts/attic/configure-webkit-254.sh, the
+# retired predecessor this restores and updates with everything added to
+# configure-engine.sh since: fullscreen, XSLT, the newer JIT/allocator
+# settings. Keep the two configure scripts in step for anything else.
+#
+# Everything else - and why - matches configure-engine.sh; only the prefix
+# machinery and the build/export paths differ.
+set -eu
+P=$(cd "$(dirname "$0")/.." && pwd); L=$P/third_party/libcxx-armv7; I=$P/third_party/icu-armv7; X=$P/third_party/libxslt-armv7; SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
+S=$P/webkit-254; B=$P/build-254-rev
+CXXF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -nostdinc++ -isystem $L/include/c++/v1 -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_dispatch_compat.h -include $P/compat/stubs/ios6_class_prefix.h -D_LIBCPP_DISABLE_AVAILABILITY -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
+CF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_class_prefix.h -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
+
+# The .exp file WebKitLegacy links with names its own exported ObjC classes by
+# their real (unprefixed) name; the force-included header renames the classes
+# in source but knows nothing about this file, so every _OBJC_CLASS_$_Foo it
+# lists has to be rewritten to match or the linker exports symbols that no
+# longer exist.
+python3 $P/tools/prefix-exports.py $P/compat/stubs/ios6_class_prefix.h \
+  $S/Source/WebKitLegacy/WebKitLegacy-iOS.exp $P/compat/WebKitLegacy-iOS-rev.exp
+
+rm -rf $B && mkdir -p $B
+cmake -S $S -B $B -G Ninja \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_TOOLCHAIN_FILE=$P/scripts/ios6-armv7-trunk.cmake \
+  -DPORT=IOS -DCMAKE_BUILD_TYPE=Release -DDEVELOPER_MODE=OFF \
+  -DSWIFT_REQUIRED=OFF -DWEBKIT_IOS6_COMPAT_LIB=$P/compat/libios6compat.a -DWEBKIT_IOS6_EXPORTS=$P/compat/WebKitLegacy-iOS-rev.exp -DWEBKIT_IOS6_LIBCXX_DIR=$L -DWEBKIT_NO_AVAILABILITY_OVERLAY=ON \
+  -DENABLE_WEBKIT_LEGACY=ON -DENABLE_WEBKIT=OFF \
+  -DENABLE_TOUCH_EVENTS=ON -DENABLE_IOS_TOUCH_EVENTS=OFF \
+  -DENABLE_WEBKIT_OVERFLOW_SCROLLING_CSS_PROPERTY=ON \
+  -DWEBKIT_IOS6_SIZE_OPTIMIZED=ON \
+  -DENABLE_NOTIFICATIONS=OFF -DENABLE_FULLSCREEN_API=ON \
+  -DENABLE_WEBGPU=OFF -DENABLE_WEBDRIVER=OFF -DENABLE_WEBINSPECTORUI=OFF \
+  -DENABLE_API_TESTS=OFF -DENABLE_MINIBROWSER=OFF \
+  -DENABLE_WEB_RTC=OFF -DUSE_LIBWEBRTC=OFF -DENABLE_MEDIA_STREAM=OFF \
+  -DENABLE_WEB_CODECS=OFF -DENABLE_COCOA_WEBM_PLAYER=OFF -DENABLE_AV1=OFF \
+  -DENABLE_XSLT=ON \
+  -DENABLE_SPEECH_SYNTHESIS=OFF -DENABLE_WEB_SPEECH=OFF -DENABLE_WEBGL=OFF -DENABLE_GAMEPAD=OFF -DENABLE_PIXEL_FORMAT_RGBA16F=OFF -DENABLE_WIRELESS_PLAYBACK_TARGET=ON -DENABLE_WIRELESS_PLAYBACK_TARGET_AVAILABILITY_API=ON -DENABLE_COMPRESSION_STREAM=OFF -DENABLE_APPLE_PAY=OFF -DENABLE_APPLE_PAY_COUPON_CODE=OFF -DENABLE_APPLE_PAY_SESSION_V3=OFF -DUSE_ANGLE_EGL=OFF \
+  -DENABLE_JIT=ON -DENABLE_C_LOOP=OFF -DENABLE_DFG_JIT=ON -DENABLE_FTL_JIT=OFF \
+  -DUSE_SYSTEM_MALLOC=ON \
+  -DENABLE_MEDIA_SOURCE=OFF -DENABLE_MEDIA_SOURCE_IN_WORKERS=OFF \
+  -DENABLE_ENCRYPTED_MEDIA=OFF -DENABLE_LEGACY_ENCRYPTED_MEDIA=OFF \
+  -DENABLE_WEB_AUTHN=OFF -DENABLE_WRITING_TOOLS=OFF -DENABLE_PAYMENT_REQUEST=OFF \
+  -DENABLE_IMAGE_DIFF=OFF \
+  -DICU_UC_LIBRARY=$I/lib/libicuuc.a -DICU_I18N_LIBRARY=$I/lib/libicui18n.a \
+  -DICU_DATA_LIBRARY=$I/lib/libicudata.a -DICU_INCLUDE_DIR=$I/include \
+  -DCMAKE_SHARED_LINKER_FLAGS="-flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0 -L$X/lib" \
+  -DCMAKE_CXX_FLAGS="$CXXF" -DCMAKE_C_FLAGS="$CF" \
+  -DCMAKE_OBJCXX_FLAGS="$CXXF -DWEBKIT_IOS6_OBJC_EXTRAS" -DCMAKE_OBJC_FLAGS="$CF -DWEBKIT_IOS6_OBJC_EXTRAS" \
+  -DBROWSERENGINECORE_LIBRARY=BROWSERENGINECORE_LIBRARY-NOTFOUND \
+  -DBROWSERENGINEKIT_LIBRARY=BROWSERENGINEKIT_LIBRARY-NOTFOUND \
+  -DUNIFORMTYPEIDENTIFIERS_LIBRARY=UNIFORMTYPEIDENTIFIERS_LIBRARY-NOTFOUND \
+  -DPYTHON_EXECUTABLE=/usr/bin/python3
