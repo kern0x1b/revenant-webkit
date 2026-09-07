@@ -45,6 +45,22 @@ does not match reliably and makes a healthy device look dead. If unsure, take a
 screenshot; if the home screen renders, SpringBoard is fine. A stable pid across
 two checks means it is not crash-looping.
 
+## Memory breakdown (the device has no vmmap)
+
+`tools/revmem.c` is a vmmap-lite: it sums a process's dirty/resident pages by VM
+tag (CoreAnimation, CoreGraphics/ImageIO, JavaScriptCore, malloc, ...). Build and
+run as root:
+
+```sh
+clang -target armv7-apple-ios6.0 -isysroot "$IOS_SDK" -O2 tools/revmem.c -o dist/revmem
+ldid -S<task_for_pid-allow entitlements> dist/revmem     # needs task_for_pid-allow
+device_copy dist/revmem /usr/bin/revmem
+device_run 40 "/usr/bin/revmem <mobilesafari-pid>"       # pid from launchctl list
+```
+
+Use it before any memory change to confirm which owner actually holds the dirty
+pages — measured, the heavy pages are malloc/JS-heap bound, not pixel buffers.
+
 ## The Settings pane
 
 Reload without a respring: `device_run 15 "killall Preferences; sleep 1; uiopen
