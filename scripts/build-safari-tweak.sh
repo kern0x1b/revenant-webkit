@@ -16,6 +16,7 @@ mkdir -p "$(dirname "$OUT")"
 "$TC/usr/bin/clang" \
     -target armv7-apple-ios6.0 -isysroot "$SDK" -O2 \
     -dynamiclib -install_name /Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib \
+    -framework CoreFoundation \
     "$SRC" -o "$OUT"
 ldid -S "$OUT" 2>/dev/null || true
 echo "built $OUT"

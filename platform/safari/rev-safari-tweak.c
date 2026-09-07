@@ -1,23 +1,56 @@
-// Substrate tweak: when Mobile Safari launches, put our WebKit 2.54 under it.
-// dyld honours no DYLD_* substitution for an already-running image, so the tweak
-// sets the variables and re-execs; the second launch loads our engine first.
+// Substrate tweak: when an app the user enabled launches, put our WebKit 2.54
+// under it. dyld honours no DYLD_* substitution for an already-running image, so
+// the tweak sets the variables and re-execs; the second launch loads our engine
+// first. Which apps get it is read from the space.kern0x1b.rev InjectedApps map
+// (Safari on by default); SpringBoard is never touched.
 #include <stdlib.h>
 #include <unistd.h>
 #include <mach-o/dyld.h>
 #include <limits.h>
 #include <string.h>
 #include <stdio.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 extern char ***_NSGetArgv(void);
+
+static int rev_enabled_for_current_app(void)
+{
+    CFBundleRef mb = CFBundleGetMainBundle();
+    CFStringRef bid = mb ? CFBundleGetIdentifier(mb) : NULL;
+    if (!bid)
+        return 0;
+    int enabled = (CFStringCompare(bid, CFSTR("com.apple.mobilesafari"), 0) == kCFCompareEqualTo) ? 1 : 0;
+    CFStringRef domain = CFSTR("space.kern0x1b.rev");
+    CFPreferencesAppSynchronize(domain);
+    CFPropertyListRef apps = CFPreferencesCopyAppValue(CFSTR("InjectedApps"), domain);
+    if (apps) {
+        if (CFGetTypeID(apps) == CFDictionaryGetTypeID()) {
+            CFTypeRef v = CFDictionaryGetValue((CFDictionaryRef)apps, bid);
+            if (v && CFGetTypeID(v) == CFBooleanGetTypeID())
+                enabled = CFBooleanGetValue((CFBooleanRef)v) ? 1 : 0;
+        }
+        CFRelease(apps);
+    }
+    return enabled;
+}
 
 __attribute__((constructor))
 static void rev_safari_init(void)
 {
+    const char *pn = getprogname();
+    if (pn && strcmp(pn, "SpringBoard") == 0)
+        return;
+
+    int active = getenv("REV_SAFARI_ACTIVE") != NULL;
+    if (!active && !rev_enabled_for_current_app())
+        return;
+
     freopen("/tmp/rev-safari-stderr.log", "a", stderr);
     setvbuf(stderr, 0, _IOLBF, 0);
-    fprintf(stderr, "[tweak] ctor pass, active=%s\n", getenv("REV_SAFARI_ACTIVE") ? "yes" : "no");
-    if (getenv("REV_SAFARI_ACTIVE"))
-        return;                      // already the re-exec'd launch
+    fprintf(stderr, "[tweak] ctor pass, active=%s\n", active ? "yes" : "no");
+    if (active)
+        return;
+
     setenv("REV_SAFARI_ACTIVE", "1", 1);
     setenv("DYLD_FORCE_FLAT_NAMESPACE", "1", 1);
     setenv("DYLD_INSERT_LIBRARIES",
