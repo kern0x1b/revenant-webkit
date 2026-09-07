@@ -7,7 +7,7 @@
 #   ./build-safari-compat.sh [source.mm] [out.dylib]
 set -eu
 P=$(cd "$(dirname "$0")/.." && pwd)
-SRC=${1:-$P/scratchpad/safari-compat.mm}
+SRC=${1:-$P/platform/safari/safari-compat.mm}
 OUT=${2:-$P/dist/rev-safari-compat.dylib}
 SDK=${IOS_SDK:-$HOME/Git/tools/sdks/iPhoneOS13.7.sdk}
 TC=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
