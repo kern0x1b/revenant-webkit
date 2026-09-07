@@ -10,7 +10,7 @@ third_party/
 
 # Build trees. Every one of these is reproducible from configure-*.sh plus
 # build-*.sh, and together they are several gigabytes.
-build/
+/build/
 build-254*/
 build-cocoa/
 build-icu-armv7/
@@ -32,3 +32,6 @@ out/
 
 .DS_Store
 device.env
+
+# Local device screenshots captured during work — may show device content
+.claude/screenshots/

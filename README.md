@@ -2,103 +2,197 @@
 
 **A current WebKit for hardware the web left for dead.**
 
-WebKit 2.53 built for armv7, running today's websites on an iPhone 4S from 2011:
-a dual-core 800 MHz device with 512 MB of memory, on iOS 6.1.3.
+A modern WebKit engine, built from source for **armv7**, running today's websites
+on an **iPhone 4S from 2011** — a dual-core 800 MHz phone with 512 MB of RAM, on
+**iOS 6.1.3**. The engine is dropped underneath the phone's own **Mobile Safari**,
+so the stock browser renders the modern web with none of its own UI replaced.
 
 The engine the phone ships with is WebKit 536 from 2012. It cannot render a page
-written this decade — the sign-in form of a modern site comes back with no input
-elements at all, because the script that builds it never runs. Nor can the phone
-still negotiate TLS with a current server, or perform the cryptography a login
-form needs. Each of those is fixed here, inside one application, without
-touching the system's own engine.
+written this decade — a modern sign-in form comes back with no input elements at
+all, because the script that builds it never runs. Nor can the phone still
+negotiate TLS with a current server, or perform the cryptography a login form
+needs. Each of those is fixed here.
+
+<p align="center">
+  <img src="docs/screenshots/browser-modern-web.png" alt="Google, YouTube and the bookmarks start page rendered on an iPhone 4S" width="100%">
+  <br>
+  <em>Google, YouTube and the new-tab start page — on an iPhone 4S, in Mobile Safari.</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/browser-and-settings.png" alt="SoundCloud, Wikipedia and the RevWebKit settings pane" width="100%">
+  <br>
+  <em>SoundCloud, Wikipedia, and the RevWebKit Settings pane.</em>
+</p>
+
+## Contents
+
+- [What works](#what-works)
+- [How it works](#how-it-works)
+- [Requirements](#requirements)
+- [Build](#build)
+- [Deploy and test](#deploy-and-test)
+- [The Settings pane](#the-settings-pane)
+- [Repository layout](#repository-layout)
+- [Notes and design](#notes-and-design)
+- [License](#license)
 
 ## What works
 
-- **Current WebKit**, 2.53.91, built from source for armv7 with a 6.0 deployment
-  target: current C++ compiled for a 2011 phone.
-- **JavaScript with a JIT.** Upstream deleted the ARMv7 JIT in August 2026 and
-  left the interpreter; it is restored here, and the regressions that came with
-  restoring it are fixed (see `patches/engine/03-javascriptcore.patch`).
-- **TLS 1.3.** The system's TLS is from 2012 and current servers refuse its
-  cipher suites outright. `app/tls-openssl.c` answers SecureTransport's calls
-  over OpenSSL instead, so the browser can reach sites the phone otherwise
-  cannot open at all. Certificate verification is unchanged: the chain is handed
-  back as a real `SecTrustRef` and the system evaluates it.
-- **Web Crypto.** AES-GCM, HMAC, HKDF and AES key wrapping. Upstream routes
-  these through CryptoKit, which has no armv7 compiler, so this port had them
-  stubbed to return nothing at all - which is what a login form did with a
-  password before sending it.
-- **Web apps.** A site plus a manifest becomes an application on the home
-  screen, sharing one copy of the engine (`notes/shared-engine-architecture.md`).
+- **Current WebKit**, built from source for armv7 with a 6.0 deployment target:
+  current C++ compiled for a 2011 phone.
+- **Real Mobile Safari on the new engine.** A MobileSubstrate tweak re-launches
+  Safari with the engine forced underneath it; the user agent reports
+  `AppleWebKit/605` instead of the stock `536`. UIKit's own gestures, scrolling
+  and text selection are reused unchanged.
+- **JavaScript with a JIT.** Upstream deleted the ARMv7 JIT; it is restored here,
+  with the regressions that restoring it caused fixed as well.
+- **TLS 1.2 / 1.3.** The system's TLS is from 2012 and current servers refuse its
+  cipher suites. The port answers the system's TLS calls over OpenSSL, so the
+  browser reaches sites the phone otherwise cannot open. Certificate verification
+  is unchanged — the chain is evaluated by the system as a real `SecTrustRef`.
+- **Web Crypto**, **WebAssembly** (via a bundled interpreter, since JSC's WASM is
+  64-bit only), **Web Notifications**, **getUserMedia** (camera + microphone),
+  `<video>` MediaStream preview, and a wave of self-contained web APIs enabled by
+  default.
+- **A native Settings pane** (`RevWebKit`) for the new-tab start page, a custom
+  home URL, and per-app engine injection. See [The Settings pane](#the-settings-pane).
 
-## Layout
+## How it works
 
-```
-app/            The application: window, web view, engine bridge, TLS, delegates
-compat/         Symbols iOS 6 does not have, built into libios6compat.a
-patches/engine/ This port's changes to WebKit, by area
-platform/       Web app manifests, injected scripts, packaging, device runtime
-scripts/        The build, one step per script; build.sh runs them in order
-tools/          Diagnostic tools, on the host and on the device
-notes/          Measurements, findings and the design journal
-tests/          Test pages driven on the device
-```
+The engine lives in the dyld shared cache, so there is no file to replace and no
+way to swap it for one process only. Instead a small loader is injected into the
+launching app, sets `DYLD_FRAMEWORK_PATH` / `DYLD_INSERT_LIBRARIES` to point at
+the port's engine, and re-execs the app. The second launch loads the new engine
+first. Three artifacts do this:
 
-The engine checkout itself is not in this repository: `webkit-254/` is upstream's
-2 GB of history. What belongs to this project is the difference, exported to
-`patches/engine/` by `tools/export-engine-patches.sh` and applied by
-`fetch-source.sh`.
+| Artifact | On device | Built by | Role |
+| --- | --- | --- | --- |
+| **Loader** | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `scripts/build-safari-tweak.sh` | Reads the enabled-apps preference and re-execs an enabled app with the engine's `DYLD_*` set. Skips SpringBoard. |
+| **Engine** | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `scripts/configure-engine.sh` + `ninja`, laid out by `scripts/layout-sys-frameworks.sh` | The WebKit build itself. |
+| **Compat / hooks** | `/usr/lib/rev-safari-compat.dylib` | `scripts/build-safari-compat.sh` | The ABI symbols iOS 6 predates, plus the bookmarks start page, WebAssembly, and preference reads. Inserted by the loader. |
+
+The loader and the compat dylib are two different files with two different jobs —
+overwriting one with the other drops Safari back to the system engine.
+
+## Requirements
+
+**Device**
+
+- iPhone 4S (armv7), iOS 6.1.3, jailbroken, with **MobileSubstrate/CydiaSubstrate**.
+- A working TLS shim on the device (the modern-TLS layer) and OpenSSH for deploys.
+
+**Build host** (macOS)
+
+- Xcode's toolchain and an **iOS 13.7 SDK** — the newest SDK that still emits
+  armv7 and accepts a 6.0 deployment target. Point `IOS_SDK` at it.
+- `cmake`, `ninja`, and **`ldid`** (for ad-hoc signing).
 
 ## Build
 
-Everything below assumes Xcode's toolchain and an iOS 13.7 SDK, which still
-emits armv7 and accepts a 6.0 deployment target.
+```sh
+export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"   # any SDK that still emits armv7
 
-```
-export IOS_SDK=/path/to/iPhoneOS13.7.sdk   # any SDK that still emits armv7
-./fetch-source.sh                          # WebKit at a fixed commit, then patches/engine/
-./build.sh                                 # everything else, in order
+./fetch-source.sh          # WebKit at a fixed commit, then this port's patches
+./build.sh                 # libc++, ICU, OpenSSL, compat, the engine, the app
 ```
 
-`build.sh` runs the steps under `scripts/`, each of which is worth running alone
-when only one thing changed:
+`build.sh` runs the steps under `scripts/`, each worth running alone when only
+one thing changed:
 
-| Step | What it builds |
+| Step | Builds |
 | --- | --- |
 | `scripts/build-libcxx.sh` | libc++ for armv7 |
-| `scripts/build-icu.sh` | ICU, trimmed to the languages in `tools/icu-keep-languages.txt` |
+| `scripts/build-icu.sh` | ICU, trimmed to the kept languages |
 | `scripts/build-openssl.sh` | OpenSSL, for TLS and Web Crypto |
 | `scripts/build-compat.sh` | `libios6compat.a`, the symbols iOS 6 lacks |
-| `scripts/configure-engine.sh` | CMake configure; the flags carry why each is set |
-| `scripts/build-app-lto.sh` | The application around the built engine |
+| `scripts/configure-engine.sh` | CMake configure — the flags carry why each is set |
+| `ninja -C build-254-lto WebCore WebKitLegacy JavaScriptCore` | the engine |
 
-The result is `dist/Threads-Native.app`: the application, three frameworks, the
-TLS library, and the injected script for the site.
+### The Safari substitution
 
-## On the device
+On top of the engine, three more scripts build the pieces that put it under
+Mobile Safari:
 
-Copy `device.env.example` to `device.env` and put the phone's address in it;
-`scripts/deploy.sh` carries the bundle over and starts it. Nothing in the
-repository holds an address or a password. The application reads
-a handful of files under `/tmp` as switches — they are listed with what each one
-does in `notes/measurements.md`; the ones worth knowing are:
+```sh
+scripts/layout-sys-frameworks.sh   # stage the engine as rev-fw (-> /usr/lib/rev-fw)
+scripts/build-safari-tweak.sh      # dist/RevSafari.dylib            (the loader)
+scripts/build-safari-compat.sh     # dist/rev-safari-compat.dylib    (ABI + hooks)
+scripts/build-prefs.sh             # dist/RevPrefs.bundle + RevWebKit.plist (Settings)
+```
 
-| File | Effect |
-| --- | --- |
-| `/tmp/native-url` | Load the URL written into it |
-| `/tmp/native-snap` | Write a screenshot to `/tmp/native-shot.png` |
-| `/tmp/native-console` | Record the page's console to `/tmp/native-console.log` |
-| `/tmp/native-tls-log` | Record every TLS handshake and its cipher |
-| `/tmp/native-system-tls` | Use the system's TLS instead of this one |
+Each writes into `dist/` and signs with `ldid`.
 
-## Notes
+## Deploy and test
 
-The reasoning behind the port, and the measurements behind each decision, are in
-`notes/`. `notes/design-journal.md` is where it started; `notes/measurements.md`
-and the `night-run-*.md` files record what was tried, what worked, and what was
-refuted by measuring it.
+The device address and password are **not** in the repository. Copy the example
+and fill it in:
+
+```sh
+cp device.env.example device.env    # set DEVICE_HOST / DEVICE_PORT / DEVICE_PASSWORD
+```
+
+Then push the substitution and the Settings pane, backing up each target first:
+
+```sh
+scripts/deploy-safari-tweak.sh      # loader + filter + compat + bundle, then respring
+```
+
+**Verify it took.** Open any page in Safari and check the user agent — a request
+to a service that echoes it (or the on-device engine log at
+`/tmp/rev-safari-stderr.log`) should show `AppleWebKit/605`, not `536`. The stock
+engine renders modern Google/YouTube broken; the port renders them as above.
+
+**Screenshots from the device:** `/usr/bin/shot` writes `/tmp/screenshot.png`;
+`scp` it back. This is how the images in this README were made.
+
+**Iterating on the Settings pane** does not need a respring — redeploy
+`RevPrefs.bundle`, then `killall Preferences` and reopen it.
+
+## The Settings pane
+
+Installed as **`RevWebKit`** in the system Settings app (a PreferenceBundle, no
+Theos). It writes the `space.kern0x1b.rev` preferences domain that the engine
+reads:
+
+- **Bookmarks start page** — a blank tab renders your Safari bookmarks as tiles.
+  Turning it off collapses the rest.
+- **Custom Home URL** — open a fixed page on every new tab instead. A URL with no
+  scheme is opened over `https`.
+- **Per-App Injection** — a list of installed apps; the engine is injected only
+  into the ones turned on (Safari by default). Injecting the engine into an
+  arbitrary app is experimental and reversible (turn it off and respring).
+- **Respring** — restart SpringBoard from the pane.
+
+<p align="center">
+  <img src="docs/screenshots/settings-revwebkit.png" alt="The RevWebKit settings pane" width="45%">
+</p>
+
+## Repository layout
+
+```
+app/            The standalone application: window, web view, engine bridge, TLS
+compat/         Symbols iOS 6 does not have, built into libios6compat.a
+patches/engine/ This port's changes to WebKit, by area
+platform/
+  safari/       The Safari substitution: the loader and the compat/hooks source
+  prefs/        The RevWebKit Settings PreferenceBundle
+  apps/         Web app manifests
+  ...
+scripts/        The build and deploy, one step per script
+tools/          Diagnostic tools, on the host and on the device
+notes/          Measurements, findings and the design journal
+docs/           Screenshots and documentation assets
+webkit-254/     The engine, a git submodule on the ios6-armv7 branch
+```
+
+## Notes and design
+
+The reasoning behind the port and the measurements behind each decision are in
+`notes/` — `notes/design-journal.md` is where it started, and the `night-run-*.md`
+files record what was tried, what worked, and what was refuted by measuring it.
 
 ## License
 
-MIT, see `LICENSE`. The engine is WebKit and carries its own licences; the
+MIT, see `LICENSE`. The engine is WebKit and carries its own licenses; the
 patches under `patches/engine/` are changes to that source.
