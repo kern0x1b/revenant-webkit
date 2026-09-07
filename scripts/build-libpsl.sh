@@ -19,7 +19,7 @@
 # unaffected either way.
 set -e
 P=$(cd "$(dirname "$0")/.." && pwd)
-SDK=${IOS_SDK:-/Users/alexanderhavrysh/Git/tools/sdks/iPhoneOS13.7.sdk}
+SDK=${IOS_SDK:-$HOME/Git/tools/sdks/iPhoneOS13.7.sdk}
 TC=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
 OUT=$P/third_party/libpsl-armv7
 SRC=$P/third_party/src/libpsl

@@ -9,7 +9,7 @@
 # already does for libxml2/sqlite3/zlib.
 set -e
 P=$(cd "$(dirname "$0")/.." && pwd)
-SDK=${IOS_SDK:-/Users/alexanderhavrysh/Git/tools/sdks/iPhoneOS13.7.sdk}
+SDK=${IOS_SDK:-$HOME/Git/tools/sdks/iPhoneOS13.7.sdk}
 TC=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
 OUT=$P/third_party/libxslt-armv7
 SRC=$P/third_party/src/libxslt
