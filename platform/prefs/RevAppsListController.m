@@ -7,10 +7,37 @@ static NSString *const kRevDomain = @"space.kern0x1b.rev";
 
 @implementation RevAppsListController
 
-static NSArray *revSupportedApps(void) {
-    return @[
-        @{ @"id": @"com.apple.mobilesafari", @"name": @"Safari", @"default": @YES },
-    ];
+// Installed user apps + Safari, as {id,name}, sorted by name. Safari is always
+// first and defaults on; it is the app the engine actually re-execs today.
+static NSArray *revListedApps(void) {
+    NSMutableArray *out = [NSMutableArray array];
+    [out addObject:@{ @"id": @"com.apple.mobilesafari", @"name": @"Safari", @"default": @YES }];
+
+    Class ws = NSClassFromString(@"LSApplicationWorkspace");
+    if (ws && [ws respondsToSelector:@selector(defaultWorkspace)]) {
+        id workspace = [ws performSelector:@selector(defaultWorkspace)];
+        NSArray *all = nil;
+        if ([workspace respondsToSelector:@selector(allApplications)])
+            all = [workspace performSelector:@selector(allApplications)];
+        NSMutableArray *others = [NSMutableArray array];
+        for (id proxy in all) {
+            NSString *bid = [proxy respondsToSelector:@selector(applicationIdentifier)] ? [proxy performSelector:@selector(applicationIdentifier)] : nil;
+            NSString *name = [proxy respondsToSelector:@selector(localizedName)] ? [proxy performSelector:@selector(localizedName)] : nil;
+            NSString *type = [proxy respondsToSelector:@selector(applicationType)] ? [proxy performSelector:@selector(applicationType)] : nil;
+            if (![bid isKindOfClass:[NSString class]] || ![name isKindOfClass:[NSString class]])
+                continue;
+            if (name.length == 0 || [bid isEqualToString:@"com.apple.mobilesafari"])
+                continue;
+            if (![type isEqualToString:@"User"])
+                continue;
+            [others addObject:@{ @"id": bid, @"name": name, @"default": @NO }];
+        }
+        [others sortUsingComparator:^NSComparisonResult(id a, id b) {
+            return [[a objectForKey:@"name"] localizedCaseInsensitiveCompare:[b objectForKey:@"name"]];
+        }];
+        [out addObjectsFromArray:others];
+    }
+    return out;
 }
 
 - (NSDictionary *)revInjectedApps {
@@ -44,10 +71,10 @@ static NSArray *revSupportedApps(void) {
     NSMutableArray *s = [NSMutableArray array];
 
     PSSpecifier *g = [PSSpecifier groupSpecifierWithName:@"Apps"];
-    [g setProperty:@"Turn the RevWebKit tweak on or off per app. Injection currently targets Safari; more apps appear here as per-app support grows. Respring after changing." forKey:@"footerText"];
+    [g setProperty:@"Turn the RevWebKit engine on or off per app. Respring after changing." forKey:@"footerText"];
     [s addObject:g];
 
-    for (NSDictionary *app in revSupportedApps()) {
+    for (NSDictionary *app in revListedApps()) {
         PSSpecifier *sw = [PSSpecifier preferenceSpecifierNamed:[app objectForKey:@"name"]
                                                          target:self
                                                             set:@selector(setInjection:specifier:)

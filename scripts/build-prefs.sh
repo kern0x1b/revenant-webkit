@@ -31,6 +31,9 @@ mkdir -p "$BUNDLE"
 ldid -S "$BUNDLE/RevPrefs" 2>/dev/null || true
 
 cp "$SRC/Resources/Info.plist" "$BUNDLE/Info.plist"
+cp "$SRC/Resources/icon.png" "$BUNDLE/icon.png" 2>/dev/null || true
+cp "$SRC/Resources/icon@2x.png" "$BUNDLE/icon@2x.png" 2>/dev/null || true
+cp "$SRC/Resources/Root.plist" "$BUNDLE/Root.plist"
 cp "$SRC/entry.plist" "$P/dist/RevWebKit.plist"
 
 echo "built $BUNDLE"

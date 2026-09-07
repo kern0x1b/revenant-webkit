@@ -396,8 +396,12 @@ static id rev_openBlankTabDocument(id self, SEL _cmd) {
     NSString *target = nil;
     if (revPrefBool(@"CustomURLEnabled", NO)) {
         NSString *u = revPrefString(@"CustomURL");
-        if (u.length)
+        u = [u stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (u.length) {
+            if ([u rangeOfString:@"://"].location == NSNotFound)
+                u = [@"https://" stringByAppendingString:u];
             target = u;
+        }
     }
     if (!target && revPrefBool(@"NewTabStartPage", YES))
         target = @"favorites:///";

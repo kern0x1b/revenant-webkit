@@ -27,6 +27,8 @@ typedef NS_ENUM(NSInteger, PSCellType) {
 + (PSSpecifier *)groupSpecifierWithName:(NSString *)name;
 - (void)setProperty:(id)value forKey:(NSString *)key;
 - (id)propertyForKey:(NSString *)key;
+- (void)setButtonAction:(SEL)action;
+- (void)setTarget:(id)target;
 @property (nonatomic, retain) NSString *identifier;
 @end
 
@@ -40,4 +42,5 @@ typedef NS_ENUM(NSInteger, PSCellType) {
 }
 - (NSArray *)specifiers;
 - (void)reloadSpecifiers;
+- (NSMutableArray *)loadSpecifiersFromPlistName:(NSString *)plist target:(id)target;
 @end
