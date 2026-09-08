@@ -8,6 +8,22 @@ Dates are the day the change was measured on the device, not the day it compiled
 ## [Unreleased]
 
 ### Added
+- **WebP, which was being asked for and could not be read.** The image Accept
+  header offered WebP, AVIF, JPEG-XL and HEIC ahead of everything else, and ImageIO
+  here decodes none of them - WebP arrived in it with iOS 14, AVIF with iOS 16,
+  JPEG-XL never shipped, HEIC needs iOS 11 and HEVC hardware this device lacks. So
+  every server that negotiates image formats sent a picture that rendered as
+  nothing: The Verge's lead image was an empty grey box and BBC News looked like a
+  page without photographs. WebKit's own WebP decoder is built instead, reached
+  through `ScalableImageDecoder`, with `scripts/build-libwebp.sh` building the
+  decoder and demuxer for armv7. The other three are no longer claimed.
+- **A page's own favicon, instead of Google's copy of it.** The start page fetched
+  every tile's icon from Google's favicon service by host, disclosing every
+  bookmarked host to a third party and bypassing this port's TLS. WebCore's icon
+  loader is compiled and was simply switched off for iOS; it now runs, and the
+  bytes travel to the application as a notification. Sites' real declared icons
+  arrive - Wikipedia's ICO, GitHub's SVG mark - rather than a rasterised guess.
+
 - **Web Crypto that performs every algorithm, through WebKit's own backend.** The
   Cocoa backend works in CryptoKit, whose Swift has no armv7 target, so this port
   had aliased the missing entry points to a no-op and then hand-written AES-GCM,
@@ -150,6 +166,19 @@ Dates are the day the change was measured on the device, not the day it compiled
   session. On this device that is the wrong side of the trade.
 
 ### Fixed
+- **A software-decoded image drew nothing at all.** `ImageBackingStoreCG` asked
+  CoreGraphics for its colour space by name, and this one answers to no name:
+  `kCGColorSpaceSRGB` returned nothing, `CGImageCreate` got a null space, and the
+  picture decoded, reported its size and painted nothing. It goes through the
+  engine's own `sRGBColorSpaceSingleton` now.
+- **A playing video told the page nothing about itself.** readyState stayed 0 and
+  videoWidth was zero while the movie ran, so anything measuring a video, or
+  waiting for loadeddata or canplay, saw a media element that had never loaded. The
+  status observation asked for no options and so only heard about a *change*, while
+  an item from a fast source is already ready before observation starts; and the
+  natural size came only from the item, which is empty until then, rather than from
+  the video track, which carries it as soon as metadata is loaded.
+
 - **Form controls were painted entirely in transparent.** Every button, checkbox,
   radio, select, text field and progress bar on every page: no box, no border, no
   label. Only `-webkit-appearance: none` drew. The user agent stylesheet dresses

@@ -66,6 +66,10 @@ needs. Each of those is fixed here.
 - **Scrolling inside a page.** Overflow blocks and frames are scrolled by the
   system's own `UIWebOverflowScrollView`, the way this release of iOS does it,
   which is what makes cookie dialogs and any other inner scroller usable.
+- **The image formats the web actually serves.** WebP is decoded by WebKit's own
+  decoder, since this ImageIO cannot; the formats that remain undecodable are no
+  longer advertised to servers, which had been negotiating pictures the browser
+  could not render.
 - **A native Settings pane** (`RevWebKit`) for the new-tab start page, a custom
   home URL, and per-app engine injection. See [The Settings pane](#the-settings-pane).
 
