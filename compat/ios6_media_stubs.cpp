@@ -21,8 +21,6 @@ extern "C" long webkitIOS6MediaEngineUnavailable()
 }
 
 asm(
-    ".globl __ZN7WebCore13RenderElement20createsGroupForStyleERKNS_5Style13ComputedStyleE\n"
-    "__ZN7WebCore13RenderElement20createsGroupForStyleERKNS_5Style13ComputedStyleE = _webkitIOS6MediaEngineUnavailable\n"
     ".globl __ZN7WebCore16SpeechRecognizer15stopRecognitionEv\n"
     "__ZN7WebCore16SpeechRecognizer15stopRecognitionEv = _webkitIOS6MediaEngineUnavailable\n"
     ".globl __ZN7WebCore16SpeechRecognizer16abortRecognitionEv\n"
