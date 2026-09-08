@@ -57,6 +57,7 @@ static void rev_safari_init(void)
         "/usr/lib/rev-fw/JavaScriptCore.framework/JavaScriptCore:/usr/lib/rev-fw/WebCore.framework/WebCore:/usr/lib/rev-fw/WebKit.framework/WebKit:/usr/lib/rev-safari-compat.dylib:/usr/lib/rev-TLS.dylib", 1);
     setenv("DYLD_FRAMEWORK_PATH", "/usr/lib/rev-fw", 1);
     setenv("JSC_forceRAMSize", "25165824", 1);
+    setenv("JSC_numberOfGCMarkers", "1", 1);
 
     char path[PATH_MAX];
     uint32_t size = sizeof(path);
