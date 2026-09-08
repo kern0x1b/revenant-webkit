@@ -166,6 +166,15 @@ Dates are the day the change was measured on the device, not the day it compiled
   session. On this device that is the wrong side of the trade.
 
 ### Fixed
+- **Every piece of text the engine supplies read "localized string not found".**
+  That string is a sentinel `CFBundleCopyLocalizedString` is asked to return when a
+  key is absent, so a debug assertion trips; in a release build it reaches the
+  interface instead. The staged framework carries the media controls' strings and
+  no `Localizable.strings` beside them, so every key missed - the file chooser
+  buttons, a valueless submit or reset button, the context menus, the accessibility
+  labels and a multiple select were all labelled with it. A missing key now falls
+  back to the key, which is the English string.
+
 - **A software-decoded image drew nothing at all.** `ImageBackingStoreCG` asked
   CoreGraphics for its colour space by name, and this one answers to no name:
   `kCGColorSpaceSRGB` returned nothing, `CGImageCreate` got a null space, and the
