@@ -55,6 +55,13 @@ needs. Each of those is fixed here.
   64-bit only), **Web Notifications**, **getUserMedia** (camera + microphone),
   `<video>` MediaStream preview, and a wave of self-contained web APIs enabled by
   default.
+- **Web fonts and form controls.** Both were entirely absent rather than
+  approximate: no `@font-face` had ever loaded a font in any format, and every
+  button, field, checkbox and select was painted in a fully transparent colour.
+  Sites now draw with their own typefaces and their controls can be read.
+- **Scrolling inside a page.** Overflow blocks and frames are scrolled by the
+  system's own `UIWebOverflowScrollView`, the way this release of iOS does it,
+  which is what makes cookie dialogs and any other inner scroller usable.
 - **A native Settings pane** (`RevWebKit`) for the new-tab start page, a custom
   home URL, and per-app engine injection. See [The Settings pane](#the-settings-pane).
 

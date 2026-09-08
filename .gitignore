@@ -31,7 +31,10 @@ out/
 *.tar.gz
 
 .DS_Store
-device.env
+# The device's address and password. device.env.example is the tracked template;
+# every other variant, including hand-kept backups, is personal.
+device.env*
+!device.env.example
 
 # Local device screenshots captured during work — may show device content
 .claude/screenshots/

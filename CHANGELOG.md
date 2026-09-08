@@ -8,6 +8,30 @@ Dates are the day the change was measured on the device, not the day it compiled
 ## [Unreleased]
 
 ### Added
+- **Web fonts, in every format the web serves.** No `@font-face` had ever
+  produced a font. `FontCustomPlatformData::create` is built on a private CoreText
+  parser and on an iOS 7 API, neither of which exists here, so it returned nothing
+  and every custom font failed silently - icon fonts included, which is why so
+  many sites drew blank squares. It now takes the documented route that predates
+  both: a data provider, `CGFontCreateWithDataProvider`,
+  `CTFontCreateWithGraphicsFont`, then that font's descriptor. `HAVE_WOFF_SUPPORT`
+  claims the system parser reads WOFF, true from iOS 7 but not here, so WebKit's
+  own converter is compiled back in for WOFF; WOFF2 needed the library, which
+  `scripts/build-woff2.sh` now builds for armv7 alongside the brotli decoder it
+  rests on.
+- **Scrolling inside a page.** Nothing in a page could be moved with a finger -
+  not an overflow block, not the body of a cookie dialog, not a frame. Only the
+  main frame scrolled, because only the main frame has a scroll view. The rest of
+  the contract was already whole: promote the area, hand the layer to the embedder
+  through `LegacyWebKitScrollingLayerCoordinator`, and the embedder wraps it in a
+  `UIWebOverflowScrollView` and reports back through
+  `-[WebView _overflowScrollPositionChangedTo:forNode:isUserScroll:]`. Nothing was
+  ever promoted, so none of it ran. Frames needed three further gates opened, each
+  false for its own reason, and their layer is keyed by the element that owns the
+  frame.
+- `tools/revpid.c`, which lists pids by name. The device has no `ps`, and `revmem`
+  takes a pid, so a process's memory could not be measured without it.
+
 - **Web Crypto that performs its operations.** AES-GCM, HMAC, HKDF and AES key
   wrapping over OpenSSL. Upstream routes all four through CryptoKit, whose Swift
   has no armv7 target, so this port aliased them to one stub returning an empty
@@ -111,6 +135,27 @@ Dates are the day the change was measured on the device, not the day it compiled
   session. On this device that is the wrong side of the trade.
 
 ### Fixed
+- **Form controls were painted entirely in transparent.** Every button, checkbox,
+  radio, select, text field and progress bar on every page: no box, no border, no
+  label. Only `-webkit-appearance: none` drew. The user agent stylesheet dresses
+  controls in the semantic colours, which map to UIColor selectors introduced in
+  iOS 13; the lookup correctly declines, and the base `RenderTheme` answers a name
+  it does not know with an invalid colour, which is fully transparent. Layout, hit
+  testing and events all worked, so a button was clickable and unreadable - which
+  is why pages read as frozen. Each name is now answered with the specification
+  colour of the same role, so every value still comes from WebKit's own table.
+- **Two crashes in image drawing.** Drawing scales the source rectangle by one
+  size divided by another, and either can still be empty when frame metadata has
+  not arrived; the division put infinities in the rectangle and the draw faulted.
+  This was the most frequent crash on this port, ten of fifteen that could be
+  symbolicated. Separately, asking for an image's size reached for a frame that
+  did not exist yet and re-entered itself until the stack was gone.
+- **A constructor that returned without running.** `MediaSampleAVFObjC`'s
+  constructor was aliased to a shared no-op, which leaves the object with no
+  vtable; six built files reference it. The real file needs none of what forced
+  its exclusion and now compiles. Its callers turn out to be unreachable today,
+  so this removes a hazard rather than an observed crash.
+
 - **Tile layout, which was being skipped almost every frame.** The interface
   stops waiting for the engine before laying out tiles, which is right, but the
   engine holds the web lock nearly all the time on this device: counted on the
@@ -234,6 +279,18 @@ Dates are the day the change was measured on the device, not the day it compiled
   font), not a limit on the common one.
 
 ### Refuted by measurement
+- **The JSC optimization cost ceiling.** Upstream lowers it for 32-bit ARM in a
+  block gated on Linux whose reasoning is about the architecture. Measured at the
+  lower value across SoundCloud, The Verge, Google and Hacker News: 1629 DFG
+  dispatches, none refused for cost. No code block on the real web comes near
+  either ceiling, so the two values are indistinguishable.
+- **A second DFG compiler thread.** The Darwin thread tuning is gated on ARM64, so
+  armv7 falls back to one thread while that block would ask for two here. Two is
+  worse: the mean age of a plan waiting in the queue rose from 267 ms to 330 ms,
+  and the number waiting longer than half a second went from 82 to 195. With two
+  cores and a busy main thread, the second compiler takes the time the first one
+  needed.
+
 - That the optimising JIT costs more than it returns on armv7: 20 s with it,
   24 s without.
 - That WebAssembly was what the bot check needed: its script, 227 KB, does not
