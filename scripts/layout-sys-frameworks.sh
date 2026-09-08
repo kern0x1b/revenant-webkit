@@ -23,6 +23,23 @@ cp "$B/JavaScriptCore.framework/JavaScriptCore" "$OUT/JavaScriptCore.framework/J
 cp "$P/third_party/libcxx-armv7/lib/libc++.1.0.dylib" "$OUT/libc++.1.dylib"
 cp "$P/third_party/libcxx-armv7/lib/libc++abi.1.0.dylib" "$OUT/libc++abi.1.dylib"
 
+# WebCore resolves media-controls scripts, localized strings and button icons
+# from the framework bundle ([NSBundle bundleForClass:] + pathForResource:), so
+# the framework must carry those resources, not just the binary. Copy them, and
+# flatten the iOS icon set up into modern-media-controls/images/ because the
+# resource lookup does not include the per-platform subdirectory.
+cp "$B/WebCore.framework/Info.plist" "$OUT/WebCore.framework/Info.plist" 2>/dev/null || true
+if [ -d "$B/WebCore.framework/en.lproj" ]; then
+    mkdir -p "$OUT/WebCore.framework/en.lproj"
+    cp "$B/WebCore.framework/en.lproj/"*.js "$OUT/WebCore.framework/en.lproj/" 2>/dev/null || true
+fi
+if [ -d "$B/WebCore.framework/modern-media-controls" ]; then
+    cp -R "$B/WebCore.framework/modern-media-controls" "$OUT/WebCore.framework/modern-media-controls"
+    cp -f "$OUT/WebCore.framework/modern-media-controls/images/iOS/"*.svg \
+          "$OUT/WebCore.framework/modern-media-controls/images/iOS/"*.png \
+          "$OUT/WebCore.framework/modern-media-controls/images/" 2>/dev/null || true
+fi
+
 install_name_tool -id "$SYS_WK" "$OUT/WebKit.framework/WebKit"
 install_name_tool -id "$SYS_WC" "$OUT/WebCore.framework/WebCore"
 install_name_tool -id "$SYS_JSC" "$OUT/JavaScriptCore.framework/JavaScriptCore"
