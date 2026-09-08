@@ -17,7 +17,7 @@
 # Source tree webkit-254 / build dir build-254, so webkit-trunk, webkit-trunk-jit,
 # build-cocoa and build-jit are all left alone.
 set -eu
-P=$(cd "$(dirname "$0")/.." && pwd); L=$P/third_party/libcxx-armv7; I=$P/third_party/icu-armv7; X=$P/third_party/libxslt-armv7; SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
+P=$(cd "$(dirname "$0")/.." && pwd); L=$P/third_party/libcxx-armv7; I=$P/third_party/icu-armv7; X=$P/third_party/libxslt-armv7; W=$P/third_party/woff2-armv7; SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
 S=$P/webkit-254; B=$P/build-254-lto
 CXXF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -nostdinc++ -isystem $L/include/c++/v1 -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_dispatch_compat.h -include $P/compat/stubs/ios6_class_names.h -D_LIBCPP_DISABLE_AVAILABILITY -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
 CF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_class_names.h -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
@@ -130,7 +130,9 @@ cmake -S $S -B $B -G Ninja \
   -DENABLE_IMAGE_DIFF=OFF \
   -DICU_UC_LIBRARY=$I/lib/libicuuc.a -DICU_I18N_LIBRARY=$I/lib/libicui18n.a \
   -DICU_DATA_LIBRARY=$I/lib/libicudata.a -DICU_INCLUDE_DIR=$I/include \
-  -DCMAKE_SHARED_LINKER_FLAGS="-flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0 -L$X/lib" \
+  -DUSE_WOFF2=ON -DWOFF2_INCLUDE_DIR=$W/include -DWOFF2_DEC_INCLUDE_DIR=$W/include \
+  -DWOFF2_LIBRARY=$W/lib/libwoff2common.a -DWOFF2_DEC_LIBRARY=$W/lib/libwoff2dec.a \
+  -DCMAKE_SHARED_LINKER_FLAGS="-flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0 -L$X/lib -L$W/lib -lbrotlidec" \
   -DCMAKE_CXX_FLAGS="$CXXF" -DCMAKE_C_FLAGS="$CF" \
   -DCMAKE_OBJCXX_FLAGS="$CXXF -DWEBKIT_IOS6_OBJC_EXTRAS" -DCMAKE_OBJC_FLAGS="$CF -DWEBKIT_IOS6_OBJC_EXTRAS" \
   `# find_library searches the host as well, and on a Mac it finds this` \
