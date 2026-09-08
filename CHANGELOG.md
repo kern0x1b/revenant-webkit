@@ -190,6 +190,18 @@ Dates are the day the change was measured on the device, not the day it compiled
   session. On this device that is the wrong side of the trade.
 
 ### Fixed
+- **An SVG filter that changes nothing tinted what it touched.** linearRGB is the
+  space filters interpolate in by default, and this port had been given a
+  calibrated colour space with a gamma of one so that would be true. Measured on
+  the device, that space did neither half of its job: this CoreGraphics matches
+  colour by primaries and ignores the transfer function, so the pixels reaching a
+  filter stayed gamma encoded - `saturate 0` gave the same 92 grey through
+  linearRGB as through sRGB, where linear light asks for 110 - while the round
+  trip through those primaries shifted colour, so an identity colour matrix
+  turned 192,64,64 into 171,76,66. linearRGB now resolves to the one RGB space
+  the system has. An identity filter is exact again. Filters are still computed
+  on gamma encoded pixels: doing otherwise means performing the colour management
+  by hand, which is not done here.
 - **Any page using small-caps ended the process.** `Font::supportsSmallCaps()`
   asks CoreText which glyphs a feature covers; this one answers nothing for a
   feature it does not know, and the union of that coverage counted the bits of a
