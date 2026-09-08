@@ -80,6 +80,19 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Changed
+- **canPlayType() answers from AVFoundation instead of a list of five.** The
+  player factory named five container types, so every other format the framework
+  plays was denied - 3GPP, M4V, WAV, AIFF, bare AAC, the `audio/mp3` spelling and
+  both spellings of HLS - and a page choosing between `<source>` elements skipped
+  formats it could have played. `AVAssetMIMETypeCache` was in the tree for exactly
+  this and merely excluded.
+- **An asset's description is loaded off the layout path.** `hasVideo()` and
+  `hasAudio()` read the asset's tracks synchronously, from layout, before anything
+  was ready - which blocks the calling thread on whatever loading remains. They are
+  requested asynchronously now, and a failure to load the description is reported
+  as a load failure rather than as a decode error, so a missing file no longer
+  looks like a corrupt one.
+
 - **A second pass, on what the first one named and could not reach.** String
   hashing on this port no longer runs a mixer built from 64x64 multiplies, which
   armv7 performs in four instructions plus carries; it is a 32-bit mixer, one
