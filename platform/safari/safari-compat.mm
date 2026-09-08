@@ -210,30 +210,92 @@ static NSString *revBase64(NSData *data) {
 
 static NSString *revFaviconDir(void) { return @"/var/mobile/Library/Safari/RevFavicons"; }
 
-static NSString *revFaviconPath(NSString *host) {
-    NSString *safe = [host stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
-    return [revFaviconDir() stringByAppendingFormat:@"/%@.png", safe];
+static NSString *revFaviconSafeHost(NSString *host) {
+    return [host stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
 }
 
+/* Icons the engine fetched are stored with their bytes as served, so the type is
+ * read back from them rather than assumed. Files written by the earlier version
+ * of this code are always PNG and carry the .png suffix. */
+static NSString *revFaviconPath(NSString *host) {
+    return [revFaviconDir() stringByAppendingFormat:@"/%@.icon", revFaviconSafeHost(host)];
+}
+
+static NSString *revFaviconLegacyPath(NSString *host) {
+    return [revFaviconDir() stringByAppendingFormat:@"/%@.png", revFaviconSafeHost(host)];
+}
+
+static NSString *revFaviconMIMEType(NSData *data) {
+    const unsigned char *b = (const unsigned char *)data.bytes;
+    NSUInteger n = data.length;
+    if (n > 8 && !memcmp(b, "\x89PNG\r\n\x1a\n", 8))
+        return @"image/png";
+    if (n > 3 && b[0] == 0xff && b[1] == 0xd8 && b[2] == 0xff)
+        return @"image/jpeg";
+    if (n > 6 && (!memcmp(b, "GIF87a", 6) || !memcmp(b, "GIF89a", 6)))
+        return @"image/gif";
+    if (n > 4 && !memcmp(b, "\x00\x00\x01\x00", 4))
+        return @"image/x-icon";
+    if (n > 4 && !memcmp(b, "<svg", 4))
+        return @"image/svg+xml";
+    if (n > 5 && !memcmp(b, "<?xml", 5))
+        return @"image/svg+xml";
+    return nil;
+}
+
+/* The start page's icon for a host, from what the engine collected while the
+ * page was open. It used to be fetched from Google's favicon service, which
+ * disclosed every bookmarked host to a third party, went out over a path that
+ * did not use this port's own TLS, and could only ever answer for a host rather
+ * than for the icon a page actually declares. */
 static NSString *revFaviconSrc(NSString *host) {
-    NSString *google = [NSString stringWithFormat:@"https://www.google.com/s2/favicons?sz=128&domain=%@", host];
-    NSString *path = revFaviconPath(host);
-    NSData *cached = [NSData dataWithContentsOfFile:path];
-    if (cached.length > 50)
-        return [NSString stringWithFormat:@"data:image/png;base64,%@", revBase64(cached)];
-    static dispatch_queue_t q;
+    NSData *data = [NSData dataWithContentsOfFile:revFaviconPath(host)];
+    NSString *type = data.length > 50 ? revFaviconMIMEType(data) : nil;
+    if (!type) {
+        data = [NSData dataWithContentsOfFile:revFaviconLegacyPath(host)];
+        type = data.length > 50 ? @"image/png" : nil;
+    }
+    if (!type)
+        return @"";
+    return [NSString stringWithFormat:@"data:%@;base64,%@", type, revBase64(data)];
+}
+
+/* Written when the engine finishes fetching a page's declared icon; see
+ * WebViewDidLoadMainFrameIconNotification in WebFrameLoaderClient.mm. */
+@interface RevFaviconStore : NSObject
+@end
+
+@implementation RevFaviconStore
++ (void)iconLoaded:(NSNotification *)note {
+    NSData *data = [note.userInfo objectForKey:@"WebViewMainFrameIconData"];
+    NSString *pageURL = [note.userInfo objectForKey:@"WebViewMainFrameIconPageURL"];
+    if (![data isKindOfClass:[NSData class]] || data.length <= 50)
+        return;
+    if (![pageURL isKindOfClass:[NSString class]])
+        return;
+    NSString *host = [[NSURL URLWithString:pageURL] host];
+    if (!host.length || !revFaviconMIMEType(data))
+        return;
+
+    NSData *copiedData = [data copy];
+    NSString *path = [revFaviconPath(host) copy];
+    static dispatch_queue_t queue;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ q = dispatch_queue_create("rev.favicons", 0); });
-    NSString *g = [google copy];
-    NSString *p = [path copy];
-    dispatch_async(q, ^{
+    dispatch_once(&once, ^{ queue = dispatch_queue_create("rev.favicons", 0); });
+    dispatch_async(queue, ^{
         NSFileManager *fm = [NSFileManager defaultManager];
         [fm createDirectoryAtPath:revFaviconDir() withIntermediateDirectories:YES attributes:nil error:nil];
-        if ([fm fileExistsAtPath:p]) return;
-        NSData *d = [NSData dataWithContentsOfURL:[NSURL URLWithString:g]];
-        if (d.length > 50) [d writeToFile:p atomically:YES];
+        [copiedData writeToFile:path atomically:YES];
     });
-    return @"";
+}
+@end
+
+__attribute__((constructor))
+static void rev_favicon_store_init(void) {
+    [[NSNotificationCenter defaultCenter] addObserver:[RevFaviconStore class]
+        selector:@selector(iconLoaded:)
+        name:@"WebViewDidLoadMainFrameIconNotification"
+        object:nil];
 }
 
 static NSString *revHTMLEsc(NSString *s) {
