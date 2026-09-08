@@ -563,7 +563,20 @@ OSStatus ourSSLCopyPeerTrust(SSLContextRef context, SecTrustRef *trust)
         }
     }
 
-    SecPolicyRef policy = SecPolicyCreateBasicX509();
+    /* Bind the evaluation to the host that was asked for. A basic X509 policy
+     * only asks whether the chain is valid, not whether it was issued for this
+     * site, so any certificate a trusted CA ever signed would have been accepted
+     * for any domain. The host is already recorded on the session. */
+    SecPolicyRef policy = NULL;
+    if (session->host[0]) {
+        CFStringRef host = CFStringCreateWithCString(NULL, session->host, kCFStringEncodingUTF8);
+        if (host) {
+            policy = SecPolicyCreateSSL(true, host);
+            CFRelease(host);
+        }
+    }
+    if (!policy)
+        policy = SecPolicyCreateBasicX509();
     SecTrustRef created = NULL;
     OSStatus status = SecTrustCreateWithCertificates(certificates, policy, &created);
     if (policy)

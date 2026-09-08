@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysctl.h>
 #include <mach/mach.h>
 #include <mach/vm_map.h>
 #include <mach/vm_statistics.h>
@@ -48,8 +49,30 @@ static const char *tag_name(int t)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) { fprintf(stderr, "usage: revmem <pid>\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: revmem <pid|process-name>\n"); return 2; }
+
+    // A name is accepted as well as a pid, because ps does not work on this
+    // device and the pid of a process that restarts often is otherwise
+    // impossible to obtain from the shell.
     pid_t pid = atoi(argv[1]);
+    if (!pid) {
+        int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+        size_t length = 0;
+        if (sysctl(mib, 4, NULL, &length, NULL, 0) < 0) { perror("sysctl"); return 1; }
+        struct kinfo_proc *procs = malloc(length);
+        if (!procs) { perror("malloc"); return 1; }
+        if (sysctl(mib, 4, procs, &length, NULL, 0) < 0) { perror("sysctl"); free(procs); return 1; }
+        size_t count = length / sizeof(struct kinfo_proc);
+        for (size_t i = 0; i < count; i++) {
+            if (!strcmp(procs[i].kp_proc.p_comm, argv[1])) {
+                pid = procs[i].kp_proc.p_pid;
+                break;
+            }
+        }
+        free(procs);
+        if (!pid) { fprintf(stderr, "no process named %s\n", argv[1]); return 1; }
+        fprintf(stderr, "%s is pid %d\n", argv[1], pid);
+    }
 
     task_t task;
     kern_return_t kr = task_for_pid(mach_task_self(), pid, &task);
