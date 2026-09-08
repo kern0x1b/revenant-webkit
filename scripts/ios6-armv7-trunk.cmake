@@ -23,7 +23,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET 6.0)
 set(CMAKE_C_COMPILER /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang)
 set(CMAKE_CXX_COMPILER /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++)
 
-set(SDK6 $ENV{IOS_SDK})
+set(SDK6 ${IOS6_SDK})
 set(CXX21 /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/usr/include/c++/v1)
 set(COMMON "-target armv7-apple-ios6.0 -isysroot ${SDK6}")
 set(CMAKE_C_FLAGS_INIT "${COMMON} -DWEBKIT_IOS6_NO_READLINE")
