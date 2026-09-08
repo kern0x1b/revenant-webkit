@@ -389,6 +389,22 @@ static void rev_didClear(id self, SEL _cmd, id webView, id windowObject, id fram
     if (g_didClear_orig) g_didClear_orig(self, _cmd, webView, windowObject, frame);
     @try { [RevWasm installInWebView:(WebView *)webView forFrame:(WebFrame *)frame]; } @catch (id e) {}
 }
+// Installs the WebAssembly bridge when the window object is cleared.
+//
+// This walks the class list and takes the first class answering the selector,
+// which is a lottery: the selector is inherited, so many classes answer it and
+// the order of that list is arbitrary. window.WebAssembly is therefore present
+// only sometimes - a probe page reported it undefined.
+//
+// Replacing this with an attachment to the delegate the browser actually sets
+// (hooking -[WebView setFrameLoadDelegate:] and adding the method to that
+// class) does attach deterministically, to WebUIBrowserLoadingController, and
+// then **no page finishes loading at all**, whether the method is added before
+// or after the original runs. So the attachment point is wrong in a way that is
+// not yet understood, and a browser that loads pages beats one that exposes
+// WebAssembly. Left as it was; the next attempt should install from inside the
+// engine, at WebFrameLoaderClient::dispatchDidClearWindowObjectInWorld, which
+// this port owns and which needs no guessing about the embedder at all.
 static void rev_install_wasm_hook(void) {
     SEL sel = @selector(webView:didClearWindowObject:forFrame:);
     unsigned int count = 0;
@@ -450,3 +466,4 @@ static void rev_startpage_init(void) {
     g_openBlank_orig = method_getImplementation(m);
     method_setImplementation(m, (IMP)rev_openBlankTabDocument);
 }
+
