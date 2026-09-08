@@ -126,9 +126,25 @@ namespace WTF {
 }
 
 #include <execinfo.h>
+#include <mach-o/dyld.h>
 #include <signal.h>
 static void rev_crash_handler(int sig) {
     fprintf(stderr, "[REVCRASH] signal %d\n", sig);
+    // backtrace_symbols_fd names the nearest exported symbol, which in a large
+    // library is usually the wrong function and has sent more than one diagnosis
+    // down the wrong path. Print each engine image's load slide too, so a frame
+    // can be turned into a file offset and symbolised exactly:
+    //   atos -o WebCore -l <slide> <address>
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        const char* name = _dyld_get_image_name(i);
+        if (!name)
+            continue;
+        if (!strstr(name, "WebCore") && !strstr(name, "JavaScriptCore")
+            && !strstr(name, "WebKit") && !strstr(name, "rev-"))
+            continue;
+        fprintf(stderr, "[REVCRASH] image %s slide 0x%lx\n", name,
+            (unsigned long)_dyld_get_image_vmaddr_slide(i));
+    }
     void* bt[64];
     int n = backtrace(bt, 64);
     backtrace_symbols_fd(bt, n, fileno(stderr));
