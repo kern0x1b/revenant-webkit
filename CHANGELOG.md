@@ -80,6 +80,17 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Changed
+- **Font feature tags are translated instead of dropped.** `font-feature-settings`
+  and every `font-variant-*` were discarded, because features are addressed by
+  OpenType tag only from iOS 8 and handing this CoreText a tag-keyed dictionary
+  crashes descriptor matching. Apple's own mapping to the numeric AAT
+  type/selector pairs - the one that stood in this repository before commit
+  `06230e738722` replaced it - is restored for this port. A font carrying AAT
+  feature tables now honours the request: `font-variant-caps: small-caps` renders
+  in genuine small capitals. A font with only OpenType tables, which is most of
+  what the web serves, still will not - this CoreText does not translate an AAT
+  selector into a GSUB feature.
+
 - **canPlayType() answers from AVFoundation instead of a list of five.** The
   player factory named five container types, so every other format the framework
   plays was denied - 3GPP, M4V, WAV, AIFF, bare AAC, the `audio/mp3` spelling and
@@ -179,6 +190,11 @@ Dates are the day the change was measured on the device, not the day it compiled
   session. On this device that is the wrong side of the trade.
 
 ### Fixed
+- **Any page using small-caps ended the process.** `Font::supportsSmallCaps()`
+  asks CoreText which glyphs a feature covers; this one answers nothing for a
+  feature it does not know, and the union of that coverage counted the bits of a
+  null vector. Guarded where both coverage queries arrive.
+
 - **Every piece of text the engine supplies read "localized string not found".**
   That string is a sentinel `CFBundleCopyLocalizedString` is asked to return when a
   key is absent, so a debug assertion trips; in a release build it reaches the
