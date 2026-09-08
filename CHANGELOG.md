@@ -8,6 +8,21 @@ Dates are the day the change was measured on the device, not the day it compiled
 ## [Unreleased]
 
 ### Added
+- **Web Crypto that performs every algorithm, through WebKit's own backend.** The
+  Cocoa backend works in CryptoKit, whose Swift has no armv7 target, so this port
+  had aliased the missing entry points to a no-op and then hand-written AES-GCM,
+  AES-KW, HKDF and HMAC over OpenSSL - reimplementing what WebKit already carries
+  in `crypto/openssl` for the ports without CryptoKit. The curve algorithms were
+  not reimplemented at all; their constructors were aliased to that same no-op,
+  which leaves an object with no vtable. That backend is built instead, against
+  the OpenSSL 3.0 this port already builds for its TLS. **ECDSA, ECDH, RSA-OAEP,
+  RSASSA-PKCS1, PBKDF2 and AES-CBC/CFB/CTR can be performed for the first time.**
+  Five reconciliations were needed, since no port had asked a Darwin platform for
+  this backend before, and three were genuine version bugs in it: RSA-OAEP was
+  compiled out by a `defined()` test on names that became functions in OpenSSL
+  3.0, AES-GCM set its padding mode before the cipher was installed, and
+  `EVP_PKEY_get0_RSA` now returns a const pointer.
+
 - **Web fonts, in every format the web serves.** No `@font-face` had ever
   produced a font. `FontCustomPlatformData::create` is built on a private CoreText
   parser and on an iOS 7 API, neither of which exists here, so it returned nothing

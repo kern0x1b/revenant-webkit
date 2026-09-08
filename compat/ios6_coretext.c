@@ -229,6 +229,24 @@ CTFontDescriptorRef CTFontDescriptorCreateWithTextStyleAndAttributes(CFStringRef
     return descriptor;
 }
 
+/* Answers the size of a Dynamic Type text style, for the CSS system font
+ * shorthands (font: -apple-system-headline and its kin) that
+ * SystemFontDatabaseCoreText resolves through it.
+ *
+ * Dynamic Type arrived in iOS 7. This system has no text style scale and no
+ * content size category to scale it by: UIKit here has two fixed sizes,
+ * +[UIFont systemFontSize] and +[UIFont labelFontSize], and every piece of
+ * interface text is one of them. So one size for every style is not an
+ * approximation of this platform, it is what this platform does; the value is
+ * the label size, which is the body size those shorthands mean.
+ *
+ * The limit worth knowing: a page asking for -apple-system-caption2 gets body
+ * size rather than something smaller. Correcting that would mean shipping
+ * Apple's published size-per-style table, which is data this system genuinely
+ * does not have, so it is not invented here.
+ *
+ * A weight of zero is CoreText's regular, which is what these styles are; the
+ * only caller passes null for the line spacing. */
 CGFloat CTFontDescriptorGetTextStyleSize(CFStringRef style, CFTypeRef sizeCategory, uint32_t platform, CGFloat *weight, CGFloat *lineSpacing)
 {
     (void)style;
@@ -238,7 +256,7 @@ CGFloat CTFontDescriptorGetTextStyleSize(CFStringRef style, CFTypeRef sizeCatego
         *weight = 0;
     if (lineSpacing)
         *lineSpacing = 0;
-    return 17; /* the body size on every iPhone of this era */
+    return 17;
 }
 
 CTFontDescriptorRef CTFontDescriptorCreateCopyWithSymbolicTraits(CTFontDescriptorRef original, CTFontSymbolicTraits value, CTFontSymbolicTraits mask)

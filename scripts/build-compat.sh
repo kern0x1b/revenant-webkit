@@ -19,7 +19,7 @@ cd $P/compat
 
 # _CFHostIsDomainTopLevel's real Public Suffix List lookup is the only piece
 # here that needs libpsl, so it carries the include path the same way the
-# Web Crypto file below carries OpenSSL's.
+# archive carries their dependencies.
 "$TC/usr/bin/clang" $COMMON -I $P/third_party/libpsl-armv7/include \
     -c ios6_compat.c -o ios6_compat.o
 
@@ -29,23 +29,18 @@ done
 for f in ios6_missing_classes.m ios6_uttype.m ios6_palswift.m ios6_uicolor.m ios6_avaudio.m; do
     "$TC/usr/bin/clang" $COMMON $STUBS -DWEBKIT_IOS6_OBJC_EXTRAS -c "$f" -o "${f%.m}.o"
 done
-for f in ios6_media_stubs.cpp ios6_webcrypto_stubs.cpp; do
+for f in ios6_media_stubs.cpp; do
     "$TC/usr/bin/clang++" $COMMON $STUBS $CXX_ONLY -c "$f" -o "${f%.cpp}.o"
 done
-
-# The Web Crypto operations that are performed rather than refused. This is the
-# only piece here that needs OpenSSL, and it carries the dependency so the
-# engine's own code does not have to.
-"$TC/usr/bin/clang" $COMMON -I $P/third_party/openssl-armv7/include \
-    -c ios6_webcrypto_openssl.c -o ios6_webcrypto_openssl.o
 
 rm -f libios6compat.a
 ar rcs libios6compat.a ios6_*.o
 
-# OpenSSL and libpsl travel inside this archive so the engine's link line
-# needs no change. The linker still takes only the members it needs, which
-# for the crypto above is the ciphers and digests, not the library, and for
-# libpsl is psl.o (the built-in PSL data and psl_is_public_suffix live there).
+# OpenSSL and libpsl travel inside this archive so the other binaries built here
+# need no link line of their own. The linker still takes only the members it
+# needs: for libpsl that is psl.o, where the built-in list and
+# psl_is_public_suffix live. WebCore links libcrypto directly now, for WebKit's
+# own OpenSSL crypto backend, so it does not rely on this.
 mkdir -p /tmp/ios6-openssl-members
 (cd /tmp/ios6-openssl-members && rm -f *.o && ar x $P/third_party/openssl-armv7/lib/libcrypto.a)
 ar rs libios6compat.a /tmp/ios6-openssl-members/*.o > /dev/null 2>&1

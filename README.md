@@ -51,7 +51,11 @@ needs. Each of those is fixed here.
   cipher suites. The port answers the system's TLS calls over OpenSSL, so the
   browser reaches sites the phone otherwise cannot open. Certificate verification
   is unchanged — the chain is evaluated by the system as a real `SecTrustRef`.
-- **Web Crypto**, **WebAssembly** (via a bundled interpreter, since JSC's WASM is
+- **Web Crypto**, performed by WebKit's own OpenSSL backend rather than the Cocoa
+  one, which works in CryptoKit and has no armv7 Swift: digests, HMAC, AES in GCM,
+  CBC, CFB and CTR, AES key wrapping, HKDF, PBKDF2, ECDSA, ECDH, RSA-OAEP and
+  RSASSA-PKCS1 all verified on the device.
+- **WebAssembly** (via a bundled interpreter, since JSC's WASM is
   64-bit only), **Web Notifications**, **getUserMedia** (camera + microphone),
   `<video>` MediaStream preview, and a wave of self-contained web APIs enabled by
   default.
