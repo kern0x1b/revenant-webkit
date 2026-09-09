@@ -38,3 +38,6 @@ device.env*
 
 # Local device screenshots captured during work — may show device content
 .claude/screenshots/
+packaging/.theos/
+packaging/packages/
+packaging/obj/
