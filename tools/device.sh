@@ -11,6 +11,10 @@ DEVICE_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 DEVICE_HOST=${DEVICE_HOST:-127.0.0.1}
 DEVICE_PORT=${DEVICE_PORT:-2222}
+# DEVICE_PASS is accepted as well as DEVICE_PASSWORD: both names have been in
+# use in device.env, and a script that silently falls back to key authentication
+# because it read the other one looks exactly like a device that is offline.
+DEVICE_PASSWORD=${DEVICE_PASSWORD:-${DEVICE_PASS:-}}
 
 DEVICE_SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
                  -o LogLevel=ERROR -o ConnectTimeout=8

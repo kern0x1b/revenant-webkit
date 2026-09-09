@@ -1,0 +1,77 @@
+<!doctype html><meta charset=utf-8><title>colour-and-filters</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<body style="font:13px sans-serif;padding:6px">
+<script src="report.js"></script>
+<script>
+// An SVG filter's output is read back through a canvas, which is the only way to
+// ask this engine what it actually painted.
+function paintFiltered(svg, callback) {
+    var image = new Image();
+    image.onload = function () {
+        var canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 24;
+        var context = canvas.getContext('2d');
+        context.drawImage(image, 0, 0);
+        callback(context.getImageData(12, 12, 1, 1).data);
+    };
+    image.onerror = function () { callback(null); };
+    image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+
+function filteredSquare(filterMarkup, filterAttribute) {
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">'
+        + '<defs><filter id="f" x="0" y="0" width="100%" height="100%" ' + (filterAttribute || '') + '>'
+        + filterMarkup + '</filter></defs>'
+        + '<rect width="24" height="24" fill="rgb(192,64,64)" filter="url(#f)"/></svg>';
+}
+
+var checks = [
+    // saturate 0 in linear light is a lighter grey than the same in sRGB: the
+    // luminance is computed on linear values and then re-encoded.
+    ['saturate-linear', filteredSquare('<feColorMatrix type="saturate" values="0"/>'),
+        function (p) { return p && Math.abs(p[0] - 109) <= 4 && p[0] === p[1] && p[1] === p[2]; }, 109],
+    ['saturate-srgb', filteredSquare('<feColorMatrix type="saturate" values="0"/>', 'color-interpolation-filters="sRGB"'),
+        function (p) { return p && Math.abs(p[0] - 92) <= 4; }, 92],
+    // An identity matrix has to change nothing at all, in either space.
+    ['identity-linear-is-exact', filteredSquare('<feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/>'),
+        function (p) { return p && p[0] === 192 && p[1] === 64 && p[2] === 64; }, '192,64,64'],
+    // A blend mode the NEON applier never implemented must still blend, not erase.
+    ['feblend-overlay-paints', '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">'
+        + '<defs><filter id="f" x="0" y="0" width="100%" height="100%">'
+        + '<feFlood flood-color="rgb(64,128,192)" result="fl"/><feBlend mode="overlay" in="SourceGraphic" in2="fl"/>'
+        + '</filter></defs><rect width="24" height="24" fill="rgb(224,160,32)" filter="url(#f)"/></svg>',
+        function (p) { return p && p[3] > 200 && (p[0] + p[1] + p[2]) > 60; }, 'not transparent'],
+    ['feblend-luminosity-paints', '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">'
+        + '<defs><filter id="f" x="0" y="0" width="100%" height="100%">'
+        + '<feFlood flood-color="rgb(64,128,192)" result="fl"/><feBlend mode="luminosity" in="SourceGraphic" in2="fl"/>'
+        + '</filter></defs><rect width="24" height="24" fill="rgb(224,160,32)" filter="url(#f)"/></svg>',
+        function (p) { return p && p[3] > 200 && (p[0] + p[1] + p[2]) > 60; }, 'not transparent']
+];
+
+var index = 0;
+(function next() {
+    if (index >= checks.length) {
+        // A gradient that fades to transparent must not travel through grey:
+        // halfway along, the colour keeps its hue.
+        var canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 1;
+        var context = canvas.getContext('2d');
+        var gradient = context.createLinearGradient(0, 0, 64, 0);
+        gradient.addColorStop(0, 'rgba(255,0,0,1)');
+        gradient.addColorStop(1, 'rgba(255,0,0,0)');
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, 64, 1);
+        var middle = context.getImageData(32, 0, 1, 1).data;
+        report('gradient-fade-keeps-its-hue', middle[0] > 200 && middle[1] < 40 && middle[2] < 40,
+            'middle rgba ' + middle[0] + ',' + middle[1] + ',' + middle[2] + ',' + middle[3]);
+        reportDone();
+        return;
+    }
+    var check = checks[index++];
+    paintFiltered(check[1], function (pixel) {
+        var detail = pixel ? ('got ' + pixel[0] + ',' + pixel[1] + ',' + pixel[2] + ',' + pixel[3] + ' want ' + check[3]) : 'no pixels';
+        report(check[0], !!(pixel && check[2](pixel)), detail);
+        next();
+    });
+})();
+</script>
