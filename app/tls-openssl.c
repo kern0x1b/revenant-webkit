@@ -488,6 +488,27 @@ OSStatus ourSSLRead(SSLContextRef context, void *data, size_t length, size_t *pr
     return errSSLClosedAbort;
 }
 
+/* CFNetwork asks this before it decides to wait on the socket. OpenSSL has
+ * already taken those bytes off the socket and holds them decrypted, so a socket
+ * that will never be readable again is exactly the state a large response ends
+ * in: everything delivered, the last record still buffered here, and the load
+ * never finishing. Answering with SSL_pending is what lets it come back for
+ * them. */
+OSStatus ourSSLGetBufferedReadSize(SSLContextRef context, size_t *bufferSize)
+{
+    Session *session = sessionFor(context, false);
+    if (bufferSize)
+        *bufferSize = 0;
+    if (!session || !session->ssl)
+        return errSSLInternal;
+    if (bufferSize) {
+        int pending = SSL_pending(session->ssl);
+        *bufferSize = pending > 0 ? (size_t)pending : 0;
+    }
+    return noErr;
+}
+
+
 OSStatus ourSSLWrite(SSLContextRef context, const void *data, size_t length, size_t *processed)
 {
     Session *session = sessionFor(context, false);
@@ -674,6 +695,7 @@ INTERPOSE(SSLGetPeerDomainNameLength)
 INTERPOSE(SSLGetPeerDomainName)
 INTERPOSE(SSLHandshake)
 INTERPOSE(SSLRead)
+INTERPOSE(SSLGetBufferedReadSize)
 INTERPOSE(SSLWrite)
 INTERPOSE(SSLClose)
 INTERPOSE(SSLCopyPeerTrust)
