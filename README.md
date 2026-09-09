@@ -124,19 +124,34 @@ one thing changed:
 | `scripts/configure-engine.sh` | CMake configure — the flags carry why each is set |
 | `ninja -C build-254-lto WebCore WebKitLegacy JavaScriptCore` | the engine |
 
-### The Safari substitution
+### The Safari substitution, as a package
 
-On top of the engine, three more scripts build the pieces that put it under
-Mobile Safari:
+The engine is built by CMake; everything that goes on the device around it is
+built and packaged by [Theos](https://theos.dev), from `packaging/`:
 
 ```sh
-scripts/layout-sys-frameworks.sh   # stage the engine as rev-fw (-> /usr/lib/rev-fw)
-scripts/build-safari-tweak.sh      # dist/RevSafari.dylib            (the loader)
-scripts/build-safari-compat.sh     # dist/rev-safari-compat.dylib    (ABI + hooks)
-scripts/build-prefs.sh             # dist/RevPrefs.bundle + RevWebKit.plist (Settings)
+scripts/layout-sys-frameworks.sh          # stage the engine as dist/rev-sys-fw
+make -C packaging package FINALPACKAGE=1  # packaging/packages/*.deb
 ```
 
-Each writes into `dist/` and signs with `ldid`.
+One `.deb` carries all of it: the loader and its MobileSubstrate filter, the
+compatibility and hook dylib, the TLS library, the Settings bundle with its
+PreferenceLoader entry, and the engine frameworks. Install it the way any tweak
+is installed:
+
+```sh
+dpkg -i space.kern0x1b.rev_*_iphoneos-arm.deb
+```
+
+Two settings in `packaging/common.mk` and `packaging/compat/Makefile` are not
+optional, and each says why where it is set: modules are off, because this SDK
+still ships `mach-o/module.map` under its deprecated name; and the compat dylib
+is built without `_FORTIFY_SOURCE` and without libc++, because the `__*_chk`
+symbols are linkage this release never had, and the engine carries its own C++
+runtime — a second one in the same process is a crash waiting to happen.
+
+The individual scripts under `scripts/` still exist and still work; they are the
+faster loop when only one piece changed.
 
 ## Deploy and test
 
@@ -153,6 +168,13 @@ Then push the substitution and the Settings pane, backing up each target first:
 scripts/deploy-safari-tweak.sh      # loader + filter + compat + bundle, then respring
 ```
 
+or install the package, which does the same thing and can be removed again:
+
+```sh
+make -C packaging package FINALPACKAGE=1
+scp packaging/packages/*.deb root@device:/tmp/ && ssh root@device dpkg -i /tmp/*.deb
+```
+
 **Verify it took.** Open any page in Safari and check the user agent — a request
 to a service that echoes it (or the on-device engine log at
 `/tmp/rev-safari-stderr.log`) should show `AppleWebKit/605`, not `536`. The stock
@@ -166,8 +188,8 @@ engine renders modern Google/YouTube broken; the port renders them as above.
 
 ## The Settings pane
 
-Installed as **`RevWebKit`** in the system Settings app (a PreferenceBundle, no
-Theos). It writes the `space.kern0x1b.rev` preferences domain that the engine
+Installed as **`RevWebKit`** in the system Settings app, as a real
+PreferenceBundle. It writes the `space.kern0x1b.rev` preferences domain that the engine
 reads:
 
 - **Bookmarks start page** — a blank tab renders your Safari bookmarks as tiles.
