@@ -1,13 +1,50 @@
-# Stub audit — autonomous session 2026-09-07
+# Stub audit
 
-Goal (from user): remove lying/empty stubs, replace with real implementation wherever the behaviour
-physically exists on iOS 6 / WebKit 2.54. Device OFFLINE this session → verified by BUILD only; runtime
-verification pending (do together). Everything skipped is listed with a reason.
+Goal: no stub may answer success while doing nothing, and wherever the behaviour physically exists on
+this system - or existed in WebKit's own history - the real implementation is used instead of a bridge.
 
-A full read-audit of `WebLegacyCompatibilityAPI.mm` (~1440 lines, the file where compat stubs are
-concentrated) plus a broader engine grep concluded: the rest of the tree is genuinely implemented, not
-stubbed (WebChromeClientIOS, the iOS client files, the WEBKIT_IOS6 branches are behaviour, not empty
-stubs). So this file was the whole job.
+## Scope, and what the first pass missed
+
+The 2026-09-07 pass audited one file, `WebLegacyCompatibilityAPI.mm`, and concluded that "the rest of
+the tree is genuinely implemented, not stubbed". That was wrong about `compat/`, which is 2,700 lines
+of shims standing in for CoreText, CoreGraphics, Foundation and libdispatch API this release lacks, and
+which had never been read end to end. A second pass on 2026-09-09 read all of it; what it found, and
+what was done about it, is at the bottom of this file.
+
+## Second pass, 2026-09-09: what `compat/` was doing
+
+Fixed, each verified on the device:
+
+- `vDSP_vaddi` returned zero and wrote nothing to its destination, so mixing 32-bit integer samples in
+  the capture ring buffer silently dropped a channel. It adds two vectors now.
+- `sqlite3_bind_blob64` answered `SQLITE_OK` and bound nothing - the shape that once made localStorage
+  save nothing. Removed: the call site binds through `sqlite3_bind_blob` on this release, and if
+  anything reaches for it again the link will say so.
+- `kCTFontWeight*` and `kCTFontWidth*` were defined as CFStrings while the headers declare them as
+  `CGFloat`. The linker matches by name, so every rung of the weight ladder was a pointer read as a
+  float, and every `-apple-system` request resolved at Regular. Real values now.
+- `kCTFontVariationAxesAttribute` was `#define`d to `kCTFontVariationAttribute`: an array read out of a
+  dictionary, on every `@font-face` load. The port reads no variation axes at all now, which is the
+  truth about this CoreText.
+- `CTFontCopyColorGlyphCoverage` returns null, and the engine read that as "this font has no colour
+  glyphs" rather than "not known". A font declaring the colour trait is now taken at its word - which
+  is what WebKit itself did until that query became unconditional in 2025.
+- The archive is built from a named list rather than an `ios6_*.o` glob, which had been keeping the
+  retired Web Crypto bridge's stale objects as members long after its sources were deleted.
+
+Known and deliberately left, with the reason:
+
+- `CTFontCopyGlyphCoverageForFeature` returns null, so small caps are synthesized rather than real.
+  No historical native path ever existed; upstream's own `#else` hardcodes the same answer.
+- `CTFontDescriptorCreateWithTextStyle` resolves every Dynamic Type style to Helvetica, and
+  `CTFontDescriptorGetTextStyleSize` answers one size for all of them. Dynamic Type is iOS 7; this
+  system has two fixed interface sizes and no style scale. Shipping Apple's per-style table would be
+  inventing data this system does not have.
+- `CTFontGetSbixImageSizeForGlyphAndContentsScale` returns 0. Its only consumer is behind
+  `isInGPUProcess()`, and WebKit1 has no GPU process.
+- The cookie stubs (`+[WebView _allowCookies]`, `currentCFHTTPCookieStorage`) are untouched on purpose.
+
+Everything below is the first pass, kept as-is.
 
 ## IMPLEMENTED (real logic added, builds+links clean)
 All in `webkit-254/Source/WebKitLegacy/mac/WebView/WebLegacyCompatibilityAPI.mm`:
