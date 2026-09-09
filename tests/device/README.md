@@ -31,14 +31,32 @@ whole life, not of one page.
 ## Known limitations, as of 2026-09-09
 
 `mix-blend-mode: hue | saturation | color | luminosity` on an **element** is
-drawn unblended, while the identical blend through a canvas is correct (hue of
-64,128,192 over 224,160,32 gives 105,180,255). So CoreGraphics implements them
-and the element path does not reach it - the four names are expressed to a layer
-as CoreAnimation filter types this QuartzCore does not have. Keeping such layers
-off the compositor was tried at `canBeComposited` and is the wrong place: the
-page went blank and the browser crashed thirteen times. The right place is
-somewhere in `GraphicsLayerCA` / `RenderLayerBacking`, and it is still open. It
-is not in this suite because a page cannot read it.
+drawn unblended. It is not in this suite because a page cannot read it, but it
+is measurable: load a blue box with `mix-blend-mode: hue` over an orange parent,
+take a screenshot with `/usr/bin/shot`, and read the pixel. It reads 64,128,192,
+the source colour, where 105,180,255 is correct.
+
+What is now known about it, each by measurement:
+
+- **This CoreGraphics implements the four modes, including through a
+  transparency layer.** A standalone probe on the device fills orange, sets
+  `kCGBlendModeHue`, begins a transparency layer, fills blue and ends it: it
+  reads 105,180,255 both with the layer and with a direct fill.
+- **The engine's software path runs and asks for the right mode.** A beacon in
+  `RenderLayer::beginTransparencyLayers` fires with mode Hue, and the CG mapping
+  has all four modes.
+- **Re-applying the blend mode just before `CGContextEndTransparencyLayer`
+  changes nothing** - so this is not the documented "mode captured at begin"
+  subtlety.
+- The layer path was never seen setting a blending filter, so this is not the
+  missing CoreAnimation filter types either.
+
+That leaves the backdrop: the blended box appears to be composited into its own
+backing, where the software blend has nothing underneath it to blend with.
+Keeping such layers off the compositor was tried at `canBeComposited` and is the
+wrong place - the page went blank and the browser crashed thirteen times. The
+next thing to establish is whether the box really does get its own backing
+store, and which compositing reason puts it there.
 
 ## The filter brightness, and how it was closed
 
