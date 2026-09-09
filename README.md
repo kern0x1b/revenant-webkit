@@ -14,9 +14,9 @@ negotiate TLS with a current server, or perform the cryptography a login form
 needs. Each of those is fixed here.
 
 <p align="center">
-  <img src="docs/screenshots/browser-modern-web.png" alt="The bookmarks start page, Wikipedia and the Internet Archive rendered on an iPhone 4S" width="100%">
+  <img src="docs/screenshots/browser-modern-web.png" alt="The bookmarks start page, the Speedometer benchmark and the Internet Archive rendered on an iPhone 4S" width="100%">
   <br>
-  <em>The new-tab start page, Wikipedia and the Internet Archive — on an iPhone 4S, in Mobile Safari.</em>
+  <em>The new-tab start page, WebKit’s own Speedometer benchmark, and the Internet Archive — on an iPhone 4S, in Mobile Safari.</em>
 </p>
 
 <p align="center">
