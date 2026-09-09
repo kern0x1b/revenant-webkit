@@ -189,6 +189,27 @@ Dates are the day the change was measured on the device, not the day it compiled
   costs 31 MB of resident memory - 226 against 195 over the same scripted
   session. On this device that is the wrong side of the trade.
 
+### Changed
+- **The device is checked with numbers now, not screenshots.** `tests/device/run.sh`
+  runs pages in the browser on the phone; each page computes its own verdicts and
+  reports them, and the runner reads them out of the serving HTTP server's request
+  log. A page that reports nothing counts as a failure. Memory is measured over
+  three cold runs and reported as a median, because the spread between identical
+  runs on this device is 27-36 MB and a single run proved nothing several times
+  over.
+- **Purgeable decoded images: measured, and left off.** Marking decoded bytes
+  transient saves a median 42 MB after four heavy sites (160.9 MB against
+  203.4 MB) and takes the process down on a page that draws one image six hundred
+  times cropped. The measurement and the switch to reproduce it are in the code.
+- **The last-resort code-deletion valve was reading the wrong quantity.** Its
+  threshold was derived against `WTF::memoryFootprint()` - the task's own
+  anonymous memory - while the test itself read resident size, three fifths of
+  which is shared cache and framework text that deleting code cannot release.
+  Now both are on the same scale.
+- **Idle local storage databases are closed on a memory warning again.** Each
+  open connection holds a SQLite page cache; the call was part of the historical
+  memory-warning path and lost its caller when that path was rewritten.
+
 ### Fixed
 - **Joined emoji were drawn as their parts.** A family, a profession, a couple -
   anything built with a zero-width joiner - came out as two or three separate
