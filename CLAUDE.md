@@ -40,6 +40,13 @@ that writes the `space.kern0x1b.rev` preferences domain the engine reads
 
 ## Hard-won gotchas
 
+- **A header change means a full build.** `ninja WebCore` builds one target;
+  `WebKit.framework` and `WebKitLegacy.framework` embed WebCore types by value.
+  Change a class's size in a WebCore header, deploy only the rebuilt WebCore, and
+  those two frameworks read that type with the old layout. The symptom is not a
+  crash log: the engine initialises cleanly, Safari's chrome draws with no text at
+  all, and the process disappears with no REVCRASH line and no crash report. After
+  any header change run plain `ninja`, then deploy.
 - **Load-time undefined symbols.** A dylib that links clean (`ninja`/`clang`
   exit 0) can still fail to load on iOS 6, silently — dyld gives up and, for the
   Safari case, Safari falls back to the system engine. After building an injected
@@ -76,6 +83,9 @@ that writes the `space.kern0x1b.rev` preferences domain the engine reads
 ## Where to look
 
 - Build: `build.sh` and `scripts/build-*.sh` / `configure-engine.sh`.
+- Package: `packaging/` — Theos makefiles for the loader, the compat dylib, the
+  TLS library and the Settings bundle; `make -C packaging package FINALPACKAGE=1`
+  produces the installable `.deb`, engine frameworks included.
 - Deploy: `scripts/deploy-safari-tweak.sh`, `tools/device.sh`, `device.env.example`.
 - Design and measurements: `notes/` (`design-journal.md`, `night-run-*.md`).
 - Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.
