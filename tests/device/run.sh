@@ -32,12 +32,17 @@ if grep -q "Address already in use" "$LOG"; then
     exit 2
 fi
 
-pages=(text-and-emoji colour-and-filters image-draw-cost)
+pages=(text-and-emoji gradients-and-blends image-draw-cost svg-image-filters)
 for page in "${pages[@]}"; do
+    # A fresh browser per page. Asking a busy Safari to open another URL is
+    # unreliable here - the first page always reported and the later ones often
+    # did not, which looked like a flaky engine and was a flaky runner.
+    device_run 20 "killall MobileSafari 2>/dev/null" >/dev/null 2>&1
+    sleep 6
     device_run 20 "uiopen 'http://$HOST:$PORT/$page.html?run=$RANDOM'" >/dev/null 2>&1
-    for _ in $(seq 1 15); do
+    for _ in $(seq 1 22); do
         sleep 2
-        grep -q "GET /verdicts?page=$page" "$LOG" && break
+        grep -q "GET /verdicts?page=$page&results=.*final=1" "$LOG" && break
     done
 done
 
@@ -45,7 +50,13 @@ done
 # read as "0 failed".
 missing=0
 for page in "${pages[@]}"; do
-    grep -q "GET /verdicts?page=$page" "$LOG" || { echo "MISSING $page reported nothing"; missing=1; }
+    if ! grep -q "GET /verdicts?page=$page" "$LOG"; then
+        echo "MISSING $page reported nothing"
+        missing=1
+    elif ! grep -q "GET /verdicts?page=$page&results=.*final=1" "$LOG"; then
+        echo "PARTIAL $page stopped before its end - the verdicts below are what it reached"
+        missing=1
+    fi
 done
 
 grep -o 'GET /verdicts?[^ ]*' "$LOG" | python3 "$ROOT/tests/device/verdicts.py"

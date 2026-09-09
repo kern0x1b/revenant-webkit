@@ -4,6 +4,7 @@ import sys
 import urllib.parse
 
 passed = failed = 0
+seen = set()
 for line in sys.stdin:
     if '?' not in line:
         continue
@@ -14,6 +15,10 @@ for line in sys.stdin:
             continue
         verdict, _, rest = result.partition('|')
         check, _, detail = rest.partition('|')
+        # Verdicts arrive twice, one at a time and again in the page's batch.
+        if (page, check) in seen:
+            continue
+        seen.add((page, check))
         print('%-7s %-22s %-34s %s' % (verdict, page, check, detail))
         if verdict == 'PASS':
             passed += 1

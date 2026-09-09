@@ -11,6 +11,11 @@
 
     window.report = function (name, pass, detail) {
         verdicts.push((pass ? 'PASS' : 'FAIL') + '|' + name + '|' + String(detail === undefined ? '' : detail));
+        // One request per page, at the end. Sending each verdict as it happens
+        // was tried and is worse: this engine will not push a burst of image
+        // requests out of a synchronous script, and most of them never left.
+        // A page that can take the browser down therefore gets a page of its
+        // own, so its silence costs only its own checks.
         var line = document.createElement('div');
         line.textContent = (pass ? 'PASS ' : 'FAIL ') + name + '  ' + (detail === undefined ? '' : detail);
         line.style.color = pass ? '#060' : '#a00';
@@ -18,7 +23,10 @@
     };
 
     window.reportDone = function () {
-        var url = '/verdicts?page=' + encodeURIComponent(page) + '&results=' + encodeURIComponent(verdicts.join('~~'));
+        // final=1 is what the runner waits for: it means this page reached its
+        // end rather than stopping somewhere in the middle.
+        var url = '/verdicts?page=' + encodeURIComponent(page)
+            + '&results=' + encodeURIComponent(verdicts.join('~~')) + '&final=1';
         new Image().src = url + '&t=' + Date.now();
     };
 })();
