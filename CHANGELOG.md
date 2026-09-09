@@ -190,6 +190,26 @@ Dates are the day the change was measured on the device, not the day it compiled
   session. On this device that is the wrong side of the trade.
 
 ### Fixed
+- **SVG filters are interpolated in linear light, as the specification asks.**
+  linearRGB is the space filters interpolate in by default, and it had been a
+  name with nothing behind it: this CoreGraphics matches colour by primaries and
+  ignores the transfer function, so every filter was computed on gamma encoded
+  pixels. WebKit carried the answer until 2020 - `ImageBuffer::transformColorSpace`
+  built a 256 entry table from its own sRGB transfer function and handed it to
+  the port's `platformTransformColorSpace`; the CG ports never needed one. The
+  table is back, in the backend that owns the pixels, and the filter machinery
+  takes the branch written for ports whose graphics library cannot convert. So
+  that the two spaces can be told apart at all - both resolve to the single RGB
+  space this system has - `DestinationColorSpace` carries a tag for the linear
+  one. Measured against a flat 192,64,64: an identity colour matrix in linearRGB
+  is exact, `saturate 0` gives 109 where linear light asks for 110 and gamma
+  encoded pixels gave 92, and a red to blue gradient desaturates to 71 grey
+  rather than 37.
+- **A buffer asked for in another colour space came back black.** Crossing
+  colour spaces goes through `vImageConverter_CreateWithCGImageFormat`, iOS 7,
+  which fails here; the accelerated path then zero-fills rather than expose
+  stale heap. `convertImagePixels` now performs the sRGB and linearRGB pair
+  itself, as its own note suggested.
 - **An SVG filter that changes nothing tinted what it touched.** linearRGB is the
   space filters interpolate in by default, and this port had been given a
   calibrated colour space with a gamma of one so that would be true. Measured on
