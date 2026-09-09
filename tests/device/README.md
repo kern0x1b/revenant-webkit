@@ -63,9 +63,23 @@ Everything else has been eliminated, each by measurement:
 
 What is left is the destination: the tile Safari paints into is not a bitmap
 context - `CGContextGetType` says 0 and it has no bitmap colour space - and this
-CoreGraphics appears to ignore the non-separable modes there while honouring the
-separable ones. The next step is to find what colour space that context has and
-whether giving it an RGB one makes hue work, not to add more beacons to WebCore.
+CoreGraphics honours the separable modes there and drops the others. That is
+consistent with how the two kinds differ: a separable mode is per-channel
+arithmetic, while hue, saturation, colour and luminosity need a colour space to
+decompose the pixels into, and this context has none that CG will name.
+
+Which is why this stops here rather than continuing. Making it work means not
+using CG for the composite at all: rendering the group into an offscreen bitmap,
+reading the backdrop back, blending in software and writing the result - which is
+what the ports without colour management do, and which costs a read-back per
+blended element on a phone where a full-screen read-back is already expensive.
+For a CSS feature this rare on this hardware, that is not a trade worth making
+without someone asking for it.
+
+One attempt is recorded so it is not repeated: skipping the transparency layer
+and blending the fill directly crashes the browser, because the paint that ends
+the layer is elsewhere and the counts stop matching. If anyone tries it, both
+halves have to move together.
 
 ## The filter brightness, and how it was closed
 
