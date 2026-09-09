@@ -40,6 +40,20 @@ if [ -d "$B/WebCore.framework/modern-media-controls" ]; then
           "$OUT/WebCore.framework/modern-media-controls/images/" 2>/dev/null || true
 fi
 
+# Every other file the framework carries at its top level: the images the engine
+# loads by name through ImageAdapter::loadPlatformResource, the colour profile,
+# the blocked-page markup. Leaving them out is not cosmetic - a page with a
+# broken image asks for missingImage@2x.png, the load fails, the engine falls
+# back to an empty image, and drawing that took the browser down. Headers and
+# the signature are build products and stay behind.
+for entry in "$B/WebCore.framework"/*; do
+    name=$(basename "$entry")
+    case "$name" in
+        WebCore|Headers|PrivateHeaders|Modules|_CodeSignature|Info.plist|en.lproj|modern-media-controls) continue ;;
+    esac
+    cp -R "$entry" "$OUT/WebCore.framework/$name" 2>/dev/null || true
+done
+
 install_name_tool -id "$SYS_WK" "$OUT/WebKit.framework/WebKit"
 install_name_tool -id "$SYS_WC" "$OUT/WebCore.framework/WebCore"
 install_name_tool -id "$SYS_JSC" "$OUT/JavaScriptCore.framework/JavaScriptCore"

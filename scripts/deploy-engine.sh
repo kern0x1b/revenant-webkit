@@ -18,9 +18,9 @@ done
 # WebCore's media controls load resources (scripts, localized strings, button
 # icons) from the framework bundle, so push those too, not just the binary.
 if [ -d "$SRC/WebCore.framework/modern-media-controls" ] || [ -f "$SRC/WebCore.framework/Info.plist" ]; then
-  ( cd "$SRC/WebCore.framework" && tar czf - Info.plist en.lproj modern-media-controls 2>/dev/null ) \
-    | ( if [ -n "${DEVICE_PASSWORD:-}" ]; then sshpass -p "$DEVICE_PASSWORD" ssh "${DEVICE_SSH_OPTS[@]}" -p "$DEVICE_PORT" "root@$DEVICE_HOST" "cd $REV/WebCore.framework && tar xzf - && chmod -R 755 modern-media-controls en.lproj 2>/dev/null";
-        else ssh "${DEVICE_SSH_OPTS[@]}" -p "$DEVICE_PORT" "root@$DEVICE_HOST" "cd $REV/WebCore.framework && tar xzf - && chmod -R 755 modern-media-controls en.lproj 2>/dev/null"; fi )
+  ( cd "$SRC/WebCore.framework" && tar czf - $(ls | grep -v '^WebCore$') 2>/dev/null ) \
+    | ( if [ -n "${DEVICE_PASSWORD:-}" ]; then sshpass -p "$DEVICE_PASSWORD" ssh "${DEVICE_SSH_OPTS[@]}" -p "$DEVICE_PORT" "root@$DEVICE_HOST" "cd $REV/WebCore.framework && tar xzf - && chmod -R 755 . 2>/dev/null";
+        else ssh "${DEVICE_SSH_OPTS[@]}" -p "$DEVICE_PORT" "root@$DEVICE_HOST" "cd $REV/WebCore.framework && tar xzf - && chmod -R 755 . 2>/dev/null"; fi )
 fi
 
 device_run 20 "chmod 755 $REV/*/* 2>/dev/null; echo installed"
