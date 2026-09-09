@@ -18,49 +18,56 @@ SOURCE=${EMOJI_SOURCE:-/System/Library/Fonts/Apple Color Emoji.ttc}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-# The device is a 2x screen and reads the @2x file, whose strikes are 40, 64 and
-# 96 pixels. A current font carries nine strikes; the rest are 100MB this device
-# has no room for and no use for.
-python3 - "$SOURCE" "$WORK/AppleColorEmoji@2x.ttf" <<'PY'
+# Both files are installed. The screen is 2x and web content reads the @2x file,
+# whose strikes are 40, 64 and 96 pixels, but parts of the interface read the 1x
+# file, whose strikes are 20, 40, 48 and 96 - leave that one stock and emoji in
+# the interface stay at the 2013 repertoire. A current font carries nine strikes;
+# the rest are the 100 MB this device has neither the room nor a use for.
+python3 - "$SOURCE" "$WORK/AppleColorEmoji@2x.ttf" "$WORK/AppleColorEmoji.ttf" <<'PY'
 import sys
 from fontTools.ttLib import TTCollection, TTFont
 
-source, destination = sys.argv[1], sys.argv[2]
-font = TTCollection(source).fonts[0] if source.endswith(".ttc") else TTFont(source)
+source = sys.argv[1]
 
-for ppem in list(font["sbix"].strikes):
-    if ppem not in (40, 64, 96):
-        del font["sbix"].strikes[ppem]
+for destination, keep in ((sys.argv[2], (40, 64, 96)), (sys.argv[3], (20, 40, 48, 96))):
+    font = TTCollection(source).fonts[0] if source.endswith(".ttc") else TTFont(source)
 
-for tag in ("DSIG", "trak", "meta"):
-    if tag in font:
-        del font[tag]
+    for ppem in list(font["sbix"].strikes):
+        if ppem not in keep:
+            del font["sbix"].strikes[ppem]
 
-# The 2013 font advertises its full-repertoire cmap under encoding 3, the
-# current one under encoding 4. Match the one this CoreText was shipped with.
-for table in font["cmap"].tables:
-    if (table.platformID, table.platEncID) == (0, 4):
-        table.platEncID = 3
+    for tag in ("DSIG", "trak", "meta"):
+        if tag in font:
+            del font[tag]
 
-font.save(destination)
+    # The 2013 font advertises its full-repertoire cmap under encoding 3, the
+    # current one under encoding 4. Match the one this CoreText was shipped
+    # with, or everything past the 2013 repertoire draws as a box.
+    for table in font["cmap"].tables:
+        if (table.platformID, table.platEncID) == (0, 4):
+            table.platEncID = 3
+
+    font.save(destination)
 PY
 
 FONTS=/System/Library/Fonts/Cache
 BACKUP=/var/mobile/emoji-backup
 
-echo "backing up the device's own font to $BACKUP"
-device_run 30 "mkdir -p $BACKUP; cp -n $FONTS/AppleColorEmoji@2x.ttf $BACKUP/"
+echo "backing up the device's own fonts to $BACKUP"
+device_run 30 "mkdir -p $BACKUP; cp -n '$FONTS/AppleColorEmoji@2x.ttf' $BACKUP/; cp -n $FONTS/AppleColorEmoji.ttf $BACKUP/"
 
-echo "copying $(du -h "$WORK/AppleColorEmoji@2x.ttf" | cut -f1)"
-device_copy "$WORK/AppleColorEmoji@2x.ttf" /var/mobile/emoji-new.ttf
+for file in "AppleColorEmoji@2x.ttf" "AppleColorEmoji.ttf"; do
+    echo "copying $file ($(du -h "$WORK/$file" | cut -f1))"
+    device_copy "$WORK/$file" /var/mobile/emoji-new.ttf
 
-# Written beside the live file and moved into place, so nothing reads a half
-# written font.
-device_run 60 "cp /var/mobile/emoji-new.ttf $FONTS/AppleColorEmoji@2x.ttf.new \
-  && chown root:wheel $FONTS/AppleColorEmoji@2x.ttf.new \
-  && chmod 644 $FONTS/AppleColorEmoji@2x.ttf.new \
-  && mv $FONTS/AppleColorEmoji@2x.ttf.new $FONTS/AppleColorEmoji@2x.ttf \
-  && rm -f /var/mobile/emoji-new.ttf"
+    # Written beside the live file and moved into place, so nothing reads a half
+    # written font.
+    device_run 60 "cp /var/mobile/emoji-new.ttf '$FONTS/$file.new' \
+      && chown root:wheel '$FONTS/$file.new' \
+      && chmod 644 '$FONTS/$file.new' \
+      && mv '$FONTS/$file.new' '$FONTS/$file' \
+      && rm -f /var/mobile/emoji-new.ttf"
+done
 
 echo "installed; respringing"
 device_run 30 "killall SpringBoard" || true
@@ -68,5 +75,5 @@ device_run 30 "killall SpringBoard" || true
 cat <<NOTE
 
 If the interface comes back without text, restore over SSH:
-  cp $BACKUP/AppleColorEmoji@2x.ttf $FONTS/AppleColorEmoji@2x.ttf && killall SpringBoard
+  cp $BACKUP/AppleColorEmoji*.ttf $FONTS/ && killall SpringBoard
 NOTE

@@ -128,8 +128,25 @@ namespace WTF {
 #include <execinfo.h>
 #include <mach-o/dyld.h>
 #include <signal.h>
-static void rev_crash_handler(int sig) {
+#include <sys/ucontext.h>
+static void rev_crash_handler(int sig, siginfo_t* info, void* context) {
     fprintf(stderr, "[REVCRASH] signal %d\n", sig);
+    // The backtrace below is a chain of return addresses, so its innermost entry
+    // is the caller of the function that faulted, not the fault itself. Print the
+    // program counter and the address the access was for, or an afternoon goes
+    // into symbolising the wrong frame.
+    if (context) {
+        _STRUCT_MCONTEXT* mc = ((ucontext_t*)context)->uc_mcontext;
+        if (mc) {
+            fprintf(stderr, "[REVCRASH] pc 0x%lx lr 0x%lx sp 0x%lx fault 0x%lx\n",
+                (unsigned long)mc->__ss.__pc, (unsigned long)mc->__ss.__lr,
+                (unsigned long)mc->__ss.__sp, (unsigned long)(info ? info->si_addr : 0));
+            for (int r = 0; r < 13; r += 4)
+                fprintf(stderr, "[REVCRASH] r%-2d 0x%08lx  r%-2d 0x%08lx  r%-2d 0x%08lx  r%-2d 0x%08lx\n",
+                    r, (unsigned long)mc->__ss.__r[r], r + 1, (unsigned long)mc->__ss.__r[r + 1],
+                    r + 2, (unsigned long)mc->__ss.__r[r + 2], r + 3, (unsigned long)mc->__ss.__r[r + 3]);
+        }
+    }
     // backtrace_symbols_fd names the nearest exported symbol, which in a large
     // library is usually the wrong function and has sent more than one diagnosis
     // down the wrong path. Print each engine image's load slide too, so a frame
@@ -154,11 +171,14 @@ static void rev_crash_handler(int sig) {
 }
 __attribute__((constructor))
 static void rev_crash_init() {
-    signal(SIGSEGV, rev_crash_handler);
-    signal(SIGBUS, rev_crash_handler);
-    signal(SIGABRT, rev_crash_handler);
-    signal(SIGILL, rev_crash_handler);
-    signal(SIGTRAP, rev_crash_handler);
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_sigaction = rev_crash_handler;
+    action.sa_flags = SA_SIGINFO;
+    sigemptyset(&action.sa_mask);
+    static const int signals[] = { SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGTRAP };
+    for (unsigned i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i)
+        sigaction(signals[i], &action, NULL);
 }
 
 // ---- Dynamic bookmarks start page: a blank Safari tab renders the user's
