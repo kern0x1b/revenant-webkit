@@ -18,3 +18,12 @@ export THEOS_PACKAGE_SCHEME :=
 # its deprecated name, which today's clang refuses as an error, so the pieces
 # here are built the way the engine itself is built: without modules.
 export ADDITIONAL_CFLAGS := -fno-modules -Wno-error=deprecated-module-dot-map
+
+# `make install` goes to the same device the scripts talk to, so the address
+# lives in one place - device.env, which is not in the repository - rather than
+# being typed on the command line. Theos wants it in its own variables.
+DEVICE_ENV := $(dir $(lastword $(MAKEFILE_LIST)))../device.env
+ifneq ($(wildcard $(DEVICE_ENV)),)
+export THEOS_DEVICE_IP ?= $(shell sed -n 's/^DEVICE_HOST=//p' $(DEVICE_ENV))
+export THEOS_DEVICE_PORT ?= $(shell sed -n 's/^DEVICE_PORT=//p' $(DEVICE_ENV))
+endif
