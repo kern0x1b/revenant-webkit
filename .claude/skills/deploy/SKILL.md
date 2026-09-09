@@ -19,7 +19,7 @@ set — never hand-build the SSH option string (it word-splits and errors).
 ## Push everything
 
 ```sh
-scripts/deploy-safari-tweak.sh     # loader + filter + compat + bundle + entry, then respring
+make -C packaging package install DEVICE_IP=...   # the whole substitution, then respring
 ```
 
 It backs up each target before overwriting and installs to the correct paths:

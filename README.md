@@ -99,9 +99,9 @@ first. Three artifacts do this:
 
 | Artifact | On device | Built by | Role |
 | --- | --- | --- | --- |
-| **Loader** | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `scripts/build-safari-tweak.sh` | Reads the enabled-apps preference and re-execs an enabled app with the engine's `DYLD_*` set. Skips SpringBoard. |
+| **Loader** | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `packaging/loader` (Theos) | Reads the enabled-apps preference and re-execs an enabled app with the engine's `DYLD_*` set. Skips SpringBoard. |
 | **Engine** | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `scripts/configure-engine.sh` + `ninja`, laid out by `scripts/layout-sys-frameworks.sh` | The WebKit build itself. |
-| **Compat / hooks** | `/usr/lib/rev-safari-compat.dylib` | `scripts/build-safari-compat.sh` | The ABI symbols iOS 6 predates, plus the bookmarks start page, WebAssembly, and preference reads. Inserted by the loader. |
+| **Compat / hooks** | `/usr/lib/rev-safari-compat.dylib` | `packaging/compat` (Theos) | The ABI symbols iOS 6 predates, plus the bookmarks start page, WebAssembly, and preference reads. Inserted by the loader. |
 
 The loader and the compat dylib are two different files with two different jobs —
 overwriting one with the other drops Safari back to the system engine.
@@ -178,13 +178,8 @@ and fill it in:
 cp device.env.example device.env    # set DEVICE_HOST / DEVICE_PORT / DEVICE_PASSWORD
 ```
 
-Then push the substitution and the Settings pane, backing up each target first:
-
-```sh
-scripts/deploy-safari-tweak.sh      # loader + filter + compat + bundle, then respring
-```
-
-or install the package, which does the same thing and can be removed again:
+Then build and install the package, which carries the loader, the compatibility
+dylib, the TLS dylib and the Settings pane, and can be removed again:
 
 ```sh
 make -C packaging package FINALPACKAGE=1

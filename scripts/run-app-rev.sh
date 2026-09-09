@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Install RevWebViewHost.app and launch it under SpringBoard, then print
 # /tmp/rev-webview-host.log - the direct-WebView equivalent of
-# scripts/run-native.sh, which does this for the DYLD-substitution apps.
 #
 # Running the executable over SSH as root never reaches the foreground (no
 # UIApplicationMain hand-off happens without SpringBoard), so this goes
-# through uicache + uiopen like run-native.sh does.
+# through uicache + uiopen.
 #
 #   bash scripts/run-app-rev.sh [seconds-to-wait]
 set -u

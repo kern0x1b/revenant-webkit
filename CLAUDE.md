@@ -30,7 +30,7 @@ A loader is injected into the launching app, sets `DYLD_FRAMEWORK_PATH` /
 
 **The loader and the compat dylib are different files.** Deploying the compat
 dylib over `RevSafari.dylib` (or vice versa) drops Safari to the system engine —
-this has happened. `deploy-safari-tweak.sh` puts each in its own place.
+this has happened. The package puts each in its own place.
 
 ## The Settings pane
 
@@ -87,6 +87,6 @@ that writes the `space.kern0x1b.rev` preferences domain the engine reads
 - Package: `packaging/` — Theos makefiles for the loader, the compat dylib, the
   TLS library and the Settings bundle; `make -C packaging package FINALPACKAGE=1`
   produces the installable `.deb`, engine frameworks included.
-- Deploy: `scripts/deploy-safari-tweak.sh`, `tools/device.sh`, `device.env.example`.
+- Deploy: `make -C packaging package install`, `scripts/deploy-engine.sh`, `tools/device.sh`.
 - Design and measurements: `notes/` (`design-journal.md`, `night-run-*.md`).
 - Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.

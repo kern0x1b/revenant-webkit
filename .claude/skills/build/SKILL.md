@@ -34,9 +34,7 @@ Build after the engine:
 
 ```sh
 scripts/layout-sys-frameworks.sh   # stage the engine as dist/rev-sys-fw (-> /usr/lib/rev-fw)
-scripts/build-safari-tweak.sh      # dist/RevSafari.dylib            (the loader, plain C + CoreFoundation)
-scripts/build-safari-compat.sh     # dist/rev-safari-compat.dylib    (iOS6 ABI stubs + hooks + WASM)
-scripts/build-prefs.sh             # dist/RevPrefs.bundle + dist/RevWebKit.plist (Settings pane)
+make -C packaging package        # loader + compat + TLS + prefs, packaged as a .deb
 ```
 
 Each signs with `ldid -S`.
