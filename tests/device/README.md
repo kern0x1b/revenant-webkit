@@ -31,32 +31,41 @@ whole life, not of one page.
 ## Known limitations, as of 2026-09-09
 
 `mix-blend-mode: hue | saturation | color | luminosity` on an **element** is
-drawn unblended. It is not in this suite because a page cannot read it, but it
-is measurable: load a blue box with `mix-blend-mode: hue` over an orange parent,
-take a screenshot with `/usr/bin/shot`, and read the pixel. It reads 64,128,192,
-the source colour, where 105,180,255 is correct.
+drawn unblended. A page cannot read it, so it is measured from a screenshot:
+`repro/element-blend-modes.html` puts a multiply and a hue over the same orange,
+`/usr/bin/shot` takes the screen, and the two halves are read off the PNG.
 
-What is now known about it, each by measurement:
+The result is the discriminator this had been missing:
 
-- **This CoreGraphics implements the four modes, including through a
-  transparency layer.** A standalone probe on the device fills orange, sets
-  `kCGBlendModeHue`, begins a transparency layer, fills blue and ends it: it
-  reads 105,180,255 both with the layer and with a direct fill.
-- **The engine's software path runs and asks for the right mode.** A beacon in
-  `RenderLayer::beginTransparencyLayers` fires with mode Hue, and the CG mapping
-  has all four modes.
-- **Re-applying the blend mode just before `CGContextEndTransparencyLayer`
-  changes nothing** - so this is not the documented "mode captured at begin"
-  subtlety.
-- The layer path was never seen setting a blending filter, so this is not the
-  missing CoreAnimation filter types either.
+- **multiply reads 56,80,24 - exact.** So the element blend path works, and the
+  engine reaches CoreGraphics with the mode.
+- **hue reads 64,128,192** - the source colour, no blending at all.
 
-That leaves the backdrop: the blended box appears to be composited into its own
-backing, where the software blend has nothing underneath it to blend with.
-Keeping such layers off the compositor was tried at `canBeComposited` and is the
-wrong place - the page went blank and the browser crashed thirteen times. The
-next thing to establish is whether the box really does get its own backing
-store, and which compositing reason puts it there.
+Everything else has been eliminated, each by measurement:
+
+- **The platform implements the four modes.** `repro/coregraphics-blend-probe.c`
+  fills orange, sets `kCGBlendModeHue`, begins a transparency layer, fills blue
+  and ends it, in a device-RGB bitmap and again through a `CGLayer`: 105,180,255
+  both times. (There is no `kCGColorSpaceSRGB` by name on this release.)
+- **The box is not composited.** Its layer and its parent's both report no
+  backing at the moment the transparency layer is begun, so this is not a layer
+  blending against an empty backdrop, and not the missing CoreAnimation filter
+  types either - the layer path never runs.
+- **The engine asks for the right mode on the right context.** The same
+  `GraphicsContext` that paints the box is told mode Hue immediately before the
+  transparency layer begins.
+- **Re-applying the mode before `CGContextEndTransparencyLayer` changes
+  nothing**, so it is not about when CG captures the mode.
+- Reading the state inside `beginTransparencyLayer` shows Normal, but that
+  proves nothing: `GraphicsContextState::repurpose` resets the composite mode on
+  CG by design, because `CGContextBeginTransparencyLayer` starts the layer's
+  contents fresh. The CGContext itself still carries Hue at that point.
+
+What is left is the destination: the tile Safari paints into is not a bitmap
+context - `CGContextGetType` says 0 and it has no bitmap colour space - and this
+CoreGraphics appears to ignore the non-separable modes there while honouring the
+separable ones. The next step is to find what colour space that context has and
+whether giving it an RGB one makes hue work, not to add more beacons to WebCore.
 
 ## The filter brightness, and how it was closed
 
