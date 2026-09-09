@@ -14,15 +14,15 @@ negotiate TLS with a current server, or perform the cryptography a login form
 needs. Each of those is fixed here.
 
 <p align="center">
-  <img src="docs/screenshots/browser-modern-web.png" alt="Google, YouTube and the bookmarks start page rendered on an iPhone 4S" width="100%">
+  <img src="docs/screenshots/browser-modern-web.png" alt="The bookmarks start page, Wikipedia and the Internet Archive rendered on an iPhone 4S" width="100%">
   <br>
-  <em>Google, YouTube and the new-tab start page — on an iPhone 4S, in Mobile Safari.</em>
+  <em>The new-tab start page, Wikipedia and the Internet Archive — on an iPhone 4S, in Mobile Safari.</em>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/browser-and-settings.png" alt="SoundCloud, Wikipedia and the RevWebKit settings pane" width="100%">
+  <img src="docs/screenshots/browser-and-settings.png" alt="OpenStreetMap, Wikipedia and the RevWebKit settings pane" width="100%">
   <br>
-  <em>SoundCloud, Wikipedia, and the RevWebKit Settings pane.</em>
+  <em>OpenStreetMap, Wikipedia, and the RevWebKit Settings pane.</em>
 </p>
 
 ## Contents
@@ -244,6 +244,15 @@ webkit-254/     The engine, a git submodule on the ios6-armv7 branch
 The reasoning behind the port and the measurements behind each decision are in
 `notes/` — `notes/design-journal.md` is where it started, and the `night-run-*.md`
 files record what was tried, what worked, and what was refuted by measuring it.
+
+## Trademarks and screenshots
+
+The screenshots show third-party websites rendered by this engine, as examples of
+what it displays on the device. All names, logos, page designs and content in
+them remain the property of their respective owners and are shown nominatively -
+to demonstrate a browser engine working - under fair use. This project is not
+affiliated with, endorsed by, or sponsored by any of them, and ships none of
+their code, assets or branding.
 
 ## License
 
