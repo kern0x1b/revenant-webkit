@@ -33,3 +33,24 @@ a SIGSEGV in the image decode path.
 It is not the linear-light work: with that path compiled out the crash and the
 brightening are both still there, unchanged. The same filters measured on a real
 page - not through `<img>` - give the specified numbers exactly.
+
+What has been ruled out, so nobody pays for it twice:
+
+- **The linear-light conversion.** Compiled out, both symptoms unchanged. Beacons
+  in `FilterImage::transformToColorSpace` and in the backend's transfer show
+  neither is called at all on this path.
+- **Colour space tags.** Beaconed at the effect: source, result and buffer are
+  all linearRGB, and no conversion runs anywhere in between.
+- **CoreGraphics matching.** linearRGB and sRGB resolve to the same
+  `CGColorSpace` on this port, so CG has nothing to convert between.
+- **Filters in general.** A plain `<svg>` rect through `<img>` reads
+  192,64,64 exactly, and so does one carrying `feOffset`. Only the effects that
+  read and write pixels - `feColorMatrix` and its kin - come out bright.
+- **Two repair attempts that crashed**: copying the borrowed source buffer with
+  the filter's allocator (wrong resolution scale) and with `ImageBuffer::clone()`.
+  Restoring the source buffer's colour space after the filter chain changed no
+  measured number.
+
+What is left to look at: the one gamma encode that happens between the buffer an
+SVG image is rasterised into and the canvas it is drawn onto, on the pixel-reading
+effect path only.
