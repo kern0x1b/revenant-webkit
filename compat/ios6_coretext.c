@@ -80,20 +80,13 @@ CTFontRef CTFontCreateForCharactersWithLanguageAndOption(CTFontRef currentFont, 
     if (!substitute)
         return NULL;
 
-    if (coveredLength) {
-        CGGlyph stackGlyphs[128];
-        CGGlyph *glyphs = length <= 128 ? stackGlyphs : malloc(length * sizeof(CGGlyph));
-        if (glyphs) {
-            CTFontGetGlyphsForCharacters(substitute, characters, glyphs, length);
-            CFIndex covered = 0;
-            while (covered < length && glyphs[covered])
-                covered++;
-            *coveredLength = covered ? covered : length;
-            if (glyphs != stackGlyphs)
-                free(glyphs);
-        } else
-            *coveredLength = length;
-    }
+    /* Both callers in the engine ignore coveredLength, and measuring it here
+       cost a CoreText round trip and sometimes a malloc on every font-fallback
+       miss - a hot path - for a number nobody reads. It answers the length it
+       was asked about; if a caller ever starts reading it, the measurement above
+       this line in git history is how to do it properly. */
+    if (coveredLength)
+        *coveredLength = length;
 
     return substitute;
 }
@@ -105,6 +98,14 @@ CTFontRef CTFontCreateForCharactersWithLanguageAndOption(CTFontRef currentFont, 
  * iOS 17. What can be done here is the horizontal metrics for the glyphs as
  * given, which is correct for scripts that need no reordering, and readable
  * rather than blank for the ones that do.
+ *
+ * It is not reached: Font::applyTransforms returns early on this port before
+ * calling it, and complex text goes through ComplexTextControllerCoreText with
+ * CTTypesetter instead, which is real shaping. The symbol has to exist because
+ * the call site is still compiled in, and the body has to stay this
+ * conservative if it is ever reached again - filling in bulk advances would
+ * overwrite the deliberate zero advances the engine sets for a zero-width
+ * space and for the padding glyph after an astral character.
  */
 CGSize CTFontShapeGlyphs(CTFontRef font, CGGlyph glyphs[], CGSize advances[], CGPoint origins[], CFIndex indexes[], const UniChar characters[], CFIndex count, CFOptionFlags options, CFStringRef language, void (^handler)(CFRange, CGGlyph **, CGSize **, CGPoint **, CFIndex **))
 {
