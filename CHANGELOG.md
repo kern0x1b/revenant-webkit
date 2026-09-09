@@ -190,6 +190,41 @@ Dates are the day the change was measured on the device, not the day it compiled
   session. On this device that is the wrong side of the trade.
 
 ### Fixed
+- **Joined emoji were drawn as their parts.** A family, a profession, a couple -
+  anything built with a zero-width joiner - came out as two or three separate
+  glyphs. A grapheme cluster here was CoreFoundation's idea of one, and this
+  CoreFoundation is from 2012: `kCFStringComposedCharacterCluster` knows nothing
+  of the sequences Unicode added from 2015 on. The character, caret and deletion
+  iterators now use WebKit's ICU backing - version 74 in this port, and the
+  backing every non-Cocoa port already uses. An astronaut is one 26px glyph
+  where it had been two.
+- **The system font ignored `font-weight`.** Two separate faults, both fixed:
+  `kCTFontWeight*` and `kCTFontWidth*` are declared as `CGFloat` and the
+  compatibility layer had defined them as CFStrings, so every rung of the ladder
+  was a pointer read as a float; and asking for a face through a numeric weight
+  trait is an iOS 7 mechanism, so the request is now also made through
+  `CTFontCreateCopyWithSymbolicTraits`, which this release answers.
+  `-apple-system` at weight 700 draws bold and measures 34.2px against 33.0 at
+  400 - it had been identical.
+- **Thirteen of the eighteen `feBlend` modes were erased.** This port re-enables
+  NEON, which upstream disables on iOS, and `FEBlendNeonApplier` predates the CSS
+  blend modes: it implements five and writes transparent black for the rest. The
+  generic applier is compiled alongside it now and takes the other thirteen.
+- **Rounded corners were parabolas, and uneven ones were on the wrong corner.**
+  The shims for the two CoreGraphics entry points this system lacks put both
+  bezier control points on the corner vertex. WebKit's own exact beziers draw
+  them now, and both shims fall out of the path.
+- **A colour font was treated as having no colour glyphs**, because the query for
+  which glyphs are coloured does not exist here and its absence was read as "none"
+  rather than "unknown". A font that declares the colour trait is taken at its
+  word, which is what WebKit itself did until that query became unconditional.
+- **Two shims answered success and did nothing**: integer vector addition, which
+  silently dropped a channel in the audio ring buffer, and a blob bind that
+  reported SQLITE_OK while binding nothing.
+- **Foundation kept a second copy of every response.** A phone was given 8 MB of
+  URL cache on top of the 8 MB WebCore is allowed here, and a `std::max` that
+  could only ever raise it; it is 1 MB now. The back/forward cache held two fully
+  suspended pages and now holds one.
 - **SVG filters are interpolated in linear light, as the specification asks.**
   linearRGB is the space filters interpolate in by default, and it had been a
   name with nothing behind it: this CoreGraphics matches colour by primaries and
