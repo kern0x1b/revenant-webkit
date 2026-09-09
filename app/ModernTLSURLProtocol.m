@@ -766,7 +766,7 @@ static void returnIdleConnection(ModernTLSConnection *connection)
 /* What the cache may occupy. The device shares eight gigabytes of flash with
  * everything else on it, and Library/Caches is a directory the system is
  * entitled to empty when space runs short, so this is a budget and not a
- * reservation. Twenty megabytes is set against what it is for: a web app's
+ * reservation. Twenty megabytes is set against what it is for: a site's
  * shell — markup, script, stylesheets, fonts, icons — is two to five megabytes
  * once decoded, so this holds several apps' interfaces with room for the images
  * around them. Nothing here was measured on the device. If it is wrong it is
@@ -1159,7 +1159,7 @@ static void removeCacheEntry(NSString *key)
     _temporary = [[gCacheDirectory stringByAppendingPathComponent:
         [NSString stringWithFormat:@"partial-%d-%lu", (int)getpid(), serial]] copy];
 
-    /* 0600 rather than the umask: a cache of a logged-in web app's pages is worth
+    /* 0600 rather than the umask: a cache of a logged-in site's pages is worth
      * as much as the session that fetched them, and on this device every
      * application runs as the same user. */
     _handle = open([_temporary fileSystemRepresentation], O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -1729,7 +1729,7 @@ static void invalidateCacheForRequest(NSURLRequest *request, NSDictionary *heade
  * it is, and that is not a bug in the cache — it is a policy, off by default,
  * that a wrapped application turns on for its own origins.
  *
- * This engine exists to wrap a web application so that it behaves like a native
+ * This protocol exists so that a site behaves like a native
  * one, and such an application is two things that age at very different speeds.
  * There is a shell — the document, and the scripts, styles and fonts that draw
  * the interface — which changes when the operator ships a release. And there is

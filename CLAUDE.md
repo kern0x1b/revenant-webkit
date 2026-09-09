@@ -10,7 +10,8 @@ A modern WebKit engine built from source for **armv7 / iOS 6.1.3** (iPhone 4S),
 and the machinery that runs it. There are two ways the engine is used:
 
 1. **Standalone app** — the engine hosted in this repo's own application
-   (`app/`), packaged per web-app manifest (`platform/apps/`). Built by `build.sh`.
+   (`app/`), which exists to exercise the engine directly. Built by
+   `scripts/build-app-rev.sh`.
 2. **Safari substitution** — the engine dropped underneath the phone's own Mobile
    Safari by a MobileSubstrate tweak. This is the current focus; the screenshots
    in the README are of it.

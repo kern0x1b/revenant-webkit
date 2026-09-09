@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the built web app and launch it the way the system does.
+# Install the built application and launch it the way the system does.
 #
 # Running the executable over SSH as root never reaches the foreground, so
 # UIApplicationMain sits there and the log stops at "entering UIApplicationMain".

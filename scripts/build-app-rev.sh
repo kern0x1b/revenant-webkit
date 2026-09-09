@@ -2,7 +2,7 @@
 # Package the standalone RevWebView hosting test: app/rev-webview-host.m linked
 # directly against build-254-rev's Rev-prefixed WebKitLegacy, the way
 # scripts/attic/build-app.sh linked directly against the unprefixed engine -
-# not the DYLD_FRAMEWORK_PATH substitution scripts/build-app-lto.sh uses. The
+# not the DYLD_FRAMEWORK_PATH substitution the Safari tweak uses. The
 # frameworks keep their own real names (WebKitLegacy.framework etc, not
 # WebKit.framework) and are not diverted to a system path: this app coexists
 # with the system's own WebKit in one process rather than replacing it, so

@@ -2,7 +2,7 @@
 # Lay out the non-prefixed engine (build-254-lto) as the system frameworks a
 # process expects, into a standalone directory that DYLD_FRAMEWORK_PATH can point
 # at - so any process (Mobile Safari) loads our WebKit 2.54 instead of the shared
-# cache's. Same layout as scripts/build-app-lto.sh, but not tied to an app bundle.
+# cache's, and not tied to an app bundle.
 #
 #   ./layout-sys-frameworks.sh [out-dir]
 set -eu

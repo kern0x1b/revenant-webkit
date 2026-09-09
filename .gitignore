@@ -20,7 +20,7 @@ build-jsc/
 build-libcxx/
 build-trunk/
 
-# Products: the staged application, the packaged web apps, and object files.
+# Products: the staged application and object files.
 dist/
 out/
 *.log

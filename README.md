@@ -230,8 +230,8 @@ patches/engine/ This port's changes to WebKit, by area
 platform/
   safari/       The Safari substitution: the loader and the compat/hooks source
   prefs/        The RevWebKit Settings PreferenceBundle
-  apps/         Web app manifests
-  ...
+  device/       What is installed on the phone beside the engine
+  systemhook/   The launch-time hook that puts the engine under Safari
 scripts/        The build and deploy, one step per script
 tools/          Diagnostic tools, on the host and on the device
 notes/          Measurements, findings and the design journal

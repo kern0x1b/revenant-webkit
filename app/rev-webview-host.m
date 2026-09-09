@@ -1,14 +1,14 @@
 /*
  * Standalone test harness for hosting the engine's own WebView directly -
  * no UIWebView in between, so this is the direct-WebView path rather than
- * the system-engine-substitution path app/native-ui.m and scripts/build-app-lto.sh
+ * the system-engine-substitution path the Safari tweak takes
  * use. Compiled with -include compat/stubs/ios6_class_prefix.h against
  * build-254-rev, "WebView" below is RevWebView at the symbol level, and it
  * runs in the same process as the system's own (unprefixed) UIWebView/WebView
  * without a class-table collision - the whole point of tonight's rename.
  *
  * The hosting mechanism (WAKWindow over a CALayer, WebView as its content
- * view) is the same one app/main.m already proved against the unprefixed,
+ * view) is the same one the earlier host proved against the unprefixed,
  * substituted engine; this is that same mechanism, pared down to the
  * minimum needed to answer one question standalone: does a directly
  * instantiated, Rev-prefixed WebView render, run script and take touches
@@ -269,7 +269,7 @@ static void withWebLock(void (^work)(void))
     [preferences setDatabasesEnabled:YES];
     [preferences setLocalStorageEnabled:YES];
 
-    /* A modern UA string, the same one platform/apps/google.json uses for the
+    /* A modern UA string, the same shape the engine reports for the
      * substituted-engine test: without it a page can serve a "your browser is
      * too old" fallback that has nothing to do with whether the engine works. */
     [_webView setCustomUserAgent:
@@ -489,7 +489,7 @@ static void withWebLock(void (^work)(void))
  * eye: JS execution (evaluate script and read back a real result), scrolling
  * (move the scroll view and check window.pageYOffset moved with it), and
  * touch dispatch (send a synthetic tap and ask the page what was under it -
- * the same check -tapAtScreenPoint: in app/main.m uses). Runs once, off a
+ * the same check -tapAtScreenPoint: uses). Runs once, off a
  * flag file so it costs nothing when this harness is driven by a human
  * instead - see /tmp/rev-webview-host.log for the outcome either way. */
 - (void)runSelfTest

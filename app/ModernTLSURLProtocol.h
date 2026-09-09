@@ -9,7 +9,7 @@
 
 /* ---------------------------- the app-shell policy ----------------------------
  *
- * A cache-first strategy for the shell of a wrapped web application — the
+ * A cache-first strategy for the shell of a single-page site — the
  * document and the scripts, styles and fonts that draw its interface — in the
  * shape a Service Worker would give it, for an engine that has no Service Worker.
  * A stored shell response is served without touching the network even when HTTP

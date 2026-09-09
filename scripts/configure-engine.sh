@@ -66,7 +66,7 @@ cmake -S $S -B $B -G Ninja \
   `# layout code with no platform backend to write, and the goal is no longer` \
   `# a site-specific engine.` \
   `#` \
-  `# Fullscreen has a real UIKit bridge now (app/native-ui.m,` \
+  `# Fullscreen has a real UIKit bridge now,` \
   `# installFullscreenSupportIfNeeded) plus a fix for a real upstream gap:` \
   `# requestFullscreen()'s IDL is EnabledBySetting=FullScreenEnabled, checked` \
   `# against WebCore::Settings, but WebView.mm's hand-maintained WK1 preference` \
@@ -120,7 +120,7 @@ cmake -S $S -B $B -G Ninja \
   `# scavenger at 2048 ms instead of 512 gives 1626 and 1617. Tuning helps and is` \
   `# not enough - the system allocator stays.` \
   -DUSE_SYSTEM_MALLOC=ON \
-  `# Verified to build and never reachable from these web apps.` \
+  `# Verified to build and never reachable from the browser.` \
   -DENABLE_MEDIA_SOURCE=OFF -DENABLE_MEDIA_SOURCE_IN_WORKERS=OFF \
   -DENABLE_ENCRYPTED_MEDIA=OFF -DENABLE_LEGACY_ENCRYPTED_MEDIA=OFF \
   -DENABLE_WEB_AUTHN=OFF -DENABLE_WRITING_TOOLS=OFF -DENABLE_PAYMENT_REQUEST=OFF \
