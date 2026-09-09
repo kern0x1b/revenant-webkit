@@ -33,8 +33,16 @@ for f in ios6_media_stubs.cpp; do
     "$TC/usr/bin/clang++" $COMMON $STUBS $CXX_ONLY -c "$f" -o "${f%.cpp}.o"
 done
 
+# Named, not globbed: the glob archived whatever objects happened to be on disk,
+# so the retired Web Crypto bridge's stale .o files were still members of this
+# archive long after their sources were deleted - one stray undefined reference
+# away from shadowing the real crypto/openssl backend.
+OBJECTS="ios6_compat.o ios6_missing.o ios6_missing_constants.o ios6_coretext.o ios6_coregraphics.o \
+         ios6_missing_classes.o ios6_uttype.o ios6_palswift.o ios6_uicolor.o ios6_avaudio.o \
+         ios6_media_stubs.o"
+
 rm -f libios6compat.a
-ar rcs libios6compat.a ios6_*.o
+ar rcs libios6compat.a $OBJECTS
 
 # OpenSSL and libpsl travel inside this archive so the other binaries built here
 # need no link line of their own. The linker still takes only the members it

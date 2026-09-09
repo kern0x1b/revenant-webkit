@@ -99,9 +99,20 @@ long os_log_with_args() { report("os_log_with_args"); return 0; }
 long pthread_attr_set_qos_class_np() { report("pthread_attr_set_qos_class_np"); return 0; }
 long pthread_get_qos_class_np() { report("pthread_get_qos_class_np"); return 0; }
 long pthread_set_qos_class_self_np() { report("pthread_set_qos_class_self_np"); return 0; }
-long sqlite3_bind_blob64() { report("sqlite3_bind_blob64"); return 0; }
+/* No stub for sqlite3_bind_blob64. It used to answer SQLITE_OK and bind
+   nothing, which is how a database write can look like it worked; the call site
+   (SQLiteExtras.h) binds through sqlite3_bind_blob here instead. If something
+   ever reaches for it again, the link will say so, which is the point. */
 long sqlite3_errstr() { report("sqlite3_errstr"); return 0; }
-long vDSP_vaddi() { report("vDSP_vaddi"); return 0; }
+/* Adding two integer vectors is arithmetic, not platform support: implemented
+   here rather than reported missing, because the stub that returned zero also
+   left the destination untouched, which silently dropped a channel when the
+   audio ring buffer mixed 32-bit integer samples. */
+void vDSP_vaddi(const int *a, long strideA, const int *b, long strideB, int *result, long strideResult, unsigned long count)
+{
+    for (unsigned long i = 0; i < count; ++i)
+        result[i * (unsigned long)strideResult] = a[i * (unsigned long)strideA] + b[i * (unsigned long)strideB];
+}
 long vImageConvert_AnyToAny() { report("vImageConvert_AnyToAny"); return -21773; }
 void *vImageConverter_CreateWithCGImageFormat(void *srcFormat, void *destFormat, void *backgroundColor, unsigned flags, long *error)
 {

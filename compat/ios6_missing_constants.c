@@ -3,6 +3,7 @@
  * distinctly named CFString, so dictionary lookups miss rather than crash.
  */
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CGBase.h>
 
 const CFStringRef kAXSEnhanceTextLegibilityChangedNotification = CFSTR("kAXSEnhanceTextLegibilityChangedNotification");
 const CFStringRef kCAContentsFormatRGBA10XR = CFSTR("kCAContentsFormatRGBA10XR");
@@ -63,24 +64,6 @@ const CFStringRef kCTFontUIFontDesignSerif = CFSTR("kCTFontUIFontDesignSerif");
 const CFStringRef kCTFontUIFontDesignTrait = CFSTR("kCTFontUIFontDesignTrait");
 const CFStringRef kCTFontUnscaledTrackingAttribute = CFSTR("kCTFontUnscaledTrackingAttribute");
 const CFStringRef kCTFontUserInstalledAttribute = CFSTR("kCTFontUserInstalledAttribute");
-const CFStringRef kCTFontWeightBlack = CFSTR("kCTFontWeightBlack");
-const CFStringRef kCTFontWeightBold = CFSTR("kCTFontWeightBold");
-const CFStringRef kCTFontWeightHeavy = CFSTR("kCTFontWeightHeavy");
-const CFStringRef kCTFontWeightLight = CFSTR("kCTFontWeightLight");
-const CFStringRef kCTFontWeightMedium = CFSTR("kCTFontWeightMedium");
-const CFStringRef kCTFontWeightRegular = CFSTR("kCTFontWeightRegular");
-const CFStringRef kCTFontWeightSemibold = CFSTR("kCTFontWeightSemibold");
-const CFStringRef kCTFontWeightThin = CFSTR("kCTFontWeightThin");
-const CFStringRef kCTFontWeightUltraLight = CFSTR("kCTFontWeightUltraLight");
-const CFStringRef kCTFontWidthCondensed = CFSTR("kCTFontWidthCondensed");
-const CFStringRef kCTFontWidthExpanded = CFSTR("kCTFontWidthExpanded");
-const CFStringRef kCTFontWidthExtraCompressed = CFSTR("kCTFontWidthExtraCompressed");
-const CFStringRef kCTFontWidthExtraCondensed = CFSTR("kCTFontWidthExtraCondensed");
-const CFStringRef kCTFontWidthExtraExpanded = CFSTR("kCTFontWidthExtraExpanded");
-const CFStringRef kCTFontWidthSemiCondensed = CFSTR("kCTFontWidthSemiCondensed");
-const CFStringRef kCTFontWidthSemiExpanded = CFSTR("kCTFontWidthSemiExpanded");
-const CFStringRef kCTFontWidthStandard = CFSTR("kCTFontWidthStandard");
-const CFStringRef kCTFontWidthUltraCompressed = CFSTR("kCTFontWidthUltraCompressed");
 const CFStringRef kCTLanguageAttributeName = CFSTR("kCTLanguageAttributeName");
 const CFStringRef kCTUIFontTextStyleBody = CFSTR("kCTUIFontTextStyleBody");
 const CFStringRef kCTUIFontTextStyleCaption1 = CFSTR("kCTUIFontTextStyleCaption1");
@@ -126,3 +109,28 @@ const float NSURLSessionTaskPriorityDefault = 0.5f;
 
 /* Page size is fixed on every device this build can run on. */
 const unsigned long vm_kernel_page_size = 4096;
+
+/* The weight and width ladder CoreText matches a system font against. These are
+   numbers, not names: CoreTextSPI.h declares them as CGFloat, and defining them as
+   CFStrings here meant every one of them was a pointer read as a float - a denormal
+   near zero - so every -apple-system request resolved at Regular whatever its
+   font-weight said. The values are CoreText's own. */
+const CGFloat kCTFontWeightUltraLight = -0.80f;
+const CGFloat kCTFontWeightThin = -0.60f;
+const CGFloat kCTFontWeightLight = -0.40f;
+const CGFloat kCTFontWeightRegular = 0.0f;
+const CGFloat kCTFontWeightMedium = 0.23f;
+const CGFloat kCTFontWeightSemibold = 0.30f;
+const CGFloat kCTFontWeightBold = 0.40f;
+const CGFloat kCTFontWeightHeavy = 0.56f;
+const CGFloat kCTFontWeightBlack = 0.62f;
+const CGFloat kCTFontWidthUltraCompressed = -0.40f;
+const CGFloat kCTFontWidthExtraCompressed = -0.30f;
+const CGFloat kCTFontWidthCompressed = -0.20f;
+const CGFloat kCTFontWidthExtraCondensed = -0.15f;
+const CGFloat kCTFontWidthCondensed = -0.10f;
+const CGFloat kCTFontWidthSemiCondensed = -0.05f;
+const CGFloat kCTFontWidthStandard = 0.0f;
+const CGFloat kCTFontWidthSemiExpanded = 0.05f;
+const CGFloat kCTFontWidthExpanded = 0.10f;
+const CGFloat kCTFontWidthExtraExpanded = 0.20f;
