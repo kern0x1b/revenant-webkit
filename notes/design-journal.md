@@ -5,8 +5,7 @@ this decade: the sign-in form of soundcloud.com comes back with zero input
 elements in the DOM, because the script that builds it never runs.
 
 The goal is a browser view — one `UIView`, one URL, no chrome — running an
-engine new enough to open today's sites on an iPhone 4S. If that works, the same
-view becomes a way to package web apps for these devices.
+engine new enough to open today's sites on an iPhone 4S.
 
 ## Base: current WebKit trunk
 
