@@ -70,8 +70,24 @@ needs. Each of those is fixed here.
   decoder, since this ImageIO cannot; the formats that remain undecodable are no
   longer advertised to servers, which had been negotiating pictures the browser
   could not render.
+- **Colour, measured rather than eyeballed.** Gradients interpolate premultiplied,
+  every blend mode including the four non-separable ones is reached through
+  CoreGraphics, and SVG filters interpolate in linear light and read back the
+  numbers the specification asks for. This graphics library matches colour spaces
+  by primaries and ignores transfer functions, so the engine performs those
+  conversions itself, the way ports without colour management do.
+- **Current Apple emoji, composed.** The device's 2013 font stops at Unicode 6;
+  `scripts/install-emoji-font.sh` subsets the Mac's current font onto the phone,
+  and joined sequences - an astronaut, a family, a skin tone - shape as one glyph
+  rather than as their parts, which needed the character break iterator to use
+  ICU rather than 2012 rules with no zero-width-joiner in them.
 - **A native Settings pane** (`RevWebKit`) for the new-tab start page, a custom
   home URL, and per-app engine injection. See [The Settings pane](#the-settings-pane).
+
+Correctness is checked by a numeric suite that runs on the device and reads
+pixels and glyph widths rather than screenshots: `tests/device/run.sh`, currently
+**24 of 24**. What it covers, and the one limitation it records, are in
+[tests/device/README.md](tests/device/README.md).
 
 ## How it works
 

@@ -14,6 +14,22 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$ROOT/tools/device.sh"
 
+FONTS=/System/Library/Fonts/Cache
+BACKUP=/var/mobile/emoji-backup
+
+if [ "${1:-}" = "--status" ]; then
+    device_run 20 "cat $BACKUP/installed.txt 2>/dev/null || echo 'no font installed by this script'"
+    device_run 20 "ls -l '$FONTS/AppleColorEmoji@2x.ttf' $FONTS/AppleColorEmoji.ttf"
+    exit 0
+fi
+
+if [ "${1:-}" = "--restore" ]; then
+    device_run 60 "cp $BACKUP/AppleColorEmoji*.ttf $FONTS/ && rm -f $BACKUP/installed.txt && echo restored"
+    device_run 30 "killall SpringBoard" || true
+    echo "restored; the phone is respringing"
+    exit 0
+fi
+
 SOURCE=${EMOJI_SOURCE:-/System/Library/Fonts/Apple Color Emoji.ttc}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -50,9 +66,6 @@ for destination, keep in ((sys.argv[2], (40, 64, 96)), (sys.argv[3], (20, 40, 48
     font.save(destination)
 PY
 
-FONTS=/System/Library/Fonts/Cache
-BACKUP=/var/mobile/emoji-backup
-
 echo "backing up the device's own fonts to $BACKUP"
 device_run 30 "mkdir -p $BACKUP; cp -n '$FONTS/AppleColorEmoji@2x.ttf' $BACKUP/; cp -n $FONTS/AppleColorEmoji.ttf $BACKUP/"
 
@@ -69,7 +82,18 @@ for file in "AppleColorEmoji@2x.ttf" "AppleColorEmoji.ttf"; do
       && rm -f /var/mobile/emoji-new.ttf"
 done
 
-echo "installed; respringing"
+VERSION=$(python3 - "$WORK/AppleColorEmoji@2x.ttf" <<'PY'
+import sys
+from fontTools.ttLib import TTFont
+font = TTFont(sys.argv[1])
+name = font["name"].getDebugName(5) or "unknown version"
+print(f"{name}, {len(font.getGlyphOrder())} glyphs")
+PY
+)
+device_run 20 "echo '$VERSION, installed $(date +%Y-%m-%d)' > $BACKUP/installed.txt"
+
+echo "installed: $VERSION"
+echo "respringing"
 device_run 30 "killall SpringBoard" || true
 
 cat <<NOTE
