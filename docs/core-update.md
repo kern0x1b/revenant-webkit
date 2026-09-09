@@ -18,6 +18,29 @@ from, and `scripts/port-delta.sh` prints exactly that. Today, against
 1247 modified, 82 added, 60 deleted
 ```
 
+## How far behind the snapshot is
+
+`scripts/port-delta.sh --freshness` answers that from content rather than dates,
+because a graft has no dates to compare: for each commit on the upstream branch
+it takes a line that commit added and looks for it in our tree, and the first
+one we already carry is where the snapshot sits. Today:
+
+```
+branch tip: 2026-09-03  Cherry-pick 305413.1005@safari-7624.5.1.10-branch
+we carry:   2026-09-03  Cherry-pick 305413.982@safari-7624.5.1.10-branch
+behind by:  5 commits
+```
+
+So the engine is not on an old WebKit: it is on the current stable series,
+version 626.1.1, five commits behind that branch's tip. The series is alive -
+`webkitglib/2.54` last moved on 2026-09-03 and `2.52` on 2026-09-04, both taking
+cherry-picks from Safari's branch, while `2.50` stopped in March.
+
+Distance from `main` cannot be answered from this clone: `main` is fetched as a
+single commit, so its history is not here. The relationship is the usual one -
+the 2.54 branch is cut from main and receives security and stability picks,
+while main is where new work lands.
+
 ## What that delta actually is
 
 Two thirds of it is not port-specific logic:
