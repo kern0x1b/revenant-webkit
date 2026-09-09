@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Push the built engine frameworks to /usr/lib/rev-fw on the device — the path the
 # Safari-substitution loader points DYLD_FRAMEWORK_PATH at. Backs up first, then resprings.
-#   ./deploy-engine.sh          (after layout-sys-frameworks.sh has staged dist/rev-sys-fw)
+#   ./deploy-engine.sh          (stages dist/rev-sys-fw from the build first)
 set -euo pipefail
 P=$(cd "$(dirname "$0")/.." && pwd)
 . "$P/tools/device.sh"
 REV=/usr/lib/rev-fw
 SRC="$P/dist/rev-sys-fw"
-[ -d "$SRC" ] || { echo "run scripts/layout-sys-frameworks.sh first" >&2; exit 1; }
+bash "$P/scripts/layout-sys-frameworks.sh" >/dev/null
 device_run 12 "echo ok" >/dev/null || { echo "device unreachable" >&2; exit 1; }
 echo "backing up current engine -> $REV.bak"
 device_run 30 "mkdir -p $REV.bak; for fw in JavaScriptCore WebCore WebKit; do cp -f $REV/\$fw.framework/\$fw $REV.bak/\$fw 2>/dev/null || true; done"

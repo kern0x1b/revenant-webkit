@@ -37,8 +37,44 @@ the crash was blamed on whatever the page happened to be testing.
   before the crash, so the fault is upstream of the failed-load handling, in the
   response path itself.
 
+## What the crash actually is
+
+Symbolicated against the built framework rather than read off the nearest
+exported symbol, the stack is the same every time and has nothing to do with
+error handling:
+
+```
+-[WebCoreResourceHandleAsOperationQueueDelegate connection:didReceiveData:...]
+ResourceLoader::didReceiveData
+SubresourceLoader::didReceiveBuffer
+CachedImage::updateBufferInternal
+CachedImage::updateImageData
+BitmapImage::dataChanged
+BitmapImageSource::dataChanged
+BitmapImageSource::setData
+BitmapImageSource::decoder            <- blx through the decoder's vtable
+BitmapImageSource::size               <- and this is what it landed on
+BitmapImageDescriptor::size + 27      <- SIGSEGV
+```
+
+The faulting instruction is `ldr r0, [r5, #0x68]`, the load of the source's
+decoder field. The call before it is `decoder->setExpectedContentSize(...)`,
+dispatched through vtable slot `0x64`; on the object that answered, that slot
+holds `BitmapImageSource::size`. A virtual call that lands on a function of a
+different class is a vtable layout disagreement between translation units, not
+a logic bug - which is why every beacon placed in the error and paint paths
+stayed silent, and why the same crash appears on a page of large images and on
+a page with one 404.
+
+`ImageDecoder`'s virtual functions are gated on four build flags
+(`SPATIAL_IMAGE_DETECTION`, `QUICKLOOK_FULLSCREEN`, `SPATIAL_IMAGE_CONTROLS`,
+`GPU_PROCESS`), so a stale object file from before a header change shifts every
+slot after them - the partial-build trap this port already knows about, in a
+place where it does not crash until an image is streamed.
+
 ## Where to look next
 
-`SubresourceLoader::didFail` / `ResourceLoader::didFail` and the 404 response
-path in `ResourceHandleCFURLConnectionDelegate` - with a beacon at each, on the
-repro above, which takes half a minute per run.
+A clean rebuild first, because that is what a stale-slot mismatch predicts.
+If the crash survives a clean build, the disagreement is in the source and the
+next step is to compare the compiled vtable of `ImageDecoderCG` against the
+slot the caller uses, rather than to add more beacons.
