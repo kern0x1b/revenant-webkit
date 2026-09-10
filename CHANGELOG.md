@@ -59,6 +59,14 @@ Dates are the day the change was measured on the device, not the day it compiled
   CoreAnimation accepts and never draws. `tests/device/gl-present.sh` reads the
   colour off the screen. WebGL 2.0 stays out of reach: it needs OpenGL ES 3.0 and
   this silicon is ES 2.0. See `docs/webgl.md`.
+- **A WebGL context asked for without alpha.** `getContext("webgl", {alpha:false})`
+  lost its context on creation: WebKit asks for `GL_RGB` as the surface's
+  internal format and this backend accepted only BGRA and RGBA. It is served
+  from the same BGRA surface now, with the alpha answered as opaque - swizzled
+  away when sampling and cleared once in the surface itself - which is what the
+  CGL backend does. Found by Khronos' conformance suite, which now runs on the
+  device through `tests/device/conformance.sh`: 2236 of its checks pass over the
+  areas run so far, and the two failures left are recorded in `docs/webgl.md`.
 - **WebGL that animates, rather than drawing one frame.** A page that redrew in
   `requestAnimationFrame` froze the web thread after its first frame - no timers,
   no callbacks, no crash. `CVOpenGLESTextureCache` requires a flush to let go of

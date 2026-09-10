@@ -133,6 +133,48 @@ page that simply stopped. Releasing the surface's texture and flushing the cache
 in `releaseTexImage` is the documented shape of this API, and it is what the
 frame-rate numbers above are measured on.
 
+## What Khronos' conformance suite says
+
+The suite is not vendored - it is cloned separately and served from the Mac, and
+`tests/device/conformance.sh` runs named tests on the phone. What has been run
+so far, and what it found:
+
+| Area | Result |
+| --- | --- |
+| Framebuffers and renderbuffers, 5 files | 699 pass, 0 fail |
+| Context attributes, alpha/depth/stencil/antialias | 524 pass, 0 fail |
+| Reading pixels, 2 files | 373 pass, 0 fail |
+| State, enums, buffers, error reporting, 4 files | 368 pass, 0 fail |
+| Texture size, formats, copies, default texture | 242 pass, 0 fail |
+| `rendering/draw-arrays-out-of-bounds` | 30 pass, 0 fail |
+| `textures/misc/texture-npot` | 84 pass, **2 fail** |
+| `rendering/culling` | 13 pass, **4 fail** |
+
+The first risk this document listed - framebuffer completeness for formats other
+than RGBA8 - is answered: 699 checks over attachment format combinations, none
+failing.
+
+Two bugs it found, both fixed here:
+
+- **A context asked for without an alpha channel was lost on creation.** WebKit
+  asks for `GL_RGB` as the pbuffer's internal format, and this backend accepted
+  only BGRA and RGBA, so `EGL_CreatePbufferFromClientBuffer` failed and the page
+  got a lost context. The CGL backend serves `GL_RGB` from the same BGRA surface
+  and so does this one now.
+- **And then read back transparent.** A surface that has an alpha channel serving
+  a context that asked for none has to answer opaque: ANGLE swizzles the alpha
+  away when sampling once the surface says `hasEmulatedAlphaChannel`, and the
+  surface's own bytes are cleared to opaque once, which is what CGL does.
+
+Two that are still open:
+
+- **NPOT cube maps with a `LINEAR` filter do not draw.** Two checks in
+  `texture-npot`. NPOT 2D textures are fine.
+- **Culling culls everything once `cullFace` or `frontFace` is set explicitly.**
+  Four checks in `rendering/culling`: with the default state, faces draw and are
+  culled correctly, and every case that sets the state by hand and expects a face
+  to be drawn gets nothing. Drawing with `CULL_FACE` off is unaffected.
+
 ## The tools that proved each step
 
 - `tools/gles-iosurface-probe.m` - can this GPU bind an IOSurface as a texture at
@@ -145,9 +187,8 @@ frame-rate numbers above are measured on.
 
 ## What is left
 
-- **Conformance.** A triangle is not a test suite. The known risks are this
-  driver's own: framebuffer completeness for formats other than RGBA8, and the
-  texture formats SGX543 handles differently from the specification.
+- **Conformance, the rest of it.** What has been run is below; the suite has
+  hundreds of files and this is a few dozen of them.
 - **The `GL_Finish` per frame.** Metal signals frame completion through a shared
   event; GLES 2.0 has no fence, so the frame is waited for instead. It is the
   same guarantee and a worse way to get it.
