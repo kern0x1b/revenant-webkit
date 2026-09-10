@@ -1,10 +1,3 @@
-// revavprobe — ask AVFoundation directly whether it can open a URL, outside the
-// engine. Prints the AVPlayerItem status and error for each URL given, so a
-// playback failure can be attributed to AVFoundation itself rather than to the
-// WebKit media pipeline.
-//
-//   revavprobe file:///tmp/sample.mp4 http://host/sample.mp4
-
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
 #include <unistd.h>

@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-# Does a WebGL canvas reach the screen?
-#
-#   tests/device/gl-present.sh [HOST_IP]
-#
-# The suite in run.sh checks WebGL the way a page can check itself - a context,
-# a clear read back, a triangle drawn and read back - and every one of those
-# passes while the canvas is a white rectangle, because reading pixels back and
-# presenting them are different paths. This one loads a canvas cleared to red
-# and looks at the screen.
 set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 . "$ROOT/tools/device.sh"

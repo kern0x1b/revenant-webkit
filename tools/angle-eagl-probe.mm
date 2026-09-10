@@ -1,14 +1,3 @@
-// angle-eagl-probe — bring ANGLE up on this GPU, through the EAGL backend.
-//
-// The stage after gles-iosurface-probe: not "can an IOSurface be a texture",
-// but "does ANGLE itself initialise, create a context and render on this
-// hardware". It links the ANGLE static libraries directly and drives them the
-// way WebCore does - through the EGL_/GL_ entry points, with the prototypes
-// turned off - so the answer is about the backend and not about WebKit.
-//
-//   angle-eagl-probe
-//
-// Build: see docs/webgl.md; the libraries come from build-254-angle.
 #define EGL_EGL_PROTOTYPES 0
 #define GL_GLES_PROTOTYPES 0
 #include <EGL/egl.h>
@@ -23,8 +12,6 @@
 #import <Foundation/Foundation.h>
 
 
-// IOSurface is a private framework on this release; the probe reaches it the
-// same way the engine does, through dlsym rather than a link.
 #include <dlfcn.h>
 #include <string.h>
 
@@ -141,8 +128,6 @@ int main(void)
     printf("GL_VERSION                  %s\n", (const char *)GL_GetString(GL_VERSION));
     printf("GL_SHADING_LANGUAGE_VERSION %s\n", (const char *)GL_GetString(GL_SHADING_LANGUAGE_VERSION));
 
-    // A colour with a different value in every channel, so a swapped component
-    // order is a wrong number rather than a plausible one.
     GL_Viewport(0, 0, kSize, kSize);
     GL_ClearColor(16 / 255.0f, 64 / 255.0f, 192 / 255.0f, 1.0f);
     GL_Clear(GL_COLOR_BUFFER_BIT);
@@ -156,10 +141,6 @@ int main(void)
 
     bool matches = pixel[0] == 16 && pixel[1] == 64 && pixel[2] == 192 && pixel[3] == 255;
 
-    // The surface a browser actually wants: an IOSurface it can hand to the
-    // compositor. Render into it through ANGLE, then read the surface's own
-    // bytes on the CPU - if they carry what the GPU drew, the canvas has a way
-    // out of the GPU and onto the screen.
     bool surfaceMatches = false;
     printf("\n-- IOSurface surface --\n");
     printf("EGL_ANGLE_iosurface_client_buffer %s\n",

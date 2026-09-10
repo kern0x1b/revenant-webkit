@@ -1,19 +1,4 @@
 #!/usr/bin/env bash
-# Run Khronos WebGL conformance tests on the device and print pass/fail per test.
-#
-#   WEBGL_TESTS=~/Git/tools/webgl-conformance/sdk/tests \
-#   tests/device/conformance.sh conformance/rendering/culling.html [more...]
-#
-# The suite is not vendored here - it is a separate project of its own:
-#
-#   git clone --depth 1 --filter=blob:none --sparse \
-#       https://github.com/KhronosGroup/WebGL.git webgl-conformance
-#   cd webgl-conformance && git sparse-checkout set sdk/tests
-#
-# Each test is a page that writes PASS and FAIL lines into its own document, so
-# conformance-runner.html loads them one at a time in an iframe, reads the lines
-# out and reports them the way every other check here reports - through the
-# serving HTTP server's request log.
 set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 . "$ROOT/tools/device.sh"

@@ -1,30 +1,10 @@
 #!/usr/bin/env bash
-# Configure the engine WITH the Rev class prefix, into build-254-rev.
-#
-# The prefix exists so this engine can sit in a process next to the system
-# one: UIKit statically links the real WebKit as a transitive dependency of
-# its own Mach-O, loaded before any of our code runs, so the system engine
-# cannot be kept out of the process. This build's classes are renamed instead
-# (WebView -> RevWebView etc., compat/stubs/ios6_class_prefix.h, force-included
-# below) so the two coexist in one process without an Objective-C runtime
-# class-table collision. See scripts/attic/configure-webkit-254.sh, the
-# retired predecessor this restores and updates with everything added to
-# configure-engine.sh since: fullscreen, XSLT, the newer JIT/allocator
-# settings. Keep the two configure scripts in step for anything else.
-#
-# Everything else - and why - matches configure-engine.sh; only the prefix
-# machinery and the build/export paths differ.
 set -eu
 P=$(cd "$(dirname "$0")/.." && pwd); L=$P/third_party/libcxx-armv7; I=$P/third_party/icu-armv7; X=$P/third_party/libxslt-armv7; SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
 S=$P/webkit-254; B=$P/build-254-rev
 CXXF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -nostdinc++ -isystem $L/include/c++/v1 -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_dispatch_compat.h -include $P/compat/stubs/ios6_class_prefix.h -D_LIBCPP_DISABLE_AVAILABILITY -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
 CF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_class_prefix.h -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
 
-# The .exp file WebKitLegacy links with names its own exported ObjC classes by
-# their real (unprefixed) name; the force-included header renames the classes
-# in source but knows nothing about this file, so every _OBJC_CLASS_$_Foo it
-# lists has to be rewritten to match or the linker exports symbols that no
-# longer exist.
 python3 $P/tools/prefix-exports.py $P/compat/stubs/ios6_class_prefix.h \
   $S/Source/WebKitLegacy/WebKitLegacy-iOS.exp $P/compat/WebKitLegacy-iOS-rev.exp
 

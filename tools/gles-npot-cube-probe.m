@@ -1,18 +1,3 @@
-// gles-npot-cube-probe — will this driver sample a non-power-of-two cube map?
-//
-// Khronos' conformance test conformance/textures/misc/texture-npot.html fails
-// two checks here, both of them "NPOT cubemap with TEXTURE_MIN_FILTER set to
-// LINEAR should draw"; the NPOT 2D cases pass. OpenGL ES 2.0 allows a
-// non-power-of-two texture as long as it is not mipmapped and wraps with
-// CLAMP_TO_EDGE, and says nothing that exempts cube maps - so either this
-// driver disagrees or something above it does. The driver reports no npot
-// extension at all, which is a hint but not an answer, because the allowance is
-// in the core specification rather than an extension.
-//
-// Build (armv7, iOS 6):
-//   clang -target armv7-apple-ios6.0 -isysroot "$IOS_SDK" -O2 -fno-objc-arc \
-//       -framework Foundation -framework OpenGLES \
-//       tools/gles-npot-cube-probe.m -o dist/gles-npot-cube-probe
 #import <Foundation/Foundation.h>
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES2/gl.h>
@@ -36,7 +21,6 @@ static GLuint compile(GLenum type, const char *source)
     return shader;
 }
 
-// A cube map whose faces are `size` by `size`, every texel green.
 static GLuint makeCubeMap(int size)
 {
     GLubyte *pixels = malloc(size * size * 4);

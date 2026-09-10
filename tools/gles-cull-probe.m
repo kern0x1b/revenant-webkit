@@ -1,16 +1,3 @@
-// gles-cull-probe — which colour attachments does this driver cull into?
-//
-// Khronos' conformance/rendering/culling.html fails four checks on this device.
-// ANGLE sends glCullFace and glEnable(GL_CULL_FACE), and the driver reports the
-// mode back correctly at the moment of the draw, so the state was never the
-// problem. This probe takes ANGLE and WebKit out of the picture and asks the
-// driver the same question against one attachment after another, because the
-// attachment turned out to be what decides it.
-//
-// Build (armv7, iOS 6):
-//   clang -target armv7-apple-ios6.0 -isysroot "$IOS_SDK" -O2 -fno-objc-arc \
-//       -framework Foundation -framework CoreVideo -framework OpenGLES \
-//       tools/gles-cull-probe.m -o dist/gles-cull-probe
 #import <Foundation/Foundation.h>
 #import <CoreVideo/CoreVideo.h>
 #import <OpenGLES/EAGL.h>
@@ -81,10 +68,6 @@ static GLuint compile(GLenum type, const char *source)
     return shader;
 }
 
-// Draws a front-facing triangle with FRONT culled, so a driver that culls
-// leaves the red clear behind and one that does not paints it green.
-// Four things that might make the driver notice a state change before the draw
-// instead of one draw later.
 typedef enum { NoNudge, FlushNudge, FinishNudge, RebindNudge, RedundantEnableNudge } Nudge;
 static Nudge gNudge = NoNudge;
 static GLuint gFramebuffer = 0;
@@ -127,8 +110,6 @@ static const char *cullVerdict(GLint colourLocation)
 
         GLubyte pixel[4];
         glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-        // Green sits in the middle byte whichever order the driver hands back,
-        // so it is the only channel worth deciding on.
         bool drawn = pixel[1] > 128;
         cursor += snprintf(cursor, sizeof(text) - (cursor - text), "%s%s:%s[%d,%d,%d]",
                            i ? " " : "", names[i], drawn == shouldDraw[i] ? "ok" : "WRONG",
@@ -137,8 +118,6 @@ static const char *cullVerdict(GLint colourLocation)
     return text;
 }
 
-// Culling is not the only rasterizer state worth asking about: if a whole class
-// of it is dropped for this attachment, the port needs to know the blast radius.
 static const char *rasterizerVerdict(GLint colourLocation)
 {
     static char text[128];
@@ -152,7 +131,6 @@ static const char *rasterizerVerdict(GLint colourLocation)
     glUniform4fv(colourLocation, 1, green);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
 
-    // Scissor: the pixel read back sits outside the box, so it must stay red.
     glClearColor(1, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     glEnable(GL_SCISSOR_TEST);
@@ -162,7 +140,6 @@ static const char *rasterizerVerdict(GLint colourLocation)
     glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
     cursor += snprintf(cursor, sizeof(text) - (cursor - text), "scissor:%s", pixel[1] > 128 ? "IGNORED" : "ok");
 
-    // Colour mask: green is masked off, so the pixel must stay red.
     glClear(GL_COLOR_BUFFER_BIT);
     glColorMask(GL_TRUE, GL_FALSE, GL_TRUE, GL_TRUE);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -170,7 +147,6 @@ static const char *rasterizerVerdict(GLint colourLocation)
     glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
     cursor += snprintf(cursor, sizeof(text) - (cursor - text), " colormask:%s", pixel[1] > 128 ? "IGNORED" : "ok");
 
-    // Blend: half green added to a black clear should land near 128, not 0 or 255.
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     glEnable(GL_BLEND);
@@ -203,9 +179,6 @@ int main(void)
         GLint colourLocation = glGetUniformLocation(program, "col");
         glViewport(0, 0, kSize, kSize);
 
-        // Each case gets a framebuffer of its own, because swapping attachments
-        // on one framebuffer gave answers that moved between runs - the stand
-        // was measuring itself.
         for (int which = 0; which < 3; which++)
         {
             const char *name = "";
@@ -246,8 +219,6 @@ int main(void)
                 continue;
             }
 
-            // Three passes, because a driver that only mishandles the first draw
-            // into a fresh target looks exactly like one that never culls.
             gFramebuffer = framebuffer;
             const char *nudgeNames[] = { "no nudge     ", "glFlush      ", "glFinish     ",
                                          "rebind fbo   ", "redundant on " };

@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Build ICU 74.2 twice: once for this Mac (ICU needs its own tools to generate
-# data) and once for armv7/iOS 6, which is what WebKit links against.
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}

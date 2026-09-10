@@ -44,6 +44,28 @@ scripts/configure-engine.sh          # CMake configure; each flag carries why it
 ninja -C build-254-lto
 ```
 
+Three things about these scripts are worth knowing before reading them, because
+they explain choices that look arbitrary otherwise.
+
+**The engine is built without a class prefix.** The prefix exists so this engine
+can sit in a process beside the system one. When a process takes our frameworks
+through `DYLD_FRAMEWORK_PATH` the system engine is never loaded, there is
+nothing to collide with, and UIKit needs the classes under their real names - it
+links `_OBJC_CLASS_$_WebView`, not a prefixed spelling. `configure-engine.sh`
+therefore configures the unprefixed build, and `configure-engine-rev.sh` the
+prefixed one for the standalone application.
+
+**`layout-sys-frameworks.sh` arranges that build as the system frameworks a
+process expects**, into a standalone directory rather than an application
+bundle, which is what makes `DYLD_FRAMEWORK_PATH` substitution possible for
+Mobile Safari.
+
+**Nothing in the compatibility library may define a symbol WebKit itself
+defines.** A stub that shadows a real definition links cleanly and then fails at
+runtime: `WebCoreWebThreadLock` is a function pointer in WTF and was a function
+here, which turned a call into a store into `__TEXT` and a bus error.
+`build-compat.sh` ends with an `audit` step that checks for exactly that.
+
 `build-254-lto/` and `dist/` are reproducible and gitignored.
 
 **A change to a WebCore header means a full `ninja`.** A partial build leaves

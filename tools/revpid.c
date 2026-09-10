@@ -1,16 +1,3 @@
-/* Print the pid of each running process, optionally only those whose name
- * contains a substring.
- *
- *   revpid              # every process
- *   revpid MobileSafari # just the browser
- *
- * The device has no ps, and revmem takes a pid rather than a name, so there was
- * no way to measure a process's memory without first knowing its pid. The
- * kernel will list them through sysctl, which needs no entitlement.
- *
- *   clang -target armv7-apple-ios6.0 -isysroot $IOS_SDK -O1 -o revpid revpid.c
- *   ldid -S revpid && scp revpid root@device:/usr/bin/
- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

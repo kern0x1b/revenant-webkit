@@ -1,10 +1,3 @@
-// revclip — print what the system pasteboard holds, and the types it holds it as.
-// The phone has no way to look: this is how a copy made by a page is checked
-// against what every other app on the device would actually see.
-//
-//   revclip            the plain-text value and every type on item 0
-//
-// Build (armv7, iOS 6): see .claude/skills/test.
 #import <UIKit/UIKit.h>
 #include <stdio.h>
 

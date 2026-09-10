@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-# What the port is, in numbers, against the upstream release it sits on.
-#
-# The engine is a graft: the port branch has no real ancestry, so "how far have
-# we drifted" cannot be read from git log. It can be read from the diff against
-# the upstream branch the snapshot was cut from, which is what this prints.
-#
-#   ./port-delta.sh [upstream-ref]              what the port changed
-#   ./port-delta.sh --freshness [upstream-ref]  how far the snapshot is behind
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -21,10 +13,6 @@ git -C "$ENGINE" rev-parse --verify -q "$BASE" >/dev/null || {
 }
 
 if [ "$MODE" = freshness ]; then
-    # Dates say nothing here: the snapshot has no ancestry, so being "behind" has
-    # to be read from content. For each commit on the branch, take a line it
-    # added and look for that line in our tree. The first one we already carry is
-    # where the snapshot sits.
     echo "how fresh the snapshot is, against $BASE"
     echo "  branch tip: $(git -C "$ENGINE" log -1 --format='%ad  %s' --date=short "$BASE" | cut -c1-72)"
     boundary=""

@@ -13,8 +13,6 @@ import sys
 PAL = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else
                    "webkit-trunk/Source/WebCore/PAL/pal")
 
-# Where each framework lives on iOS. A framework that is itself absent makes
-# every constant in it absent, which is worth knowing separately.
 LOCATION = {
     "AVFoundation": "/System/Library/Frameworks/AVFoundation.framework/AVFoundation",
     "CoreMedia": "/System/Library/Frameworks/CoreMedia.framework/CoreMedia",

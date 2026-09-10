@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# Build libios6compat.a — the symbols iOS 6 does not have.
-#
-# Nothing here may define a symbol that WebKit itself defines. A stub that
-# shadows a real definition links fine and then fails at runtime, which is how
-# WebCoreWebThreadLock — a function pointer in WTF, a function here — turned
-# into a store into __TEXT and a bus error. `audit` below checks for that.
 set -e
 P=$(cd "$(dirname "$0")/.." && pwd)
 SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
@@ -17,9 +11,6 @@ CXX_ONLY="-nostdinc++ -isystem $L/include/c++/v1 -D_LIBCPP_DISABLE_AVAILABILITY 
 
 cd $P/compat
 
-# _CFHostIsDomainTopLevel's real Public Suffix List lookup is the only piece
-# here that needs libpsl, so it carries the include path the same way the
-# archive carries their dependencies.
 "$TC/usr/bin/clang" $COMMON -I $P/third_party/libpsl-armv7/include \
     -c ios6_compat.c -o ios6_compat.o
 
@@ -33,10 +24,6 @@ for f in ios6_media_stubs.cpp; do
     "$TC/usr/bin/clang++" $COMMON $STUBS $CXX_ONLY -c "$f" -o "${f%.cpp}.o"
 done
 
-# Named, not globbed: the glob archived whatever objects happened to be on disk,
-# so the retired Web Crypto bridge's stale .o files were still members of this
-# archive long after their sources were deleted - one stray undefined reference
-# away from shadowing the real crypto/openssl backend.
 OBJECTS="ios6_compat.o ios6_missing.o ios6_missing_constants.o ios6_coretext.o ios6_coregraphics.o \
          ios6_missing_classes.o ios6_uttype.o ios6_palswift.o ios6_uicolor.o ios6_avaudio.o \
          ios6_media_stubs.o"
@@ -44,11 +31,6 @@ OBJECTS="ios6_compat.o ios6_missing.o ios6_missing_constants.o ios6_coretext.o i
 rm -f libios6compat.a
 ar rcs libios6compat.a $OBJECTS
 
-# OpenSSL and libpsl travel inside this archive so the other binaries built here
-# need no link line of their own. The linker still takes only the members it
-# needs: for libpsl that is psl.o, where the built-in list and
-# psl_is_public_suffix live. WebCore links libcrypto directly now, for WebKit's
-# own OpenSSL crypto backend, so it does not rely on this.
 mkdir -p /tmp/ios6-openssl-members
 (cd /tmp/ios6-openssl-members && rm -f *.o && ar x $P/third_party/openssl-armv7/lib/libcrypto.a)
 ar rs libios6compat.a /tmp/ios6-openssl-members/*.o > /dev/null 2>&1

@@ -148,6 +148,31 @@ tests/device/gl-present.sh
 It prints how much of the page area is red and exits non-zero when the answer is
 `absent`. The screenshot stays in `tests/device/sweep-shots/gl-present.png`.
 
+## conformance.sh — Khronos' suite, on the phone
+
+The suite is not vendored here; it is a project of its own and is cloned
+separately:
+
+```sh
+git clone --depth 1 --filter=blob:none --sparse \
+    https://github.com/KhronosGroup/WebGL.git webgl-conformance
+cd webgl-conformance && git sparse-checkout set sdk/tests
+```
+
+Then name the tests to run; `WEBGL_TESTS` points at the checkout if it is not
+in `~/Git/tools/webgl-conformance/sdk/tests`:
+
+```sh
+tests/device/conformance.sh conformance/rendering/culling.html
+```
+
+Each test writes its own PASS and FAIL lines into its page, so
+`conformance-runner.html` loads them one at a time in an iframe and reads those
+lines back out. Two things about reading the result: a test's FAIL line states
+the *expectation*, and the values actually read are on the line after it, which
+the runner now includes. What has been run so far, and the two failures left,
+are in [../../docs/webgl.md](../../docs/webgl.md).
+
 ## gl-frame-rate.sh — a canvas that keeps drawing, and how fast
 
 Everything else about WebGL here is measured on one frame, and one frame hid a

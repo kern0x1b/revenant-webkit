@@ -70,7 +70,6 @@ def selectors(lines, wanted):
                 found.add(collecting + name.group(1))
                 continue
 
-        # Any other key at method-list depth ends the list.
         if collecting and re.match(r"^\s+(?!name|types|imp|entsize|count)\S", line):
             collecting = None
 

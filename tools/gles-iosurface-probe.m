@@ -1,22 +1,3 @@
-// gles-iosurface-probe — does this GPU let an IOSurface be a GL texture?
-//
-// WebGL here would mean an ANGLE backend on EAGL/GLES2 (Metal needs A7), and the
-// single piece of that plan with no precedent in the tree is the surface: ANGLE's
-// EGL_IOSURFACE_ANGLE path binds an IOSurface as a texture, and GLES2 has no
-// CGLTexImageIOSurface2D. The route that should work on this hardware is
-// CVOpenGLESTextureCache over a CVPixelBuffer backed by the IOSurface.
-//
-// This answers that question on the device, outside WebKit, before any of the
-// backend is written: create the surface, bind it as a texture, render into it
-// through a framebuffer, and read the bytes back out of the surface itself. If
-// the colour written by the GPU is the colour the CPU reads, the plan holds.
-//
-//   gles-iosurface-probe
-//
-// Build (armv7, iOS 6):
-//   clang -target armv7-apple-ios6.0 -isysroot "$IOS_SDK" -O2 -fno-objc-arc \
-//       -framework Foundation -framework CoreVideo -framework OpenGLES \
-//       tools/gles-iosurface-probe.m -o dist/gles-iosurface-probe
 #import <Foundation/Foundation.h>
 #import <CoreVideo/CoreVideo.h>
 #import <OpenGLES/EAGL.h>
@@ -25,8 +6,6 @@
 #include <dlfcn.h>
 #include <stdio.h>
 
-// IOSurface is a private framework on this release, so everything comes through
-// dlsym rather than a link that would fail to load.
 typedef CFTypeRef (*IOSurfaceCreateFunction)(CFDictionaryRef);
 typedef void *(*IOSurfaceGetBaseAddressFunction)(CFTypeRef);
 typedef size_t (*IOSurfaceGetBytesPerRowFunction)(CFTypeRef);
@@ -113,8 +92,6 @@ int main(void)
         if (completeness != GL_FRAMEBUFFER_COMPLETE)
             return 1;
 
-        // A colour with a different value in every channel, so a swapped
-        // component order shows up as the wrong number rather than as green.
         glViewport(0, 0, surfaceWidth, surfaceHeight);
         glClearColor(16 / 255.0f, 64 / 255.0f, 192 / 255.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);

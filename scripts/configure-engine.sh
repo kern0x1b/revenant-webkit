@@ -1,21 +1,4 @@
 #!/usr/bin/env bash
-# Configure the engine WITHOUT the LegacyIOS class prefix, into build-254-sys.
-#
-# The prefix exists so our engine can sit in a process next to the system one.
-# When the app substitutes our frameworks for the system ones through
-# DYLD_FRAMEWORK_PATH the system engine is never loaded, there is nothing to
-# collide with, and UIKit needs the classes under their real names - it links
-# _OBJC_CLASS_$_WebView, not the prefixed spelling.
-#
-# Everything else matches configure-webkit-254.sh; keep the two in step.
-#
-# 2.54 still ships the ARMv7 assembler, offlineasm/arm.rb and
-# LowLevelInterpreter32_64.asm, but its PlatformEnable.h forces ENABLE_JIT 0 for
-# every USE(JSVALUE32_64) build. Our tree widens that predicate; see
-# Source/WTF/wtf/PlatformEnable.h. -DENABLE_JIT=ON alone is NOT enough.
-#
-# Source tree webkit-254 / build dir build-254, so webkit-trunk, webkit-trunk-jit,
-# build-cocoa and build-jit are all left alone.
 set -eu
 P=$(cd "$(dirname "$0")/.." && pwd); L=$P/third_party/libcxx-armv7; I=$P/third_party/icu-armv7; X=$P/third_party/libxslt-armv7; W=$P/third_party/woff2-armv7; O=$P/third_party/openssl-armv7; WP=$P/third_party/libwebp-armv7; SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
 S=$P/webkit-254; B=$P/build-254-lto
@@ -145,12 +128,3 @@ cmake -S $S -B $B -G Ninja \
   -DBROWSERENGINEKIT_LIBRARY=BROWSERENGINEKIT_LIBRARY-NOTFOUND \
   -DUNIFORMTYPEIDENTIFIERS_LIBRARY=UNIFORMTYPEIDENTIFIERS_LIBRARY-NOTFOUND \
   -DPYTHON_EXECUTABLE=/usr/bin/python3
-# Generator note: this build uses Ninja, unlike configure-webkit.sh (Unix Makefiles).
-# With the JIT on, JavaScriptCore's CMake splits jit/dfg/ftl/bytecode into a
-# JavaScriptCoreJIT OBJECT subtarget with a chained PCH
-# (WEBKIT_DEFINE_SUBTARGET_WITH_PREFIX in Source/cmake/WebKitMacros.cmake). That
-# wiring is file-level only and assumes Ninja's single global build graph; under
-# Unix Makefiles the per-target build.make files carry no rules for each other's
-# objects or PCH, and the link fails with "No rule to make target
-# .../JavaScriptCoreJIT.dir/.../UnifiedSource-bytecode-1.cpp.o". The CLoop build never
-# hit this because with the JIT off that subtarget is empty and the macro no-ops.

@@ -13,12 +13,8 @@ except ImportError:
     print("no PIL")
     sys.exit(0)
 
-# The page sits between the address bar and the toolbar on a 640x960 capture.
 PAGE_AREA = (0, 150, 640, 880)
 
-# A second argument asks a different question: how much of the page area is a
-# particular colour. That is what a canvas the GPU drew has to be checked with -
-# a canvas that never reached the screen is white, and white is ink too.
 WANTED = None
 if len(sys.argv) > 2:
     WANTED = tuple(int(part) for part in sys.argv[2].split(","))

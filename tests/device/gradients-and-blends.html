@@ -3,8 +3,6 @@
 <body style="font:13px sans-serif;padding:6px">
 <script src="report.js"></script>
 <script>
-// A gradient fading to transparent must keep its hue: unpremultiplied
-// interpolation is what sends it through grey.
 var canvas = document.createElement('canvas');
 canvas.width = 64; canvas.height = 1;
 var context = canvas.getContext('2d');
@@ -17,12 +15,6 @@ var middle = context.getImageData(32, 0, 1, 1).data;
 report('gradient-fade-keeps-its-hue', middle[0] > 200 && middle[1] < 40 && middle[2] < 40,
     'middle rgba ' + middle[0] + ',' + middle[1] + ',' + middle[2] + ',' + middle[3]);
 
-// Blend modes, measured in pixels through a canvas - the one place a page can
-// read what was actually painted. All of them, including the four non-separable
-// ones, are implemented by this CoreGraphics: that is worth pinning down,
-// because the same four are NOT applied to an element carrying
-// mix-blend-mode, and this is what proves the fault is in the element path
-// rather than in the platform.
 function blended(mode) {
     var canvas = document.createElement('canvas');
     canvas.width = canvas.height = 8;

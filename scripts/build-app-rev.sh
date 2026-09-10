@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-# Package the standalone RevWebView hosting test: app/rev-webview-host.m linked
-# directly against build-254-rev's Rev-prefixed WebKitLegacy, the way
-# scripts/attic/build-app.sh linked directly against the unprefixed engine -
-# not the DYLD_FRAMEWORK_PATH substitution the Safari tweak uses. The
-# frameworks keep their own real names (WebKitLegacy.framework etc, not
-# WebKit.framework) and are not diverted to a system path: this app coexists
-# with the system's own WebKit in one process rather than replacing it, so
-# there is nothing here for the system engine to collide with by path or by
-# class name.
 set -eu
 P=$(cd "$(dirname "$0")/.." && pwd)
 B=$P/build-254-rev
@@ -40,11 +31,6 @@ for lib in libc++.1.0.dylib libc++abi.1.0.dylib; do
     cp "$P/third_party/libcxx-armv7/lib/$lib" "$APP/Frameworks/$base"
 done
 
-# The frameworks carry Apple's system install names; every reference is
-# rewritten to load from inside the bundle instead, at a private path the
-# system's own WebKit is never loaded from - this is what keeps the two
-# engines from being "the same library" to dyld, on top of the Rev prefix
-# keeping them from being "the same class" to the Objective-C runtime.
 SYS_JSC=/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore
 SYS_WC=/System/Library/PrivateFrameworks/WebCore.framework/WebCore
 SYS_WKL=/System/Library/PrivateFrameworks/WebKitLegacy.framework/WebKitLegacy

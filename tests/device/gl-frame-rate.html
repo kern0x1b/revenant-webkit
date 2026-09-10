@@ -41,8 +41,6 @@ if (!gl) {
     gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
     var time = gl.getUniformLocation(program, "t");
 
-    // Three sizes, because a rate that does not move with the canvas says the
-    // cost is per frame rather than per pixel.
     var sizes = [[64, 64], [320, 240], [320, 480]], results = [], index = 0;
 
     function measure() {

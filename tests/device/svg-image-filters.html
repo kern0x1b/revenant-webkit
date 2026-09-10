@@ -4,9 +4,6 @@
 <p>Known bad: this page has taken the browser down with it. See tests/device/README.md.</p>
 <script src="report.js"></script>
 <script>
-// A filter inside an SVG loaded through <img> and drawn to a canvas. The pixels
-// come out one gamma encode too bright, and the page sometimes ends in a
-// SIGSEGV; both are open defects, and neither is the linear-light work.
 function paintFiltered(svg, callback) {
     var image = new Image();
     image.onload = function () {

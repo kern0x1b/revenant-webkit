@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-# Puts a current Apple Color Emoji on the device, in place of the 2013 one.
-#
-# The device's font is version 8.0: 1336 code points, nothing added to Unicode
-# since. Anything newer draws as a missing-glyph box, and a skin tone or a ZWJ
-# sequence draws as its parts. A current font is version 21.4 - measured on the
-# device, this CoreText reads its sbix bitmaps and applies its morx shaping, so
-# skin tones and ZWJ sequences compose into one glyph.
-#
-# The font is Apple's and is not in this repository. It is taken from the Mac
-# running this script, which is where the user's copy already lives.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -34,11 +24,6 @@ SOURCE=${EMOJI_SOURCE:-/System/Library/Fonts/Apple Color Emoji.ttc}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-# Both files are installed. The screen is 2x and web content reads the @2x file,
-# whose strikes are 40, 64 and 96 pixels, but parts of the interface read the 1x
-# file, whose strikes are 20, 40, 48 and 96 - leave that one stock and emoji in
-# the interface stay at the 2013 repertoire. A current font carries nine strikes;
-# the rest are the 100 MB this device has neither the room nor a use for.
 python3 - "$SOURCE" "$WORK/AppleColorEmoji@2x.ttf" "$WORK/AppleColorEmoji.ttf" <<'PY'
 import sys
 from fontTools.ttLib import TTCollection, TTFont
@@ -56,9 +41,6 @@ for destination, keep in ((sys.argv[2], (40, 64, 96)), (sys.argv[3], (20, 40, 48
         if tag in font:
             del font[tag]
 
-    # The 2013 font advertises its full-repertoire cmap under encoding 3, the
-    # current one under encoding 4. Match the one this CoreText was shipped
-    # with, or everything past the 2013 repertoire draws as a box.
     for table in font["cmap"].tables:
         if (table.platformID, table.platEncID) == (0, 4):
             table.platEncID = 3
@@ -73,8 +55,6 @@ for file in "AppleColorEmoji@2x.ttf" "AppleColorEmoji.ttf"; do
     echo "copying $file ($(du -h "$WORK/$file" | cut -f1))"
     device_copy "$WORK/$file" /var/mobile/emoji-new.ttf
 
-    # Written beside the live file and moved into place, so nothing reads a half
-    # written font.
     device_run 60 "cp /var/mobile/emoji-new.ttf '$FONTS/$file.new' \
       && chown root:wheel '$FONTS/$file.new' \
       && chmod 644 '$FONTS/$file.new' \

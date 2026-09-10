@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-# How fast does a WebGL canvas animate, and does it animate at all?
-#
-#   tests/device/gl-frame-rate.sh [HOST_IP]
-#
-# The suite draws one frame and reads it back; this draws for twelve seconds at
-# three canvas sizes. It exists because of the failure that wrote it: with no
-# CVOpenGLESTextureCacheFlush the texture cache kept every surface alive, so
-# IOSurfaceIsInUse never went false, the drawing buffer was thrown away and
-# rebuilt every frame, and the web thread stopped answering after the first one.
-# A single-frame check saw none of that.
 set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 . "$ROOT/tools/device.sh"
@@ -36,8 +26,6 @@ verdict=$(grep -o "GET /report?[^ ]*" "$LOG" | tail -1 | sed 's|GET /report?||; 
     | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote_plus(sys.stdin.read().strip()))")
 echo "webgl frame rate: ${verdict:-nothing reported}"
 
-# A canvas that stops after its first frame is the failure this catches, and it
-# reports as a missing measurement rather than a slow one.
 case "$verdict" in
     *320x480=*) exit 0 ;;
     *) exit 1 ;;

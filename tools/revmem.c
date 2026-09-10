@@ -1,9 +1,3 @@
-// revmem <pid> — dirty/resident memory of another process, summed by VM tag.
-// A vmmap-lite for the iPhone 4S, which ships no vmmap. Run as root; the
-// jailbroken kernel allows task_for_pid on another process. Shows which
-// framework owns the resident dirty pages (CoreAnimation tile backing,
-// CoreGraphics/ImageIO decoded images, JavaScriptCore, malloc, ...), which is
-// what decides whether a memory change is worth making.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,9 +45,6 @@ int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: revmem <pid|process-name>\n"); return 2; }
 
-    // A name is accepted as well as a pid, because ps does not work on this
-    // device and the pid of a process that restarts often is otherwise
-    // impossible to obtain from the shell.
     pid_t pid = atoi(argv[1]);
     if (!pid) {
         int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
@@ -104,7 +95,6 @@ int main(int argc, char **argv)
     printf("pid %d   dirty=%.1f MB   resident=%.1f MB   swapped=%.1f MB\n",
            pid, tDirty/1048576.0, tRes/1048576.0, tSwap/1048576.0);
     printf("%-22s %10s %10s\n", "owner (vm tag)", "dirty MB", "resid MB");
-    // print every tag with dirty>0, largest first (simple selection sort over 256)
     char done[MAXTAG] = {0};
     for (int n = 0; n < MAXTAG; n++) {
         int best = -1; unsigned long long bestv = 0;

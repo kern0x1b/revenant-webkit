@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-# Install RevWebViewHost.app and launch it under SpringBoard, then print
-# /tmp/rev-webview-host.log - the direct-WebView equivalent of
-#
-# Running the executable over SSH as root never reaches the foreground (no
-# UIApplicationMain hand-off happens without SpringBoard), so this goes
-# through uicache + uiopen.
-#
-#   bash scripts/run-app-rev.sh [seconds-to-wait]
 set -u
 P=$(cd "$(dirname "$0")/.." && pwd)
 . "$P/tools/device.sh"

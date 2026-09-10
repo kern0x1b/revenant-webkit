@@ -1,16 +1,3 @@
-// revtouch — inject a synthetic touch on iOS 6 via the IOKit HID digitizer event
-// system, so on-device UI can be driven without a finger. Coordinates are in
-// screen points (iPhone 4S is 320x480); they are normalized to 0..1 for the
-// digitizer, which is what the event system expects.
-//
-//   revtouch tap   X Y            one down+up tap at (X,Y)
-//   revtouch down  X Y            finger down (stays down)
-//   revtouch move  X Y            move the down finger to (X,Y)
-//   revtouch up    X Y            finger up at (X,Y)
-//   revtouch swipe X1 Y1 X2 Y2    press, drag, release
-//
-// Env: REVTOUCH_W / REVTOUCH_H override the 320x480 point size.
-
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach_time.h>
 #include <unistd.h>
@@ -40,7 +27,6 @@ extern void IOHIDEventSetIntegerValue(IOHIDEventRef event, uint32_t field, int v
 extern IOHIDEventSystemClientRef IOHIDEventSystemClientCreate(CFAllocatorRef allocator);
 extern void IOHIDEventSystemClientDispatchEvent(IOHIDEventSystemClientRef client, IOHIDEventRef event);
 
-// kIOHIDEventFieldDigitizerIsDisplayIntegrated
 #define FIELD_IS_DISPLAY_INTEGRATED 0xb0017
 
 static IOHIDEventSystemClientRef gClient;

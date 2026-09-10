@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# iOS 6 ships libc++ from 2012: no std::filesystem, no charconv, none of the
-# C++17 runtime. Build our own for armv7 and link it statically, which is what
-# LightKit does with its libLegacyIOSRuntime.dylib.
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
@@ -39,8 +36,6 @@ cmake -S $SRC/runtimes -B $ROOT/build-libcxx -G "Unix Makefiles" \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 > $ROOT/build-libcxx-cfg.log 2>&1
 cmake --build $ROOT/build-libcxx -j8 > $ROOT/build-libcxx-build.log 2>&1
 cmake --install $ROOT/build-libcxx > /dev/null 2>&1
-# Each library gets its own bundle-relative install name, and libc++'s
-# reference to libc++abi is rewritten to match.
 LIB=$ROOT/third_party/libcxx-armv7/lib
 for name in libc++.1.dylib libc++abi.1.dylib; do
     [ -f "$LIB/$name" ] || cp "$ROOT/build-libcxx/lib/$name" "$LIB/$name" 2>/dev/null || true
