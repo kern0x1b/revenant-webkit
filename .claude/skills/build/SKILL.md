@@ -13,18 +13,23 @@ and `ldid` must be on `PATH`.
 export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"
 ```
 
-## Engine + standalone app
+## Engine
 
 ```sh
-./fetch-source.sh     # WebKit at a fixed commit + this port's patches/engine/
-./build.sh            # libc++, ICU, OpenSSL, compat, engine, app — in order
+./fetch-source.sh     # webkit-254, a submodule on the ios6-armv7 branch
 ```
 
-Run one step alone when only it changed (they are slow):
+There is no single build script; run the step that changed (they are slow):
 
-- `scripts/build-libcxx.sh`, `scripts/build-icu.sh`, `scripts/build-openssl.sh`
+- the libraries iOS 6 predates: `scripts/build-libcxx.sh`, `build-icu.sh`,
+  `build-openssl.sh`, `build-libpsl.sh`, `build-libwebp.sh`, `build-libxslt.sh`,
+  `build-woff2.sh`
 - `scripts/build-compat.sh` → `libios6compat.a`
-- `scripts/configure-engine.sh` then `ninja -C build-254-lto WebCore WebKitLegacy JavaScriptCore`
+- `scripts/configure-engine.sh` then `ninja -C build-254-lto`
+
+A change to a WebCore header means a full `ninja` — a partial build leaves the
+other frameworks on the old class size, and the result loads and misbehaves with
+no crash log. `docs/building.md` has the whole sequence.
 
 `build-254-lto/` and `dist/` are gitignored and reproducible.
 
@@ -34,7 +39,7 @@ Build after the engine:
 
 ```sh
 scripts/layout-sys-frameworks.sh   # stage the engine as dist/rev-sys-fw (-> /usr/lib/rev-fw)
-make -C packaging package        # loader + compat + TLS + prefs, packaged as a .deb
+make -C packaging package FINALPACKAGE=1   # loader + compat + TLS + prefs + engine, as a .deb
 ```
 
 Each signs with `ldid -S`.

@@ -83,10 +83,10 @@ that writes the `space.kern0x1b.rev` preferences domain the engine reads
 
 ## Where to look
 
-- Build: `build.sh` and `scripts/build-*.sh` / `configure-engine.sh`.
+- Build: `scripts/build-*.sh` and `configure-engine.sh`, then `ninja -C build-254-lto`; see `docs/building.md`.
 - Package: `packaging/` — Theos makefiles for the loader, the compat dylib, the
   TLS library and the Settings bundle; `make -C packaging package FINALPACKAGE=1`
   produces the installable `.deb`, engine frameworks included.
 - Deploy: `make -C packaging package install`, `scripts/deploy-engine.sh`, `tools/device.sh`.
-- Design and measurements: `notes/` (`design-journal.md`, `night-run-*.md`).
+- Documentation: `docs/` (`architecture.md`, `building.md`, `ios6-gaps.md`, `memory-and-caches.md`).
 - Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.

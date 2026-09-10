@@ -461,7 +461,7 @@ What was actually written, before the stop:
 * The ARMv7 argument-assignment logic was verified standalone (it compiles and produces the
   §7.2 result); nothing else was compiled, because `ARMv7Assembler.h` does not exist in trunk —
   it is not even in the removal patch, so a new encoder has to be written from scratch. See
-  `notes/armv7-assembler-api.md`.
+  `armv7-assembler.md`.
 
 Originals of both edited files are gone with the scratch directory; `git diff` in that worktree is
 the only record.

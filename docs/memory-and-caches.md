@@ -1,48 +1,44 @@
-# Tuning WebKit for 512 MB and no JIT
+# Memory and caches on a 512 MB phone
 
-Findings from reading WebKit trunk. File paths are as of August 2026.
+What WebKit's memory machinery does on this device, and which knobs earn their
+place. Written against WebKit 2.54; the values the port actually ships are in the
+code, and the reasoning for each change is in its commit.
 
-## The three knobs that matter most
-
-### 1. The JavaScript heap never collects early enough
+## The JavaScript heap
 
 WebCore creates its VM with `JSC::HeapType::Large` (`Source/WebCore/bindings/js/CommonVM.cpp`).
-`Heap::Heap` then sets the first-collection threshold to
-`min(Options::largeHeapSize() /* 32 MB */, ramSize * Options::smallHeapRAMFraction())`.
-On iOS, `Options.cpp`'s `overrideDefaults()` raises `smallHeapRAMFraction` to **0.8**, so on a
-512 MB device the threshold is a flat **32 MB — no garbage collection at all until the JS heap
-reaches 32 MB**.
+`Heap::Heap` sets the first-collection threshold to
+`min(Options::largeHeapSize() /* 32 MB */, ramSize * Options::smallHeapRAMFraction())`, and on
+iOS `Options.cpp`'s `overrideDefaults()` raises `smallHeapRAMFraction` to 0.8 — so on a 512 MB
+device the threshold is a flat 32 MB, and nothing is collected until the JS heap reaches it.
 
-Set through the environment before the first VM exists. `Options::initialize()` reads
-`*_NSGetEnviron()`, which is live, and none of the three frameworks has a `__mod_init_func`
-section — nothing of WebKit runs before `main()`, so the app's own `setenv()` is seen:
+Every JSC option can be set from the environment before the first VM exists.
+`Options::initialize()` reads `*_NSGetEnviron()`, which is live, and none of the three
+frameworks has a `__mod_init_func` section, so nothing of WebKit runs before `main()` and the
+loader's own `setenv()` is seen:
 
     JSC_largeHeapSize=4194304          # 4 MB instead of 32 MB
 
-That is the whole list. The others do not earn their place:
+The related knobs do not earn their place:
 
 - `smallHeapRAMFraction` only enters as `min(largeHeapSize, ramSize * fraction)`. Once
   `largeHeapSize` is 4 MB the fraction would have to drop below 0.008 to bind. Inert.
-- `mediumHeapRAMFraction` and the small/medium/large growth factors are read only by the
-  non-mini branch of `proportionalHeapSize()`, which we never reach.
-- `criticalGCMemoryThreshold` is **counterproductive to lower**. Its three effects are forcing a
-  full collection, sweeping synchronously, and capping eden at `m_maxEdenSizeWhenCritical`. In
-  mini mode the first two are already unconditionally on, and the third is
-  `ramSize * (1 - threshold) / 4` — so lowering the threshold *raises* the allowance. At the
-  0.80 default that cap is 25.6 MB; at 0.55 it would be 57.6 MB.
-- `miniVMHeapGrowthFactor` (1.20) is the live growth factor, but it applies to a heap that now
-  starts at a 4 MB floor: 20% of a live heap of a few MB is noise next to the 32 MB floor it
-  replaces, and halving it doubles the number of full, synchronously-swept collections on one
-  slow core. Left alone.
+- `criticalGCMemoryThreshold` is counterproductive to lower. Its third effect caps eden at
+  `ramSize * (1 - threshold) / 4`, so lowering the threshold *raises* the allowance: 25.6 MB at
+  the 0.80 default, 57.6 MB at 0.55.
 
-`VM::isInMiniMode()` is true whenever `!Options::useJIT()`, and `proportionalHeapSize()` then
-short-circuits to `miniVMHeapGrowthFactor`.
+### Mini mode, and why it no longer applies
 
-Two consequences of mini mode worth planning around: `Heap::useGenerationalGC()` returns false, so
-**every collection is a full collection**, and sweeping is synchronous. Collecting less often
-matters more than usual.
+`VM::isInMiniMode()` is true whenever `!Options::useJIT()`. In mini mode
+`Heap::useGenerationalGC()` returns false — every collection is a full collection — and sweeping
+is synchronous, which is why collecting less often mattered more than usual.
 
-### 2. Cache model
+This port restores the ARMv7 JIT, so the VM is **not** in mini mode: generational collection is
+back, eden collections do most of the work, and the growth factors that mini mode short-circuits
+are live again. Any advice written for the interpreter-only build — including the 4 MB heap floor
+above — has to be re-measured before it is believed.
+
+## Cache model
 
 `+[WebView _setCacheModel:]` derives everything from the model and the RAM size. At 512 MB:
 
@@ -77,7 +73,7 @@ against the existing value on both memory and disk.
 `setUsesPageCache:` decides nothing while the capacity is zero: `BackForwardCache::canCache()`
 returns false on `!m_maxSize` before it looks at `Settings::usesBackForwardCache()`.
 
-### 3. Tiles
+## Tiles
 
 `LegacyTileCache` uses a hardcoded 512×512 logical tile (`LegacyTileCache.h`, `m_tileSize`) with no
 setter anywhere. Tiles are clipped to the host layer's bounds, so on a 320-point-wide viewport a
@@ -114,26 +110,20 @@ hardcoded). Keep `useCodeCache` and `useSourceProviderCache` on.
 The only way to get precompiled bytecode is to run our own scripts through the `JSScript` API in a
 `JSContext` we control, and accept one warm-up write per boot.
 
-## Preferences worth setting
+## Preferences
 
-| Knob | Effect |
-|---|---|
-| `setCacheModel:` + `setAutomaticallyDetectsCacheModel:NO` | see above |
-| `setUsesPageCache:` | admission to the back-forward cache; capacity still comes from the model |
-| `_setMaxParseDuration:` | overrides the 500 ms parser yield limit. Raise to cut runloop overhead on a slow core, lower for responsiveness |
-| `setWebGLEnabled:NO`, `setWebAudioEnabled:NO` | both default to YES in WebKitLegacy |
-| `setAcceleratedDrawingEnabled:NO`, `setCanvasUsesAcceleratedDrawing:NO` | default YES on iOS; drops GPU-backed backing stores |
-| `setAcceleratedCompositingEnabled:NO` | each composited layer is a backing store outside the tile budget |
-| `setAllowsAnimatedImages:NO` | stops per-frame decode churn |
-| `setHiddenPageDOMTimerThrottlingEnabled:YES` | defaults to NO in WebKitLegacy |
-| `_setTextAutosizingEnabled:NO` | removes a style and layout pass |
-
-Dead knobs — hardcoded stubs in current trunk, do not bother: DNS prefetching, offline application
-cache (removed from WebKit entirely), `requestAnimationFrameEnabled`, `linkPreloadEnabled`.
-
-Any generated preference not exposed in the header is still reachable through
+`+[WebView _setCacheModel:]` and the tile knobs above are reached through
+`WebPreferences`. Any generated preference not exposed in a header is still reachable through
 `-[WebPreferences _setBoolPreferenceForTestingWithValue:forKey:]` with the key from
-`UnifiedWebPreferences.yaml`.
+`UnifiedWebPreferences.yaml` — and the defaults themselves are set in that file's WebCore column,
+which is what the port edits rather than calling setters at runtime.
+
+`_setMaxParseDuration:` overrides the 500 ms parser yield limit: raise it to cut runloop overhead
+on a slow core, lower it for responsiveness.
+
+Some knobs are dead in current trunk — hardcoded stubs that decide nothing: DNS prefetching, the
+offline application cache (removed from WebKit entirely), `requestAnimationFrameEnabled`,
+`linkPreloadEnabled`.
 
 ## Memory pressure
 

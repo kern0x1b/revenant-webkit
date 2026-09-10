@@ -1,4 +1,11 @@
-# A modern web engine for iOS 6
+# How this started
+
+Kept as history, not as documentation: this is the plan and the reasoning from
+the first days of the port, in August 2026, when nothing had been built yet. Much
+of it was overtaken by what the work found — the base branch changed, the ARMv7
+JIT came back, the standalone application gave way to substituting the engine
+underneath Mobile Safari. For what the port is today, start with
+[architecture.md](architecture.md) and the README.
 
 The stock engine on iOS 6 is WebKit 536 (2012). It cannot render a page written
 this decade: the sign-in form of soundcloud.com comes back with zero input

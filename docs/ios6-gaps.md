@@ -1,4 +1,11 @@
-# Soft-linked constants that are not on this OS
+# What iOS 6 does not have
+
+The port meets three kinds of gap: a constant that is soft-linked and absent, a
+private API that was never on this release, and a public API whose modern
+replacement postdates it. Each section below is a probe run on the device rather
+than a reading of headers — measured on an iPhone 4S (iOS 6.1.3).
+
+## Soft-linked constants
 
 PAL soft-links constants and asserts when `dlsym` returns nothing. On a current
 OS that is right: an absent constant means a broken install. On iOS 6 absence is
@@ -44,7 +51,7 @@ decode: it used to report only `dlerror()`, which is empty here.
 Re-run the probe after any engine update — the list grows as WebKit adds
 soft-links.
 
-## Cookie API, probed 2026-08-25
+## Cookie API
 
 Every private cookie entry point the engine reaches for is absent on this
 Foundation, and every public equivalent is present.
@@ -70,14 +77,13 @@ Two behaviours settled by measurement rather than by reading:
 - `+cookieWithProperties:` **accepts** the non-public keys WebKit puts in —
   `Created`, `HttpOnly`, `SameSite` — so `createNSHTTPCookie()` works.
 - `NSHTTPCookieManagerCookiesChangedNotification` **fires** on this release.
-  `CookieStorageObserver` therefore has a real signal, and so does the packaging
-  platform's cookie jar, which coalesces its writes on it.
+  `CookieStorageObserver` therefore has a real signal.
 
 Why this mattered: WebKit wraps these calls in exception guards, so every one of
 them failed *silently*. `document.cookie = "x=y"` read back as empty and nothing
 in any log said why.
 
-## AVAudioSession, probed 2026-08-25
+## AVAudioSession
 
 `AudioSessionIOS.mm` is reached the moment a page has a media element, which on
 threads.com and instagram.com is immediately.
@@ -99,3 +105,8 @@ Present: `-category`, `-mode`, `-categoryOptions`, `-setCategory:withOptions:err
 `-setPreferredSampleRate:error:`, `-currentRoute`, `-outputVolume`,
 `-isOtherAudioPlaying`, `-currentHardwareOutputNumberOfChannels`,
 `-currentHardwareSampleRate`.
+
+## Related
+
+- [../STUB-AUDIT.md](../STUB-AUDIT.md) — the audit that keeps a stub from claiming success while doing nothing
+- [architecture.md](architecture.md) — how the engine is loaded in place of the system one

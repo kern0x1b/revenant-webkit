@@ -124,21 +124,22 @@ overwriting one with the other drops Safari back to the system engine.
 ```sh
 export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"   # any SDK that still emits armv7
 
-./fetch-source.sh          # WebKit at a fixed commit, then this port's patches
-./build.sh                 # libc++, ICU, OpenSSL, compat, the engine, the app
+./fetch-source.sh          # the engine, a git submodule on the ios6-armv7 branch
 ```
 
-`build.sh` runs the steps under `scripts/`, each worth running alone when only
-one thing changed:
+Then the libraries this OS cannot supply, the engine, and the package. Each step
+is one script and each is worth running alone when only it changed — the whole
+sequence, and why each piece exists, is in **[docs/building.md](docs/building.md)**:
 
 | Step | Builds |
 | --- | --- |
-| `scripts/build-libcxx.sh` | libc++ for armv7 |
-| `scripts/build-icu.sh` | ICU, trimmed to the kept languages |
-| `scripts/build-openssl.sh` | OpenSSL, for TLS and Web Crypto |
+| `scripts/build-libcxx.sh`, `build-icu.sh`, `build-openssl.sh`, `build-libpsl.sh`, `build-libwebp.sh`, `build-libxslt.sh`, `build-woff2.sh` | the libraries iOS 6 predates |
 | `scripts/build-compat.sh` | `libios6compat.a`, the symbols iOS 6 lacks |
-| `scripts/configure-engine.sh` | CMake configure — the flags carry why each is set |
-| `ninja -C build-254-lto WebCore WebKitLegacy JavaScriptCore` | the engine |
+| `scripts/configure-engine.sh` then `ninja -C build-254-lto` | the engine |
+
+A change to a WebCore header means a full `ninja`: a partial build leaves the
+other frameworks compiled against the old class size, and the result loads and
+then misbehaves with no crash to read.
 
 ### The Safari substitution, as a package
 
@@ -165,9 +166,6 @@ still ships `mach-o/module.map` under its deprecated name; and the compat dylib
 is built without `_FORTIFY_SOURCE` and without libc++, because the `__*_chk`
 symbols are linkage this release never had, and the engine carries its own C++
 runtime — a second one in the same process is a crash waiting to happen.
-
-The individual scripts under `scripts/` still exist and still work; they are the
-faster loop when only one piece changed.
 
 ## Deploy and test
 
@@ -219,26 +217,36 @@ reads:
 ## Repository layout
 
 ```
-app/            The standalone application: window, web view, engine bridge, TLS
+app/            The TLS bridge, the WebAssembly bridge, and a host app for the web view
 compat/         Symbols iOS 6 does not have, built into libios6compat.a
-patches/engine/ This port's changes to WebKit, by area
+docs/           Documentation and the screenshots in this README
+packaging/      Theos: the loader, compat dylib, TLS dylib, Settings bundle, engine layout
+patches/        The reference copy of upstream's ARMv7 JIT removal, for the record
 platform/
   safari/       The Safari substitution: the loader and the compat/hooks source
   prefs/        The RevWebKit Settings PreferenceBundle
   device/       What is installed on the phone beside the engine
-  systemhook/   The launch-time hook that puts the engine under Safari
 scripts/        The build and deploy, one step per script
-tools/          Diagnostic tools, on the host and on the device
-notes/          Measurements, findings and the design journal
-docs/           Screenshots and documentation assets
+tests/          The numeric device suite, host tests, and JS conformance checks
+tools/          Diagnostic instruments, on the host and on the device
 webkit-254/     The engine, a git submodule on the ios6-armv7 branch
 ```
 
-## Notes and design
 
-The reasoning behind the port and the measurements behind each decision are in
-`notes/` — `notes/design-journal.md` is where it started, and the `night-run-*.md`
-files record what was tried, what worked, and what was refuted by measuring it.
+## Documentation
+
+| Document | What is in it |
+| --- | --- |
+| [docs/architecture.md](docs/architecture.md) | How the engine is loaded in place of the system one, and what that costs |
+| [docs/building.md](docs/building.md) | The full build, step by step, and how to verify a dylib will load |
+| [docs/ios6-gaps.md](docs/ios6-gaps.md) | What this OS does not have — probed on the device, not read from headers |
+| [docs/memory-and-caches.md](docs/memory-and-caches.md) | What 512 MB forces: the JS heap, the cache model, tiles, memory pressure |
+| [docs/armv7-jit.md](docs/armv7-jit.md) | Carrying a 64-bit NaN-boxed JSValue on ARMv7, for when the branch drops it |
+| [docs/armv7-assembler.md](docs/armv7-assembler.md) | The assembler API deltas that porting the 2017 encoder would need |
+| [docs/core-update.md](docs/core-update.md) | Moving the port onto a newer engine branch |
+| [STUB-AUDIT.md](STUB-AUDIT.md) | The rule that no compatibility stub may answer success while doing nothing |
+| [tests/device/README.md](tests/device/README.md) | What the on-device suite measures, and the one limitation it records |
+| [docs/history.md](docs/history.md) | How the project started, kept as history |
 
 ## Trademarks and screenshots
 
@@ -251,5 +259,6 @@ their code, assets or branding.
 
 ## License
 
-MIT, see `LICENSE`. The engine is WebKit and carries its own licenses; the
-patches under `patches/engine/` are changes to that source.
+MIT, see `LICENSE`. The engine is WebKit and carries its own licenses; this
+port's changes to it are commits on the `ios6-armv7` branch of the `webkit-254`
+submodule.
