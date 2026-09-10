@@ -35,6 +35,11 @@ Dates are the day the change was measured on the device, not the day it compiled
   only the prefixed property reached that rule; `backdrop-filter` unprefixed is
   behind a setting that was off, so a site declaring only the standard spelling
   got the smearing bar the rule exists to prevent.
+- **Copying a selection took the browser down.** Long-press, Copy, and the
+  process aborted with `-[__NSCFType fontWithSize:]: unrecognized selector`.
+  UIFont and CTFont were unified in iOS 7; on this release they are separate
+  classes, and the converter that builds what goes on the pasteboard handed
+  UIKit a CTFontRef. Select, Copy and Paste complete now.
 - **A crash handler that printed nothing for stack overflows.** The handler had no
   stack of its own, so the class of crash that exhausts the stack killed the
   process silently. It runs on an alternate stack now.
@@ -44,6 +49,13 @@ Dates are the day the change was measured on the device, not the day it compiled
   Diagnostics switch that routes what a page logs - including its uncaught errors -
   to `/tmp/rev-safari-stderr.log` with file and line. Reading a site's JavaScript
   failure used to mean rebuilding the engine with a preference flipped.
+- **The asynchronous clipboard.** `navigator.clipboard.writeText` works: the
+  write path used NSItemProvider and `-[UIPasteboard setItemProviders:]`, both
+  iOS 11, so it crashed; it now writes an item dictionary through
+  `-[UIPasteboard setItems:]` with the types mapped to uniform type identifiers,
+  which is what makes a copy visible to the rest of the phone. Reading still
+  rejects with `NotAllowedError`, as the specification asks for without a paste
+  gesture. Copy buttons work.
 - **A platform report card and a real-site sweep.** `tests/device/web-platform.html`
   checks the APIs a page written this decade reaches for, and `tests/device/sweep.sh`
   loads real sites and reports whether each survived, painted, and what it held in

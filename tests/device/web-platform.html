@@ -22,6 +22,7 @@ present('workers', function () { return window.Worker; });
 report('crypto-subtle', !window.isSecureContext || !!(window.crypto && crypto.subtle),
     window.isSecureContext ? '' : 'not a secure context, so not exposed');
 present('crypto-random-values', function () { return window.crypto && crypto.getRandomValues; });
+present('clipboard-api', function () { return navigator.clipboard && navigator.clipboard.writeText; });
 present('text-encoder', function () { return window.TextEncoder; });
 present('abort-controller', function () { return window.AbortController; });
 present('structured-clone', function () { return window.structuredClone; });
