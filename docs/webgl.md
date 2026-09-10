@@ -88,13 +88,39 @@ those three lines - `DisplayEAGL`, `ContextEAGL`, `DeviceEAGL` and the surface -
 do not exist and have to be written, using `cgl/` as the model and the texture
 path that stage 0 proved.
 
+## Stage 1 is done: ANGLE runs on this GPU
+
+`src/libANGLE/renderer/gl/eagl/` now exists - `DisplayEAGL`, `PbufferSurfaceEAGL`,
+`DeviceEAGL` - modelled on the CGL backend and wired into the three places in
+`Display.cpp` that choose a display. `tools/angle-eagl-probe.mm` drives it
+through the same `EGL_`/`GL_` entry points WebCore uses, on the device:
+
+```
+EGL_GetPlatformDisplay      ok
+EGL_Initialize              EGL 1.5
+EGL_QueryString VENDOR      Google Inc. (Imagination Technologies)
+EGL_ChooseConfig            1 config
+EGL_CreatePbufferSurface    ok
+EGL_CreateContext           ok
+EGL_MakeCurrent             ok
+GL_RENDERER                 ANGLE (Imagination Technologies, PowerVR SGX 543,
+                            OpenGL ES 2.0 IMGSGX543-73.16.1)
+glReadPixels RGBA           16 64 192 255  (expected 16 64 192 255)
+glGetError                  0x0
+```
+
+One detail worth keeping: a binary that links the ANGLE archives must be pointed
+at the engine's own C++ runtime (`install_name_tool -change
+@executable_path/Frameworks/libc++.1.dylib /usr/lib/librev-c++.1.dylib`), or it
+traps at load with nothing printed.
+
 ## What is left, and what it costs
 
 | Stage | Work | Estimate |
 | --- | --- | --- |
 | 0 | IOSurface as a GL texture, proven on the device | **done** |
 | 1 | the CMake wiring and an ANGLE that builds for armv7 | **done** |
-| 1b | `DisplayEAGL` / `ContextEAGL` / `DeviceEAGL`; a headless context that clears and reads back, with no WebKit involved | 1-2 weeks |
+| 1b | `DisplayEAGL` / `DeviceEAGL` / `PbufferSurfaceEAGL`; a headless context that clears and reads back, with no WebKit involved | **done** |
 | 2 | `IOSurfaceSurfaceEAGL`, so a real `<canvas>` clear appears on screen | 1-2 weeks |
 | 3 | `GraphicsContextGLCocoa.mm`: choose the GLES backend, GL fences instead of Metal's, WebXR foveation as a no-op | 3-5 days |
 | 4 | WebGL 1.0 conformance, and the SGX543 driver's own bugs | a week and open |
