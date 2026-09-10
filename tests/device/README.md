@@ -148,6 +148,22 @@ tests/device/gl-present.sh
 It prints how much of the page area is red and exits non-zero when the answer is
 `absent`. The screenshot stays in `tests/device/sweep-shots/gl-present.png`.
 
+## gl-frame-rate.sh — a canvas that keeps drawing, and how fast
+
+Everything else about WebGL here is measured on one frame, and one frame hid a
+freeze: with no `CVOpenGLESTextureCacheFlush` the cache kept every IOSurface
+alive, WebKit rebuilt the drawing buffer every frame, and the web thread stopped
+answering after the first one - no crash and no log line.
+
+```sh
+tests/device/gl-frame-rate.sh
+```
+
+It animates for four seconds at each of three canvas sizes and prints the rate,
+exiting non-zero if the last size never reports - which is what a freeze looks
+like. Today: **29, 30 and 28 frames a second** at 64x64, 320x240 and 320x480,
+which says the cost is per frame rather than per pixel.
+
 ## share-sheet.sh — navigator.share, which needs a finger and a secure page
 
 Two things keep this out of `run.sh`: the API is exposed to secure contexts only,

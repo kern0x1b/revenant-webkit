@@ -122,6 +122,17 @@ already proving correct on this device.
 cleared to red, a screenshot, and the share of the page area that is actually
 red. It reads 97%.
 
+### The freeze that only an animation could show
+
+`CVOpenGLESTextureCache` hands out textures and expects a flush to let go of
+them. This backend never flushed, so every IOSurface it had ever wrapped stayed
+referenced: `IOSurfaceIsInUse` answered true for the drawing buffer WebKit was
+about to reuse, WebKit dutifully destroyed it and made a new surface, and after
+the first frame the web thread stopped answering entirely - no crash, no log, a
+page that simply stopped. Releasing the surface's texture and flushing the cache
+in `releaseTexImage` is the documented shape of this API, and it is what the
+frame-rate numbers above are measured on.
+
 ## The tools that proved each step
 
 - `tools/gles-iosurface-probe.m` - can this GPU bind an IOSurface as a texture at
@@ -140,6 +151,9 @@ red. It reads 97%.
 - **The `GL_Finish` per frame.** Metal signals frame completion through a shared
   event; GLES 2.0 has no fence, so the frame is waited for instead. It is the
   same guarantee and a worse way to get it.
-- **Performance.** Nothing here has been measured for speed, only for
-  correctness. The presentation path costs one `CGImage` over the surface per
-  displayed frame, which is the part to measure first.
+- **Performance.** A spinning triangle holds 28-30 frames a second at every
+  canvas size measured (64x64, 320x240, 320x480), so the cost is per frame - the
+  prepare, the `CGImage` over the surface, and the drawing buffer's own
+  bookkeeping - rather than per pixel. Nothing heavier has been measured, and
+  the per-frame cost is where a real page will feel this port.
+  `tests/device/gl-frame-rate.sh` prints the numbers.

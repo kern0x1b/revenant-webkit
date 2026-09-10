@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# How fast does a WebGL canvas animate, and does it animate at all?
+#
+#   tests/device/gl-frame-rate.sh [HOST_IP]
+#
+# The suite draws one frame and reads it back; this draws for twelve seconds at
+# three canvas sizes. It exists because of the failure that wrote it: with no
+# CVOpenGLESTextureCacheFlush the texture cache kept every surface alive, so
+# IOSurfaceIsInUse never went false, the drawing buffer was thrown away and
+# rebuilt every frame, and the web thread stopped answering after the first one.
+# A single-frame check saw none of that.
+set -u
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+. "$ROOT/tools/device.sh"
+
+HOST=${1:-$(ipconfig getifaddr en0 2>/dev/null)}
+PORT=${TEST_PORT:-8899}
+LOG=$(mktemp)
+
+cd "$ROOT/tests/device"
+python3 -m http.server "$PORT" --bind 0.0.0.0 >"$LOG" 2>&1 &
+SERVER=$!
+trap 'kill "$SERVER" 2>/dev/null; rm -f "$LOG"' EXIT
+sleep 1
+
+device_run 20 "killall MobileSafari 2>/dev/null" >/dev/null 2>&1
+sleep 6
+device_run 20 "uiopen 'http://$HOST:$PORT/gl-frame-rate.html?run=$RANDOM'" >/dev/null 2>&1
+
+for _ in $(seq 1 40); do
+    sleep 3
+    grep -q "320x480%3D" "$LOG" && break
+done
+
+verdict=$(grep -o "GET /report?[^ ]*" "$LOG" | tail -1 | sed 's|GET /report?||; s|&r=.*||' \
+    | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote_plus(sys.stdin.read().strip()))")
+echo "webgl frame rate: ${verdict:-nothing reported}"
+
+# A canvas that stops after its first frame is the failure this catches, and it
+# reports as a missing measurement rather than a slow one.
+case "$verdict" in
+    *320x480=*) exit 0 ;;
+    *) exit 1 ;;
+esac

@@ -59,6 +59,17 @@ Dates are the day the change was measured on the device, not the day it compiled
   CoreAnimation accepts and never draws. `tests/device/gl-present.sh` reads the
   colour off the screen. WebGL 2.0 stays out of reach: it needs OpenGL ES 3.0 and
   this silicon is ES 2.0. See `docs/webgl.md`.
+- **WebGL that animates, rather than drawing one frame.** A page that redrew in
+  `requestAnimationFrame` froze the web thread after its first frame - no timers,
+  no callbacks, no crash. `CVOpenGLESTextureCache` requires a flush to let go of
+  the textures it hands out, and this backend never called one, so every
+  IOSurface stayed referenced, `IOSurfaceIsInUse` never went false, and WebKit
+  threw the drawing buffer away and built a new one every frame. The surface now
+  releases its texture and flushes the cache when the image is released. A
+  spinning triangle runs at **29 fps at 64x64, 30 at 320x240 and 28 at 320x480** -
+  the rate barely moves with the canvas, so what it costs is per frame, not per
+  pixel. `tests/device/gl-frame-rate.sh` is the check that would have caught the
+  freeze, which every single-frame check in the suite missed.
 - **`navigator.share`.** A page can hand a title, a text and a URL to the system
   share sheet, and the promise settles the way the specification says: it
   resolves when an activity ran and rejects with `AbortError` when the sheet is
