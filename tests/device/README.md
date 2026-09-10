@@ -18,6 +18,13 @@ unreliable here, and that made a flaky runner look like a flaky engine.
 | Page | What it pins down |
 | --- | --- |
 | `text-and-emoji.html` | joined emoji compose into one glyph, skin tones compose, emoji newer than this system have glyphs, ICU's grapheme rules agree, the system font and `sans-serif` both answer `font-weight` |
+
+Four of the emoji checks - `modern-emoji-*-has-a-glyph` - measure the font the
+device happens to have, not the engine: they ask whether a character from a
+later Unicode than this system knows draws anything at all. On a device with the
+font it shipped in 2013 they fail, and that failure is about the font. Shaping,
+composition and the grapheme rules are the engine's, and those are the other
+checks on the page.
 | `gradients-and-blends.html` | a gradient fading to transparent keeps its hue; every blend mode, including the four non-separable ones, is implemented by this CoreGraphics - measured through a canvas |
 | `image-draw-cost.html` | what six hundred cropped draws of one decoded image cost, in milliseconds - the price of purgeable decoded images |
 | `svg-image-filters.html` | a filter inside an SVG loaded through `<img>`: saturate in linear light, saturate in sRGB, and three exactness checks |

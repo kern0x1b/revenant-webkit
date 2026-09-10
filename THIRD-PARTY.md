@@ -39,16 +39,29 @@ it, and built for armv7. None is redistributed here.
 | --- | --- | --- |
 | `app/cacert.pem` | the CA certificate bundle the TLS backend verifies against: the public root certificates extracted from Mozilla's `certdata.txt` by the curl project's `mk-ca-bundle.pl` | The certificates are the certificate authorities' own, published to be distributed. Mozilla's `certdata.txt`, which they are extracted from, is MPL-2.0; the extract carries no license header of its own, only its provenance, date and SHA-256 |
 
-It is here rather than fetched because a browser that cannot verify a
-certificate is not shippable, and because the file has to match the build that
-was tested. Its header names the source, the date of the extract and its
-SHA-256; replacing it is one download from <https://curl.se/docs/caextract.html>.
+It is here rather than fetched, and deliberately so: a trust store is the one
+dependency that must not change without somebody reading the change. It is also
+the only third-party file whose absence would make the build depend on a network
+for something security-relevant.
+
+What it is for: the standalone application does HTTPS itself, through OpenSSL,
+because this system's CFNetwork cannot speak modern TLS. OpenSSL verifies chains
+against roots in PEM form, and the system keychain is not in a form it can read,
+so the roots travel with the application. The Safari substitution does not use
+this file at all - there the chain is handed back as a `SecTrustRef` and the
+system evaluates it against its own store.
+
+`scripts/check-cacert.sh` verifies the file against the SHA-256 this project
+reviewed - `f66dff1b…480bc9` - and with `--upstream` compares it against what
+<https://curl.se/ca/cacert.pem> serves today, printing what to do if they differ
+rather than replacing anything.
 
 ## Things this project deliberately does not carry
 
-- **No fonts.** `scripts/install-emoji-font.sh` copies the emoji font from the
-  operator's own Mac to the operator's own phone. Apple's font is never
-  downloaded from anywhere and never redistributed here.
+- **No fonts, and nothing that moves one.** A font is not a browser engine's
+  business. Moving a current emoji font onto a 2013 device is a separate thing
+  and lives in its own project; four checks on `tests/device/text-and-emoji.html`
+  simply measure what the device can draw, and say so.
 - **No test corpus of other people's pages.** `tests/device/sweep.sh` ships with
   no site list: it loads only what the operator names on the command line or in
   a gitignored file of their own. Driving a browser at somebody's site from an

@@ -82,11 +82,11 @@ needs. Each of those is fixed here.
   numbers the specification asks for. This graphics library matches colour spaces
   by primaries and ignores transfer functions, so the engine performs those
   conversions itself, the way ports without colour management do.
-- **Current Apple emoji, composed.** The device's 2013 font stops at Unicode 6;
-  `scripts/install-emoji-font.sh` subsets the Mac's current font onto the phone,
-  and joined sequences - an astronaut, a family, a skin tone - shape as one glyph
-  rather than as their parts, which needed the character break iterator to use
-  ICU rather than 2012 rules with no zero-width-joiner in them.
+- **Joined emoji shape as one glyph.** An astronaut, a family, a skin tone - one
+  glyph each rather than their parts, which needed the character break iterator
+  to use ICU rather than 2012 rules with no zero-width-joiner in them. What the
+  device can *draw* is a question about the font it has, and that is not this
+  project's business: the font stays where it is.
 - **A native Settings pane** (`RevWebKit`) for the new-tab start page, a custom
   home URL, and per-app engine injection. See [The Settings pane](#the-settings-pane).
 

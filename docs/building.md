@@ -36,6 +36,7 @@ running alone when only it changed:
 | `scripts/build-libxslt.sh` | libxslt | XSLT |
 | `scripts/build-woff2.sh` | woff2 | web fonts in the format the web serves them |
 | `scripts/build-compat.sh` | `libios6compat.a` | the symbols this OS predates — see [../STUB-AUDIT.md](../STUB-AUDIT.md) |
+| `scripts/check-cacert.sh` | nothing — it verifies | the trust store the standalone application carries, against the hash this project reviewed; `--upstream` says whether curl serves the same extract today |
 
 ## 3. The engine
 
