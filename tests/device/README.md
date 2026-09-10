@@ -21,8 +21,9 @@ unreliable here, and that made a flaky runner look like a flaky engine.
 | `gradients-and-blends.html` | a gradient fading to transparent keeps its hue; every blend mode, including the four non-separable ones, is implemented by this CoreGraphics - measured through a canvas |
 | `image-draw-cost.html` | what six hundred cropped draws of one decoded image cost, in milliseconds - the price of purgeable decoded images |
 | `svg-image-filters.html` | a filter inside an SVG loaded through `<img>`: saturate in linear light, saturate in sRGB, and three exactness checks |
+| `web-platform.html` | the APIs a page written this decade reaches for, including WebAssembly running a module and WebGL drawing a triangle - see below |
 
-Today: **24 pass, 0 fail**, twice in a row.
+Today: **58 pass, 0 fail**, twice in a row.
 
 Memory is measured separately, over repeated cold runs, by the harness in the
 session notes rather than from here: dirty pages are a property of a process's
