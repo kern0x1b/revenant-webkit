@@ -114,6 +114,25 @@ What is left to look at: the one gamma encode that happens between the buffer an
 SVG image is rasterised into and the canvas it is drawn onto, on the pixel-reading
 effect path only.
 
+## web-platform.html — what a page written this decade can ask for
+
+Twenty-eight checks over the APIs a modern site reaches for, run by `run.sh` like
+the rest. It exists because of the failure that wrote it: `window.WebAssembly`
+was installed by a swizzle that won its race only sometimes, and when it lost,
+every site behind an AWS WAF challenge rendered one sentence about attempts
+exceeded. Nothing in the suite was false, no console error was printed, and the
+page simply did not appear. A missing global is now a failing check.
+
+Two of them are not presence checks. `wasm-runs-a-module` instantiates a
+two-parameter module and adds 40 and 2, because a `WebAssembly` object that
+cannot run anything is the same failure with a different shape.
+`backdrop-filter-bar-is-opaque` asserts the rule this port applies in place of a
+filter it cannot honour.
+
+`crypto-subtle` passes when the page is not a secure context, which is what the
+runner serves: the specification exposes it to secure contexts only, and the
+check says so rather than reporting a hole that is not there.
+
 ## sweep.sh — the same engine against the web as it is served
 
 `run.sh` measures the engine against numbers it can check itself. Some failures

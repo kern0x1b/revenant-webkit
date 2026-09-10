@@ -32,7 +32,7 @@ if grep -q "Address already in use" "$LOG"; then
     exit 2
 fi
 
-pages=(text-and-emoji gradients-and-blends image-draw-cost svg-image-filters)
+pages=(text-and-emoji gradients-and-blends image-draw-cost svg-image-filters web-platform)
 for page in "${pages[@]}"; do
     # A fresh browser per page. Asking a busy Safari to open another URL is
     # unreliable here - the first page always reported and the later ones often
