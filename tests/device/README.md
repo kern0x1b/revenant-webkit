@@ -116,7 +116,7 @@ effect path only.
 
 ## web-platform.html — what a page written this decade can ask for
 
-Twenty-eight checks over the APIs a modern site reaches for, run by `run.sh` like
+Twenty-nine checks over the APIs a modern site reaches for, run by `run.sh` like
 the rest. It exists because of the failure that wrote it: `window.WebAssembly`
 was installed by a swizzle that won its race only sometimes, and when it lost,
 every site behind an AWS WAF challenge rendered one sentence about attempts
@@ -146,6 +146,22 @@ tests/device/gl-present.sh
 
 It prints how much of the page area is red and exits non-zero when the answer is
 `absent`. The screenshot stays in `tests/device/sweep-shots/gl-present.png`.
+
+## share-sheet.sh — navigator.share, which needs a finger and a secure page
+
+Two things keep this out of `run.sh`: the API is exposed to secure contexts only,
+and calling it needs a user gesture. Both are solvable on this device. The page
+is served through a reverse SSH tunnel so it arrives at `http://localhost`, which
+is a secure context, and `revtouch` taps the button and then the sheet's Cancel.
+
+```sh
+tests/device/share-sheet.sh
+```
+
+It prints what the page saw on load and after cancelling, and exits non-zero
+unless the promise rejects with `AbortError`, which is what the specification
+asks for when the sheet is dismissed. The screenshot of the open sheet stays in
+`tests/device/sweep-shots/share-sheet.png`.
 
 ## sweep.sh — the same engine against the web as it is served
 

@@ -59,6 +59,15 @@ Dates are the day the change was measured on the device, not the day it compiled
   CoreAnimation accepts and never draws. `tests/device/gl-present.sh` reads the
   colour off the screen. WebGL 2.0 stays out of reach: it needs OpenGL ES 3.0 and
   this silicon is ES 2.0. See `docs/webgl.md`.
+- **`navigator.share`.** A page can hand a title, a text and a URL to the system
+  share sheet, and the promise settles the way the specification says: it
+  resolves when an activity ran and rejects with `AbortError` when the sheet is
+  cancelled. The setting was off because nothing implemented the client side of
+  it; the implementation belongs to `WebChromeClientIOS`, which is the concrete
+  chrome client on this platform - the base class's empty one is never called.
+  The sheet is presented on the main thread and the answer comes back on the web
+  thread, which are two different threads in WebKitLegacy.
+  `tests/device/share-sheet.sh` taps the button and then Cancel and checks both.
 - **A page console that can be turned on from Settings.** RevWebKit gains a
   Diagnostics switch that routes what a page logs - including its uncaught errors -
   to `/tmp/rev-safari-stderr.log` with file and line. Reading a site's JavaScript

@@ -28,6 +28,10 @@ present('crypto-random-values', function () { return window.crypto && crypto.get
 // because a copy needs a user gesture that this suite cannot make.
 report('clipboard-api', !window.isSecureContext || !!(navigator.clipboard && navigator.clipboard.writeText),
     window.isSecureContext ? '' : 'not a secure context, so not exposed');
+// navigator.share is secure-context only as well. Whether the sheet actually
+// opens needs a tap and a screenshot, which is tests/device/share-sheet.sh.
+report('web-share', !window.isSecureContext || typeof navigator.share === 'function',
+    window.isSecureContext ? '' : 'not a secure context, so not exposed');
 present('text-encoder', function () { return window.TextEncoder; });
 present('abort-controller', function () { return window.AbortController; });
 present('structured-clone', function () { return window.structuredClone; });
