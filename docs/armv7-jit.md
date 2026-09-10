@@ -13,10 +13,16 @@ was worked out before the switch, so that work does not have to be redone.
 Everything below was derived from trunk at `1798fb124` (`webkit-trunk-jit`, branch
 `ios6-armv7-jit`) and from the 32-bit backend upstream deleted.
 
-## The two commits that stand in the way
+## What upstream did, and what it means for this fork
 
-Reverse-applying both puts the JIT back. They are upstream's own changes, so
-this repository keeps their identity rather than a copy of them:
+**The port has an ARMv7 JIT today.** `webkitglib/2.54` was branched before the
+removal and still ships the whole 32-bit backend, and the port builds it:
+`ENABLE_JIT=ON`, `ENABLE_DFG_JIT=ON`, `ENABLE_C_LOOP=OFF`. Nothing has to be
+restored, and nothing upstream does to trunk can take it away from a branch that
+already carries it.
+
+What upstream's removal decides is the *next base*. Two commits did it, and any
+series cut after the second has no ARMv7 backend to inherit:
 
 | Commit | Date | Effect |
 | --- | --- | --- |
@@ -27,7 +33,13 @@ this repository keeps their identity rather than a copy of them:
 git -C <a full WebKit clone> show 857bd4334690 > remove-armv7-jit.patch
 ```
 
-Most of the second commit deletes whole files, which come back cleanly:
+That diff is worth reading on the day the base moves, to see exactly what a
+newer tree is missing. It is not, however, where the code comes back from: this
+fork's own branch builds and runs that backend, so an update carries it forward
+from here, along with the fixes this port made to it. See
+[core-update.md](core-update.md), step 4.
+
+These are the files the removal deleted whole, and they carry over as files:
 
     Source/JavaScriptCore/assembler/MacroAssemblerARMv7.h / .cpp
     Source/JavaScriptCore/assembler/ARMv7Registers.h
@@ -36,8 +48,9 @@ Most of the second commit deletes whole files, which come back cleanly:
     Source/JavaScriptCore/jit/CallFrameShuffler32_64.cpp
     Source/JavaScriptCore/offlineasm/arm.rb
 
-Reverting restores the code **and the breakage that caused it to be disabled**.
-The March commit points at where that breakage lives: `Repatch.cpp`
+One warning if the diff is ever reverted onto a newer tree rather than carried
+over from here: it restores the code **and the breakage that caused the March
+disable**. That commit points at where the breakage lives: `Repatch.cpp`
 (`linkPolymorphicCall`, `tryCacheArrayGetByVal` / `PutByVal` / `InByVal`) and
 `DFGJITCompiler.cpp` (`link`, `addPropertyInlineCache`) — polymorphic call
 linking and property inline caches. Both are DFG and inline-cache territory, so
