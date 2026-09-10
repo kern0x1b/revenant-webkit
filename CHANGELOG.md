@@ -8,7 +8,7 @@ Dates are the day the change was measured on the device, not the day it compiled
 ## [Unreleased]
 
 ### Fixed
-- **Pages that stopped dead at their first inline script.** developer.mozilla.org
+- **Pages that stopped dead at their first inline script.** A documentation site
   rendered a white page: the script reads `localStorage`, which blocks the web
   thread until the storage import finishes, and the import could not finish
   because SQLite's one-time initialization hops to the main thread - which, in
@@ -20,8 +20,8 @@ Dates are the day the change was measured on the device, not the day it compiled
 - **Every site behind an AWS WAF challenge.** `window.WebAssembly` was installed
   by swizzling whichever class the runtime happened to list first as answering the
   window-object-cleared delegate method, so it was present only sometimes. The
-  challenge needs WebAssembly, retries without it, and gives up - amazon.com
-  rendered one sentence about attempts exceeded. The engine now offers a
+  challenge needs WebAssembly, retries without it, and gives up, leaving one
+  sentence about attempts exceeded where the page should be. The engine now offers a
   registration point for an embedder that is not the frame load delegate, and the
   bridge uses it.
 - **A user agent no browser has ever sent.** The browser names itself after the

@@ -213,9 +213,14 @@ have looks like a blank page and nothing else. `sweep.sh` loads real sites, one
 browser per site, and reports four things per page:
 
 ```
-tests/device/sweep.sh                       # the built-in list
-tests/device/sweep.sh https://example.com   # or the sites you name
+tests/device/sweep.sh https://example.org/   # the sites you name
+tests/device/sweep.sh                        # or a list in sweep-sites.txt, which is yours and gitignored
 ```
+
+It ships with no list of its own. Which sites a browser here is driven at from
+an automated run is the operator's call and the operator's business with those
+sites' terms, not something this repository decides. Everything `run.sh` loads
+is served out of this directory.
 
 | Column | What it means |
 | --- | --- |

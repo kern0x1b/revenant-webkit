@@ -6,6 +6,7 @@ webkit-trunk/
 webkit-trunk-jit/
 
 # Dependencies built from source by the build-*.sh scripts.
+third_party
 third_party/
 
 # Build trees. Every one of these is reproducible from configure-*.sh plus
@@ -45,3 +46,6 @@ packaging/obj/
 packaging/**/.stamp
 sweep-shots/
 build-254-angle/
+
+# A sweep list is the operator's, never the repository's.
+tests/device/sweep-sites.txt

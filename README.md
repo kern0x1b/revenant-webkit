@@ -267,8 +267,23 @@ to demonstrate a browser engine working - under fair use. This project is not
 affiliated with, endorsed by, or sponsored by any of them, and ships none of
 their code, assets or branding.
 
+Nor does anything here drive a browser at somebody else's site on its own: the
+automated suite loads pages served from this repository, and the one script that
+can load a real site takes the list from the operator. See
+[THIRD-PARTY.md](THIRD-PARTY.md).
+
 ## License
 
-MIT, see `LICENSE`. The engine is WebKit and carries its own licenses; this
-port's changes to it are commits on the `ios6-armv7` branch of the `webkit-254`
-submodule.
+MIT, see `LICENSE`, for the code in this repository: the compatibility library,
+the tooling, the tests, the packaging and the documentation.
+
+The engine is WebKit and keeps its own terms - LGPL-2.1-or-later and
+BSD-2-Clause - and this port's changes to it are commits on the `ios6-armv7`
+branch of the `webkit-254` submodule, under those same terms.
+
+Nothing third-party is vendored here. Every library this operating system
+cannot supply is fetched from its own upstream by a script, at a pinned version,
+into an untracked directory. [THIRD-PARTY.md](THIRD-PARTY.md) lists each one,
+its version, its license, and the script that fetches it - and what this project
+deliberately does not carry, including anybody else's fonts, pages or test
+suites.

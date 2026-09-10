@@ -6,18 +6,27 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SHOTS="$ROOT/tests/device/sweep-shots"
 mkdir -p "$SHOTS"
 
-DEFAULT_SITES=(
-    https://www.bbc.com/news
-    https://stackoverflow.com/questions
-    https://www.reddit.com
-    https://developer.mozilla.org/en-US/docs/Web/CSS
-    https://mastodon.social/explore
-    https://www.amazon.com
-    https://caniuse.com
-    https://www.openstreetmap.org
-)
 sites=("$@")
-[ ${#sites[@]} -eq 0 ] && sites=("${DEFAULT_SITES[@]}")
+if [ ${#sites[@]} -eq 0 ] && [ -r "$ROOT/tests/device/sweep-sites.txt" ]; then
+    while IFS= read -r line; do
+        case "$line" in ''|'#'*) continue ;; esac
+        sites+=("$line")
+    done < "$ROOT/tests/device/sweep-sites.txt"
+fi
+if [ ${#sites[@]} -eq 0 ]; then
+    cat >&2 <<'USAGE'
+sweep.sh loads pages you name and reports what happened to the browser.
+
+    tests/device/sweep.sh https://example.org/ [more...]
+    tests/device/sweep.sh                       # reads tests/device/sweep-sites.txt
+
+It ships with no list of its own on purpose: which sites this repository may
+drive a browser at is the operator's call, not the repository's, and loading
+somebody's site from an automated run is between the operator and that site's
+terms. tests/device/sweep-sites.txt is gitignored for the same reason.
+USAGE
+    exit 2
+fi
 
 alive() { device_run 20 "killall -0 MobileSafari 2>/dev/null && echo 1 || echo 0" 2>/dev/null; }
 
