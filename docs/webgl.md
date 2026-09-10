@@ -175,20 +175,37 @@ Two that are still open, and both of them are this driver rather than this port:
   error at all. The driver names no npot extension of any kind. Making this pass
   would mean ANGLE rescaling NPOT cube maps to a power of two behind the page's
   back, which nothing in the GL backend does today.
-- **Face culling is ignored when the colour attachment came from an IOSurface.**
-  Four checks in `rendering/culling`. `tools/gles-cull-probe.m` takes an
-  argument: with a plain texture attachment the driver culls `FRONT` and
-  `FRONT_AND_BACK` correctly, and with a texture the CoreVideo cache made out of
-  an IOSurface - which is exactly what a canvas draws into here - it culls
-  neither. No ANGLE, no WebKit, no GL error. Before that probe, beacons had
-  already shown ANGLE sending `glCullFace` and `glEnable(GL_CULL_FACE)`, and the
-  driver reporting `enabled=1 mode=0x408` at the moment of the draw.
+- **Face culling is unreliable when the colour attachment came from an
+  IOSurface.** Four checks in `rendering/culling`. `tools/gles-cull-probe.m`
+  builds three framebuffers - a renderbuffer, a plain texture, and a texture the
+  CoreVideo cache made from an IOSurface, which is what a canvas draws into here
+  - and runs `BACK`, `FRONT` and `FRONT_AND_BACK` against each, three passes
+  apiece, printing the pixel it read.
 
-  There is a way out and it costs what was just removed: render into a plain
-  texture and copy into the IOSurface when the frame is presented. That is the
-  blit this port deleted to make WebGL fast, so it is a trade - conformant
-  culling against a copy per frame - and not a bug to be fixed quietly. Nothing
-  in the device suite or the eight-site sweep depends on culling today.
+  The first two are right every time. The IOSurface one is not right and not
+  even stable: left alone its answers move from pass to pass, as though the
+  state landed a draw late, and the same draws are correct against the other two
+  attachments in the same process, with the same GL calls, and no GL error
+  anywhere. ANGLE is not involved - beacons had already shown it sending
+  `glCullFace` and `glEnable(GL_CULL_FACE)`, with the driver reporting
+  `enabled=1 mode=0x408` at the moment of the draw.
+
+  Four ways to make the driver notice the state in time were measured and none
+  works: `glFlush` before the draw, `glFinish`, rebinding the framebuffer, and a
+  redundant `glEnable(GL_CULL_FACE)`. With any of them the answer stops moving
+  and settles on not culling at all.
+
+  Nor is there a format to escape into: CoreVideo on this release refuses to
+  make a texture from a `BGRA` IOSurface asked for as `GL_BGRA_EXT` internally,
+  refuses an `RGBA` IOSurface outright, and a plain `GL_BGRA_EXT` texture makes
+  an incomplete framebuffer. The one combination that works is the one the port
+  already uses.
+
+  So the way out is the attachment itself, and it costs what was removed for
+  speed: render into a plain texture and copy into the IOSurface when the frame
+  is presented. That is a trade - conformant culling against a copy per frame -
+  and not a bug to be fixed quietly. Nothing in the device suite or the
+  eight-site sweep depends on culling today.
 
 ## The tools that proved each step
 

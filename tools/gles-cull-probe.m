@@ -1,52 +1,56 @@
-// gles-cull-probe — does this driver honour glCullFace(GL_FRONT_AND_BACK)?
+// gles-cull-probe — which colour attachments does this driver cull into?
 //
-// Khronos' conformance test conformance/rendering/culling.html fails four
-// checks on this device, all of them the FRONT_AND_BACK ones: a triangle that
-// should be culled is drawn. ANGLE translates the mode correctly, so the
-// question is whether the driver underneath honours it at all. This asks the
-// driver directly, with no ANGLE and no WebKit in the way.
+// Khronos' conformance/rendering/culling.html fails four checks on this device.
+// ANGLE sends glCullFace and glEnable(GL_CULL_FACE), and the driver reports the
+// mode back correctly at the moment of the draw, so the state was never the
+// problem. This probe takes ANGLE and WebKit out of the picture and asks the
+// driver the same question against one attachment after another, because the
+// attachment turned out to be what decides it.
 //
 // Build (armv7, iOS 6):
 //   clang -target armv7-apple-ios6.0 -isysroot "$IOS_SDK" -O2 -fno-objc-arc \
-//       -framework Foundation -framework OpenGLES \
+//       -framework Foundation -framework CoreVideo -framework OpenGLES \
 //       tools/gles-cull-probe.m -o dist/gles-cull-probe
 #import <Foundation/Foundation.h>
 #import <CoreVideo/CoreVideo.h>
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES2/gl.h>
 #import <OpenGLES/ES2/glext.h>
+#include <dlfcn.h>
 #include <stdio.h>
 #include <string.h>
-#include <dlfcn.h>
+
+static const int kSize = 16;
 
 typedef CFTypeRef (*IOSurfaceCreateFunction)(CFDictionaryRef);
 
-// The colour attachment WebKit actually uses for a canvas: a texture the
-// CoreVideo cache made out of an IOSurface, rather than one from glTexImage2D.
-static GLuint textureFromIOSurface(EAGLContext *context, int size)
+static CFTypeRef makeSurface(uint32_t pixelFormat)
 {
     void *library = dlopen("/System/Library/PrivateFrameworks/IOSurface.framework/IOSurface", RTLD_LAZY);
     if (!library)
-        return 0;
+        return NULL;
     IOSurfaceCreateFunction createSurface = (IOSurfaceCreateFunction)dlsym(library, "IOSurfaceCreate");
     CFStringRef *widthKey = (CFStringRef *)dlsym(library, "kIOSurfaceWidth");
     CFStringRef *heightKey = (CFStringRef *)dlsym(library, "kIOSurfaceHeight");
     CFStringRef *bytesPerElementKey = (CFStringRef *)dlsym(library, "kIOSurfaceBytesPerElement");
     CFStringRef *pixelFormatKey = (CFStringRef *)dlsym(library, "kIOSurfacePixelFormat");
     if (!createSurface || !widthKey || !heightKey || !bytesPerElementKey || !pixelFormatKey)
-        return 0;
-
-    int32_t bgra = 'BGRA';
+        return NULL;
     NSDictionary *properties = @{
-        (__bridge NSString *)*widthKey: @(size),
-        (__bridge NSString *)*heightKey: @(size),
+        (__bridge NSString *)*widthKey: @(kSize),
+        (__bridge NSString *)*heightKey: @(kSize),
         (__bridge NSString *)*bytesPerElementKey: @4,
-        (__bridge NSString *)*pixelFormatKey: @(bgra),
+        (__bridge NSString *)*pixelFormatKey: @(pixelFormat),
     };
-    CFTypeRef surface = createSurface((__bridge CFDictionaryRef)properties);
+    return createSurface((__bridge CFDictionaryRef)properties);
+}
+
+static GLuint surfaceTexture(EAGLContext *context, uint32_t pixelFormat,
+                             GLenum internalFormat, GLenum format)
+{
+    CFTypeRef surface = makeSurface(pixelFormat);
     if (!surface)
         return 0;
-
     CVPixelBufferRef pixelBuffer = NULL;
     if (CVPixelBufferCreateWithIOSurface(kCFAllocatorDefault, (IOSurfaceRef)surface, NULL, &pixelBuffer) != kCVReturnSuccess)
         return 0;
@@ -55,9 +59,18 @@ static GLuint textureFromIOSurface(EAGLContext *context, int size)
         return 0;
     CVOpenGLESTextureRef texture = NULL;
     if (CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, pixelBuffer, NULL,
-            GL_TEXTURE_2D, GL_RGBA, size, size, GL_BGRA_EXT, GL_UNSIGNED_BYTE, 0, &texture) != kCVReturnSuccess)
+            GL_TEXTURE_2D, internalFormat, kSize, kSize, format, GL_UNSIGNED_BYTE, 0, &texture) != kCVReturnSuccess)
         return 0;
     return CVOpenGLESTextureGetName(texture);
+}
+
+static GLuint plainTexture(GLenum internalFormat, GLenum format)
+{
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, kSize, kSize, 0, format, GL_UNSIGNED_BYTE, NULL);
+    return texture;
 }
 
 static GLuint compile(GLenum type, const char *source)
@@ -68,56 +81,115 @@ static GLuint compile(GLenum type, const char *source)
     return shader;
 }
 
-static void drawTriangle(GLint colourLocation, const GLfloat *vertices, const GLfloat *colour)
+// Draws a front-facing triangle with FRONT culled, so a driver that culls
+// leaves the red clear behind and one that does not paints it green.
+// Four things that might make the driver notice a state change before the draw
+// instead of one draw later.
+typedef enum { NoNudge, FlushNudge, FinishNudge, RebindNudge, RedundantEnableNudge } Nudge;
+static Nudge gNudge = NoNudge;
+static GLuint gFramebuffer = 0;
+
+static void applyNudge(void)
 {
-    glClearColor(1, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glUniform4fv(colourLocation, 1, colour);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, vertices);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    switch (gNudge)
+    {
+        case FlushNudge: glFlush(); break;
+        case FinishNudge: glFinish(); break;
+        case RebindNudge: glBindFramebuffer(GL_FRAMEBUFFER, gFramebuffer); break;
+        case RedundantEnableNudge: glEnable(GL_CULL_FACE); break;
+        case NoNudge: break;
+    }
 }
 
-static const char *readBack(void)
+static const char *cullVerdict(GLint colourLocation)
 {
-    static char text[32];
-    GLubyte pixel[4];
-    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-    snprintf(text, sizeof(text), "%d,%d,%d", pixel[0], pixel[1], pixel[2]);
+    static char text[64];
+    static const GLfloat frontFacing[] = { -1, 1, -1, -1, 1, 1, 1, -1 };
+    static const GLfloat green[] = { 0, 1, 0, 1 };
+
+    glEnable(GL_CULL_FACE);
+    glFrontFace(GL_CCW);
+    glClearColor(1, 0, 0, 1);
+
+    const GLenum modes[] = { GL_BACK, GL_FRONT, GL_FRONT_AND_BACK };
+    const char *names[] = { "BACK", "FRONT", "FRONT_AND_BACK" };
+    const bool shouldDraw[] = { true, false, false };
+    char *cursor = text;
+
+    for (int i = 0; i < 3; i++)
+    {
+        glCullFace(modes[i]);
+        applyNudge();
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUniform4fv(colourLocation, 1, green);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, frontFacing);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        GLubyte pixel[4];
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        // Green sits in the middle byte whichever order the driver hands back,
+        // so it is the only channel worth deciding on.
+        bool drawn = pixel[1] > 128;
+        cursor += snprintf(cursor, sizeof(text) - (cursor - text), "%s%s:%s[%d,%d,%d]",
+                           i ? " " : "", names[i], drawn == shouldDraw[i] ? "ok" : "WRONG",
+                           pixel[0], pixel[1], pixel[2]);
+    }
     return text;
 }
 
-int main(int argc, char **argv)
+// Culling is not the only rasterizer state worth asking about: if a whole class
+// of it is dropped for this attachment, the port needs to know the blast radius.
+static const char *rasterizerVerdict(GLint colourLocation)
+{
+    static char text[128];
+    static const GLfloat quad[] = { -1, 1, -1, -1, 1, 1, 1, -1 };
+    static const GLfloat green[] = { 0, 1, 0, 1 };
+    static const GLfloat half[] = { 0, 0.5, 0, 0.5 };
+    GLubyte pixel[4];
+    char *cursor = text;
+
+    glDisable(GL_CULL_FACE);
+    glUniform4fv(colourLocation, 1, green);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
+
+    // Scissor: the pixel read back sits outside the box, so it must stay red.
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(kSize / 2, kSize / 2, kSize / 2, kSize / 2);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glDisable(GL_SCISSOR_TEST);
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    cursor += snprintf(cursor, sizeof(text) - (cursor - text), "scissor:%s", pixel[1] > 128 ? "IGNORED" : "ok");
+
+    // Colour mask: green is masked off, so the pixel must stay red.
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColorMask(GL_TRUE, GL_FALSE, GL_TRUE, GL_TRUE);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    cursor += snprintf(cursor, sizeof(text) - (cursor - text), " colormask:%s", pixel[1] > 128 ? "IGNORED" : "ok");
+
+    // Blend: half green added to a black clear should land near 128, not 0 or 255.
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    glUniform4fv(colourLocation, 1, half);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glDisable(GL_BLEND);
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    cursor += snprintf(cursor, sizeof(text) - (cursor - text), " blend:%s[%d]",
+                       (pixel[1] > 100 && pixel[1] < 160) ? "ok" : "WRONG", pixel[1]);
+    return text;
+}
+
+int main(void)
 {
     @autoreleasepool {
-        bool useIOSurface = argc > 1 && strcmp(argv[1], "iosurface") == 0;
         EAGLContext *context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES2];
         [EAGLContext setCurrentContext:context];
-
-        // The attachment is chosen on the command line: "iosurface" for the one
-        // WebKit uses, anything else for a plain texture.
-        GLuint framebuffer = 0, texture = 0;
-        glGenFramebuffers(1, &framebuffer);
-        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-        if (useIOSurface)
-        {
-            texture = textureFromIOSurface(context, 16);
-            printf("attachment                     texture from an IOSurface (%s)\n", texture ? "made" : "FAILED");
-            if (!texture)
-                return 1;
-            glBindTexture(GL_TEXTURE_2D, texture);
-        }
-        else
-        {
-            glGenTextures(1, &texture);
-            glBindTexture(GL_TEXTURE_2D, texture);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-            printf("attachment                     a plain texture\n");
-        }
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-        printf("framebuffer                    %s\n",
-               glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE ? "complete" : "incomplete");
-        glViewport(0, 0, 16, 16);
+        printf("renderer  %s\n\n", glGetString(GL_RENDERER));
 
         GLuint program = glCreateProgram();
         glAttachShader(program, compile(GL_VERTEX_SHADER,
@@ -129,44 +201,69 @@ int main(int argc, char **argv)
         glUseProgram(program);
         glEnableVertexAttribArray(0);
         GLint colourLocation = glGetUniformLocation(program, "col");
+        glViewport(0, 0, kSize, kSize);
 
-        printf("renderer                       %s\n", glGetString(GL_RENDERER));
-        printf("npot extensions                 %s\n",
-               strstr((const char *)glGetString(GL_EXTENSIONS), "npot") ? "see below" : "none named npot");
+        // Each case gets a framebuffer of its own, because swapping attachments
+        // on one framebuffer gave answers that moved between runs - the stand
+        // was measuring itself.
+        for (int which = 0; which < 3; which++)
         {
-            const char *all = (const char *)glGetString(GL_EXTENSIONS);
-            const char *cursor = all;
-            while ((cursor = strstr(cursor, "npot")) != NULL) {
-                const char *start = cursor;
-                while (start > all && start[-1] != ' ') start--;
-                const char *end = strchr(cursor, ' ');
-                printf("                                %.*s\n",
-                       (int)((end ? end : cursor + strlen(cursor)) - start), start);
-                cursor = end ? end : cursor + strlen(cursor);
+            const char *name = "";
+            GLuint framebuffer = 0;
+            glGenFramebuffers(1, &framebuffer);
+            glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+            if (which == 0)
+            {
+                name = "renderbuffer RGBA8         ";
+                GLuint renderbuffer = 0;
+                glGenRenderbuffers(1, &renderbuffer);
+                glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+                glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8_OES, kSize, kSize);
+                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
             }
+            else if (which == 1)
+            {
+                name = "plain texture RGBA         ";
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                       plainTexture(GL_RGBA, GL_RGBA), 0);
+            }
+            else
+            {
+                name = "texture from an IOSurface  ";
+                GLuint texture = surfaceTexture(context, 'BGRA', GL_RGBA, GL_BGRA_EXT);
+                if (!texture)
+                {
+                    printf("%s  could not be made\n", name);
+                    continue;
+                }
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+            }
+
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            {
+                printf("%s  framebuffer incomplete\n", name);
+                continue;
+            }
+
+            // Three passes, because a driver that only mishandles the first draw
+            // into a fresh target looks exactly like one that never culls.
+            gFramebuffer = framebuffer;
+            const char *nudgeNames[] = { "no nudge     ", "glFlush      ", "glFinish     ",
+                                         "rebind fbo   ", "redundant on " };
+            for (int nudge = NoNudge; nudge <= RedundantEnableNudge; nudge++)
+            {
+                gNudge = (Nudge)nudge;
+                const char *first = cullVerdict(colourLocation);
+                char firstCopy[128];
+                snprintf(firstCopy, sizeof(firstCopy), "%s", first);
+                printf("%s  %s  %s | again %s\n", name, nudgeNames[nudge], firstCopy,
+                       cullVerdict(colourLocation));
+            }
+            gNudge = NoNudge;
+            printf("\n");
         }
-
-        const GLfloat ccw[] = { -1, 1, -1, -1, 1, 1, 1, -1 };
-        const GLfloat green[] = { 0, 1, 0, 1 };
-
-        drawTriangle(colourLocation, ccw, green);
-        printf("cull off, front face drawn     %s (want 0,255,0)\n", readBack());
-
-        glEnable(GL_CULL_FACE);
-        glCullFace(GL_BACK);
-        glFrontFace(GL_CCW);
-        drawTriangle(colourLocation, ccw, green);
-        printf("cull BACK, front face drawn    %s (want 0,255,0)\n", readBack());
-
-        glCullFace(GL_FRONT);
-        drawTriangle(colourLocation, ccw, green);
-        printf("cull FRONT, front face culled  %s (want 255,0,0)\n", readBack());
-
-        glCullFace(GL_FRONT_AND_BACK);
-        printf("cull mode the driver reports   0x%x (want 0x408)\n", ({ GLint mode = 0; glGetIntegerv(GL_CULL_FACE_MODE, &mode); mode; }));
-        drawTriangle(colourLocation, ccw, green);
-        printf("cull FRONT_AND_BACK, culled    %s (want 255,0,0)\n", readBack());
-        printf("glGetError                     0x%x\n", glGetError());
+        printf("glGetError 0x%x\n", glGetError());
     }
     return 0;
 }
