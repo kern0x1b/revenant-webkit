@@ -11,10 +11,54 @@
 //       -framework Foundation -framework OpenGLES \
 //       tools/gles-cull-probe.m -o dist/gles-cull-probe
 #import <Foundation/Foundation.h>
+#import <CoreVideo/CoreVideo.h>
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES2/gl.h>
 #import <OpenGLES/ES2/glext.h>
 #include <stdio.h>
+#include <string.h>
+#include <dlfcn.h>
+
+typedef CFTypeRef (*IOSurfaceCreateFunction)(CFDictionaryRef);
+
+// The colour attachment WebKit actually uses for a canvas: a texture the
+// CoreVideo cache made out of an IOSurface, rather than one from glTexImage2D.
+static GLuint textureFromIOSurface(EAGLContext *context, int size)
+{
+    void *library = dlopen("/System/Library/PrivateFrameworks/IOSurface.framework/IOSurface", RTLD_LAZY);
+    if (!library)
+        return 0;
+    IOSurfaceCreateFunction createSurface = (IOSurfaceCreateFunction)dlsym(library, "IOSurfaceCreate");
+    CFStringRef *widthKey = (CFStringRef *)dlsym(library, "kIOSurfaceWidth");
+    CFStringRef *heightKey = (CFStringRef *)dlsym(library, "kIOSurfaceHeight");
+    CFStringRef *bytesPerElementKey = (CFStringRef *)dlsym(library, "kIOSurfaceBytesPerElement");
+    CFStringRef *pixelFormatKey = (CFStringRef *)dlsym(library, "kIOSurfacePixelFormat");
+    if (!createSurface || !widthKey || !heightKey || !bytesPerElementKey || !pixelFormatKey)
+        return 0;
+
+    int32_t bgra = 'BGRA';
+    NSDictionary *properties = @{
+        (__bridge NSString *)*widthKey: @(size),
+        (__bridge NSString *)*heightKey: @(size),
+        (__bridge NSString *)*bytesPerElementKey: @4,
+        (__bridge NSString *)*pixelFormatKey: @(bgra),
+    };
+    CFTypeRef surface = createSurface((__bridge CFDictionaryRef)properties);
+    if (!surface)
+        return 0;
+
+    CVPixelBufferRef pixelBuffer = NULL;
+    if (CVPixelBufferCreateWithIOSurface(kCFAllocatorDefault, (IOSurfaceRef)surface, NULL, &pixelBuffer) != kCVReturnSuccess)
+        return 0;
+    CVOpenGLESTextureCacheRef cache = NULL;
+    if (CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, NULL, context, NULL, &cache) != kCVReturnSuccess)
+        return 0;
+    CVOpenGLESTextureRef texture = NULL;
+    if (CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, pixelBuffer, NULL,
+            GL_TEXTURE_2D, GL_RGBA, size, size, GL_BGRA_EXT, GL_UNSIGNED_BYTE, 0, &texture) != kCVReturnSuccess)
+        return 0;
+    return CVOpenGLESTextureGetName(texture);
+}
 
 static GLuint compile(GLenum type, const char *source)
 {
@@ -42,23 +86,36 @@ static const char *readBack(void)
     return text;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     @autoreleasepool {
+        bool useIOSurface = argc > 1 && strcmp(argv[1], "iosurface") == 0;
         EAGLContext *context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES2];
         [EAGLContext setCurrentContext:context];
 
-        // A texture attachment, which is what WebKit draws a canvas into, rather
-        // than the renderbuffer this probe used at first.
+        // The attachment is chosen on the command line: "iosurface" for the one
+        // WebKit uses, anything else for a plain texture.
         GLuint framebuffer = 0, texture = 0;
         glGenFramebuffers(1, &framebuffer);
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-        glGenTextures(1, &texture);
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        if (useIOSurface)
+        {
+            texture = textureFromIOSurface(context, 16);
+            printf("attachment                     texture from an IOSurface (%s)\n", texture ? "made" : "FAILED");
+            if (!texture)
+                return 1;
+            glBindTexture(GL_TEXTURE_2D, texture);
+        }
+        else
+        {
+            glGenTextures(1, &texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            printf("attachment                     a plain texture\n");
+        }
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-        printf("framebuffer (texture)          %s\n",
+        printf("framebuffer                    %s\n",
                glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE ? "complete" : "incomplete");
         glViewport(0, 0, 16, 16);
 
@@ -72,6 +129,22 @@ int main(void)
         glUseProgram(program);
         glEnableVertexAttribArray(0);
         GLint colourLocation = glGetUniformLocation(program, "col");
+
+        printf("renderer                       %s\n", glGetString(GL_RENDERER));
+        printf("npot extensions                 %s\n",
+               strstr((const char *)glGetString(GL_EXTENSIONS), "npot") ? "see below" : "none named npot");
+        {
+            const char *all = (const char *)glGetString(GL_EXTENSIONS);
+            const char *cursor = all;
+            while ((cursor = strstr(cursor, "npot")) != NULL) {
+                const char *start = cursor;
+                while (start > all && start[-1] != ' ') start--;
+                const char *end = strchr(cursor, ' ');
+                printf("                                %.*s\n",
+                       (int)((end ? end : cursor + strlen(cursor)) - start), start);
+                cursor = end ? end : cursor + strlen(cursor);
+            }
+        }
 
         const GLfloat ccw[] = { -1, 1, -1, -1, 1, 1, 1, -1 };
         const GLfloat green[] = { 0, 1, 0, 1 };

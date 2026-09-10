@@ -166,21 +166,29 @@ Two bugs it found, both fixed here:
   away when sampling once the surface says `hasEmulatedAlphaChannel`, and the
   surface's own bytes are cleared to opaque once, which is what CGL does.
 
-Two that are still open:
+Two that are still open, and both of them are this driver rather than this port:
 
-- **NPOT cube maps with a `LINEAR` filter do not draw.** Two checks in
-  `texture-npot`. NPOT 2D textures are fine.
-- **`cullFace(FRONT_AND_BACK)` does not cull.** Four checks in
-  `rendering/culling`, all of them that mode; `BACK` and `FRONT` are correct.
-  Where it is not: `tools/gles-cull-probe.m` runs the same sequence on the device
-  with no ANGLE and no WebKit, into a renderbuffer and into a texture
-  attachment, and the driver culls correctly both times. Beacons in
-  `StateManagerGL::setCullFace` show ANGLE sending `glCullFace(0x408)` and
-  `glEnable(GL_CULL_FACE)` before the draw. So the state is set, the driver
-  honours it when asked directly, and the triangle is still drawn through
-  WebKit. The next measurement is the one that closes it: read `GL_CULL_FACE`
-  and `GL_CULL_FACE_MODE` back from the driver inside the draw call itself, to
-  see who changes them in between.
+- **NPOT cube maps do not sample.** Two checks in `texture-npot`; NPOT 2D
+  textures are fine, which is what OpenGL ES 2.0's core allowance covers.
+  `tools/gles-npot-cube-probe.m` asks the driver directly, outside ANGLE and
+  WebKit: an 8x8 cube map samples green, a 5x5 and a 7x7 sample black with no GL
+  error at all. The driver names no npot extension of any kind. Making this pass
+  would mean ANGLE rescaling NPOT cube maps to a power of two behind the page's
+  back, which nothing in the GL backend does today.
+- **Face culling is ignored when the colour attachment came from an IOSurface.**
+  Four checks in `rendering/culling`. `tools/gles-cull-probe.m` takes an
+  argument: with a plain texture attachment the driver culls `FRONT` and
+  `FRONT_AND_BACK` correctly, and with a texture the CoreVideo cache made out of
+  an IOSurface - which is exactly what a canvas draws into here - it culls
+  neither. No ANGLE, no WebKit, no GL error. Before that probe, beacons had
+  already shown ANGLE sending `glCullFace` and `glEnable(GL_CULL_FACE)`, and the
+  driver reporting `enabled=1 mode=0x408` at the moment of the draw.
+
+  There is a way out and it costs what was just removed: render into a plain
+  texture and copy into the IOSurface when the frame is presented. That is the
+  blit this port deleted to make WebGL fast, so it is a trade - conformant
+  culling against a copy per frame - and not a bug to be fixed quietly. Nothing
+  in the device suite or the eight-site sweep depends on culling today.
 
 ## The tools that proved each step
 

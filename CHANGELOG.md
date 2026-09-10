@@ -66,9 +66,11 @@ Dates are the day the change was measured on the device, not the day it compiled
   away when sampling and cleared once in the surface itself - which is what the
   CGL backend does. Found by Khronos' conformance suite, which now runs on the
   device through `tests/device/conformance.sh`: 2236 of its checks pass over the
-  areas run so far, and the two failures left - NPOT cube maps with a `LINEAR`
-  filter, and `cullFace(FRONT_AND_BACK)` not culling - are recorded in
-  `docs/webgl.md` with what has already been ruled out for each.
+  areas run so far. The two failures left are the driver's, and each has a probe
+  that says so with no ANGLE and no WebKit in the way: this GPU does not sample
+  non-power-of-two cube maps at all, and it ignores face culling when the colour
+  attachment is a texture made from an IOSurface - which is what a canvas draws
+  into here. `docs/webgl.md` has both, and what conformant culling would cost.
 - **WebGL that animates, rather than drawing one frame.** A page that redrew in
   `requestAnimationFrame` froze the web thread after its first frame - no timers,
   no callbacks, no crash. `CVOpenGLESTextureCache` requires a flush to let go of
