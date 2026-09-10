@@ -114,6 +114,51 @@ at the engine's own C++ runtime (`install_name_tool -change
 @executable_path/Frameworks/libc++.1.dylib /usr/lib/librev-c++.1.dylib`), or it
 traps at load with nothing printed.
 
+## Stage 2 is done: the pixels reach an IOSurface
+
+`IOSurfaceSurfaceEAGL` implements `EGL_ANGLE_iosurface_client_buffer`, which is
+how a canvas leaves the GPU for the compositor. GLES cannot repoint an existing
+texture object at a surface the way `CGLTexImageIOSurface2D` does, so the surface
+owns the texture the cache gives it: `attachToFramebuffer` hands that texture
+straight to the framebuffer with nothing copied, and `bindTexImage` - where the
+caller brings its own texture - copies in and out, two blits per bind.
+
+Measured on the device:
+
+```
+EGL_ANGLE_iosurface_client_buffer advertised
+EGL_CreatePbufferFromClientBuffer ok
+EGL_BindTexImage                  ok
+framebuffer completeness          complete
+IOSurface bytes BGRA              160 96 32 255  (expected 160 96 32 255)
+```
+
+## Stage 3 is where it stops, and why
+
+`GraphicsContextGLCocoa` now asks for the GLES platform rather than Metal, skips
+the Metal feature overrides and the shared-event assert, and replaces the
+Metal shared-event completion signal - which does not exist without Metal, and
+has no fence equivalent in GLES 2.0 - with a finish and a direct call. Those
+changes are in, and inert while `ENABLE_WEBGL` is off.
+
+What blocks the rest is not the GPU: **`HAVE(IOSURFACE)` is off for this port**,
+and WebGL's whole Cocoa presentation path is built on WebCore's own `IOSurface`
+class - `IOSurfacePbuffer`, the display buffer, `displayBufferSurface`. With the
+flag off the header does not even compile with WebGL on.
+
+Two ways forward, and they are different projects:
+
+- **Turn `HAVE(IOSURFACE)` on for this port.** Architecturally right, and the GL
+  half is already proven - the EAGL backend reaches IOSurface through `dlsym`
+  because the framework is private here, and WebCore's `IOSurface.mm` would need
+  the same treatment. The risk is reach: image buffers, video and compositing
+  all branch on that flag, so it changes far more than WebGL in a browser that
+  currently works.
+- **Give WebGL a presentation path that does not need it**: render into an ANGLE
+  pbuffer and read back into an ImageBuffer on prepare. No effect on anything
+  else, slower per frame, and a rewrite of the part of GraphicsContextGLCocoa
+  that is built around IOSurface.
+
 ## What is left, and what it costs
 
 | Stage | Work | Estimate |
@@ -121,8 +166,8 @@ traps at load with nothing printed.
 | 0 | IOSurface as a GL texture, proven on the device | **done** |
 | 1 | the CMake wiring and an ANGLE that builds for armv7 | **done** |
 | 1b | `DisplayEAGL` / `DeviceEAGL` / `PbufferSurfaceEAGL`; a headless context that clears and reads back, with no WebKit involved | **done** |
-| 2 | `IOSurfaceSurfaceEAGL`, so a real `<canvas>` clear appears on screen | 1-2 weeks |
-| 3 | `GraphicsContextGLCocoa.mm`: choose the GLES backend, GL fences instead of Metal's, WebXR foveation as a no-op | 3-5 days |
+| 2 | `IOSurfaceSurfaceEAGL` | **done** |
+| 3 | `GraphicsContextGLCocoa.mm`: the backend choice and the completion signal are done; the presentation path needs `HAVE(IOSURFACE)` for this port, or a readback path instead | the decision above, then days |
 | 4 | WebGL 1.0 conformance, and the SGX543 driver's own bugs | a week and open |
 
 One risk is recorded and not yet tested: an `EAGLContext` is thread-affine like

@@ -14,10 +14,69 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #include <ANGLE/entry_points_egl_autogen.h>
 #include <ANGLE/entry_points_egl_ext_autogen.h>
 #include <ANGLE/entry_points_gles_2_0_autogen.h>
+#include <ANGLE/entry_points_gles_ext_autogen.h>
 #include <stdio.h>
+#import <Foundation/Foundation.h>
+
+
+// IOSurface is a private framework on this release; the probe reaches it the
+// same way the engine does, through dlsym rather than a link.
+#include <dlfcn.h>
+#include <string.h>
+
+typedef struct __IOSurface *IOSurfaceRef;
+
+static void *iosurfaceLibrary()
+{
+    static void *library =
+        dlopen("/System/Library/PrivateFrameworks/IOSurface.framework/IOSurface", RTLD_LAZY);
+    return library;
+}
+
+static IOSurfaceRef createBGRAIOSurface(int width, int height)
+{
+    typedef CFTypeRef (*CreateFunction)(CFDictionaryRef);
+    CreateFunction create = (CreateFunction)dlsym(iosurfaceLibrary(), "IOSurfaceCreate");
+    CFStringRef *widthKey           = (CFStringRef *)dlsym(iosurfaceLibrary(), "kIOSurfaceWidth");
+    CFStringRef *heightKey          = (CFStringRef *)dlsym(iosurfaceLibrary(), "kIOSurfaceHeight");
+    CFStringRef *bytesPerElementKey = (CFStringRef *)dlsym(iosurfaceLibrary(), "kIOSurfaceBytesPerElement");
+    CFStringRef *pixelFormatKey     = (CFStringRef *)dlsym(iosurfaceLibrary(), "kIOSurfacePixelFormat");
+    if (!create || !widthKey || !heightKey || !bytesPerElementKey || !pixelFormatKey)
+        return nullptr;
+
+    int32_t bgra = 'BGRA';
+    NSDictionary *properties = @{
+        (__bridge NSString *)*widthKey: @(width),
+        (__bridge NSString *)*heightKey: @(height),
+        (__bridge NSString *)*bytesPerElementKey: @4,
+        (__bridge NSString *)*pixelFormatKey: @(bgra),
+    };
+    return (IOSurfaceRef)create((__bridge CFDictionaryRef)properties);
+}
+
+static const unsigned char *lockIOSurface(IOSurfaceRef surface)
+{
+    typedef int32_t (*LockFunction)(CFTypeRef, uint32_t, uint32_t *);
+    typedef void *(*BaseAddressFunction)(CFTypeRef);
+    LockFunction lock               = (LockFunction)dlsym(iosurfaceLibrary(), "IOSurfaceLock");
+    BaseAddressFunction baseAddress = (BaseAddressFunction)dlsym(iosurfaceLibrary(), "IOSurfaceGetBaseAddress");
+    if (!lock || !baseAddress)
+        return nullptr;
+    lock(surface, 0, nullptr);
+    return (const unsigned char *)baseAddress(surface);
+}
+
+static void unlockIOSurface(IOSurfaceRef surface)
+{
+    typedef int32_t (*UnlockFunction)(CFTypeRef, uint32_t, uint32_t *);
+    UnlockFunction unlock = (UnlockFunction)dlsym(iosurfaceLibrary(), "IOSurfaceUnlock");
+    if (unlock)
+        unlock(surface, 0, nullptr);
+}
 
 static const int kSize = 64;
 
@@ -96,9 +155,80 @@ int main(void)
     printf("glGetError                  0x%x\n", GL_GetError());
 
     bool matches = pixel[0] == 16 && pixel[1] == 64 && pixel[2] == 192 && pixel[3] == 255;
-    printf("\nVERDICT                     %s\n", matches
-        ? "ANGLE renders on this GPU through EAGL"
-        : "ANGLE came up but did not render what was asked");
+
+    // The surface a browser actually wants: an IOSurface it can hand to the
+    // compositor. Render into it through ANGLE, then read the surface's own
+    // bytes on the CPU - if they carry what the GPU drew, the canvas has a way
+    // out of the GPU and onto the screen.
+    bool surfaceMatches = false;
+    printf("\n-- IOSurface surface --\n");
+    printf("EGL_ANGLE_iosurface_client_buffer %s\n",
+        strstr(EGL_QueryString(display, EGL_EXTENSIONS), "EGL_ANGLE_iosurface_client_buffer")
+            ? "advertised" : "MISSING");
+
+    IOSurfaceRef ioSurface = createBGRAIOSurface(kSize, kSize);
+    printf("IOSurfaceCreate                   %s\n", ioSurface ? "ok" : "FAILED");
+    if (ioSurface)
+    {
+        EGLint surfaceAttributes[] = {
+            EGL_WIDTH, kSize,
+            EGL_HEIGHT, kSize,
+            EGL_IOSURFACE_PLANE_ANGLE, 0,
+            EGL_TEXTURE_TARGET, EGL_TEXTURE_2D,
+            EGL_TEXTURE_INTERNAL_FORMAT_ANGLE, GL_BGRA_EXT,
+            EGL_TEXTURE_FORMAT, EGL_TEXTURE_RGBA,
+            EGL_TEXTURE_TYPE_ANGLE, GL_UNSIGNED_BYTE,
+            EGL_NONE,
+        };
+        EGLSurface ioSurfacePbuffer = EGL_CreatePbufferFromClientBuffer(
+            display, EGL_IOSURFACE_ANGLE, ioSurface, config, surfaceAttributes);
+        printf("EGL_CreatePbufferFromClientBuffer %s (0x%x)\n",
+            ioSurfacePbuffer == EGL_NO_SURFACE ? "FAILED" : "ok", EGL_GetError());
+
+        if (ioSurfacePbuffer != EGL_NO_SURFACE)
+        {
+            GLuint canvasTexture = 0;
+            GL_GenTextures(1, &canvasTexture);
+            GL_BindTexture(GL_TEXTURE_2D, canvasTexture);
+            EGLBoolean bound = EGL_BindTexImage(display, ioSurfacePbuffer, EGL_BACK_BUFFER);
+            printf("EGL_BindTexImage                  %s (0x%x)\n", bound ? "ok" : "FAILED",
+                EGL_GetError());
+
+            GLuint framebuffer = 0;
+            GL_GenFramebuffers(1, &framebuffer);
+            GL_BindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            GL_FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                    canvasTexture, 0);
+            GLenum completeness = GL_CheckFramebufferStatus(GL_FRAMEBUFFER);
+            printf("framebuffer completeness          %s (0x%x)\n",
+                completeness == GL_FRAMEBUFFER_COMPLETE ? "complete" : "INCOMPLETE", completeness);
+
+            GL_Viewport(0, 0, kSize, kSize);
+            GL_ClearColor(32 / 255.0f, 96 / 255.0f, 160 / 255.0f, 1.0f);
+            GL_Clear(GL_COLOR_BUFFER_BIT);
+            GL_Finish();
+
+            EGL_ReleaseTexImage(display, ioSurfacePbuffer, EGL_BACK_BUFFER);
+            GL_Finish();
+
+            const unsigned char *bytes = lockIOSurface(ioSurface);
+            if (bytes)
+            {
+                printf("IOSurface bytes BGRA              %d %d %d %d  (expected 160 96 32 255)\n",
+                    bytes[0], bytes[1], bytes[2], bytes[3]);
+                surfaceMatches = bytes[0] == 160 && bytes[1] == 96 && bytes[2] == 32;
+                unlockIOSurface(ioSurface);
+            }
+            EGL_DestroySurface(display, ioSurfacePbuffer);
+        }
+        CFRelease(ioSurface);
+    }
+
+    printf("\nVERDICT                     %s\n", matches && surfaceMatches
+        ? "ANGLE renders on this GPU through EAGL, into an IOSurface"
+        : matches ? "ANGLE renders, but the IOSurface path did not carry the pixels"
+                  : "ANGLE came up but did not render what was asked");
+    matches = matches && surfaceMatches;
 
     EGL_MakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     EGL_DestroyContext(display, context);
