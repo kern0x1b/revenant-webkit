@@ -57,6 +57,19 @@
 		</dict>
 		<dict>
 			<key>cell</key><string>PSGroupCell</string>
+			<key>label</key><string>Diagnostics</string>
+			<key>footerText</key><string>Write what a page logs to the console — including its errors — to /tmp/rev-safari-stderr.log, with the file and line each came from. Off unless you are debugging a site: a chatty page writes a lot.</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>label</key><string>Log page console</string>
+			<key>defaults</key><string>space.kern0x1b.rev</string>
+			<key>key</key><string>ConsoleLog</string>
+			<key>default</key><false/>
+			<key>id</key><string>ConsoleLog</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSGroupCell</string>
 			<key>label</key><string>Actions</string>
 			<key>footerText</key><string>Settings apply on the next new tab. If they do not, close and reopen the app; if they still do not, respring.</string>
 		</dict>

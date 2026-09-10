@@ -471,44 +471,30 @@ static BOOL revInjectionEnabledForThisApp(void) {
     return [bid isEqualToString:@"com.apple.mobilesafari"];
 }
 
-// window.WebAssembly (wasm3) is installed at window-object-clear, before the page's
-// scripts run. Swizzle whichever Safari frame-load-delegate class implements
-// -webView:didClearWindowObject:forFrame:, chain the original, then install RevWasm.
+// window.WebAssembly (wasm3) is installed at window-object-clear, before the
+// page's scripts run. The engine calls back directly: this dylib is not the
+// frame load delegate - the browser it is loaded into is - and guessing which
+// class to swizzle produced a bridge that was present only sometimes.
 #import "RevWasm.h"
-static void (*g_didClear_orig)(id, SEL, id, id, id);
-static void rev_didClear(id self, SEL _cmd, id webView, id windowObject, id frame) {
-    if (g_didClear_orig) g_didClear_orig(self, _cmd, webView, windowObject, frame);
-    @try { [RevWasm installInWebView:(WebView *)webView forFrame:(WebFrame *)frame]; } @catch (id e) {}
+#include <dlfcn.h>
+typedef void (*RevWindowObjectClearedCallback)(WebView *, WebFrame *);
+static void rev_window_object_cleared(WebView *webView, WebFrame *frame) {
+    @try { [RevWasm installInWebView:webView forFrame:frame]; } @catch (id e) {}
 }
-// Installs the WebAssembly bridge when the window object is cleared.
-//
-// This walks the class list and takes the first class answering the selector,
-// which is a lottery: the selector is inherited, so many classes answer it and
-// the order of that list is arbitrary. window.WebAssembly is therefore present
-// only sometimes - a probe page reported it undefined.
-//
-// Replacing this with an attachment to the delegate the browser actually sets
-// (hooking -[WebView setFrameLoadDelegate:] and adding the method to that
-// class) does attach deterministically, to WebUIBrowserLoadingController, and
-// then **no page finishes loading at all**, whether the method is added before
-// or after the original runs. So the attachment point is wrong in a way that is
-// not yet understood, and a browser that loads pages beats one that exposes
-// WebAssembly. Left as it was; the next attempt should install from inside the
-// engine, at WebFrameLoaderClient::dispatchDidClearWindowObjectInWorld, which
-// this port owns and which needs no guessing about the embedder at all.
 static void rev_install_wasm_hook(void) {
-    SEL sel = @selector(webView:didClearWindowObject:forFrame:);
-    unsigned int count = 0;
-    Class *classes = objc_copyClassList(&count);
-    for (unsigned int i = 0; i < count; i++) {
-        Method m = class_getInstanceMethod(classes[i], sel);
-        if (m && class_getMethodImplementation(classes[i], sel) != (IMP)rev_didClear) {
-            g_didClear_orig = (void (*)(id, SEL, id, id, id))method_getImplementation(m);
-            method_setImplementation(m, (IMP)rev_didClear);
-            break;
-        }
+    void (*setCallback)(RevWindowObjectClearedCallback) =
+        (void (*)(RevWindowObjectClearedCallback))dlsym(RTLD_DEFAULT, "WebSetWindowObjectClearedCallback");
+    if (setCallback) {
+        setCallback(rev_window_object_cleared);
+        return;
     }
-    free(classes);
+    // WebKitLegacy may not be bound yet when an inserted library is initialized.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        void (*late)(RevWindowObjectClearedCallback) =
+            (void (*)(RevWindowObjectClearedCallback))dlsym(RTLD_DEFAULT, "WebSetWindowObjectClearedCallback");
+        if (late)
+            late(rev_window_object_cleared);
+    });
 }
 
 static IMP g_openBlank_orig;
@@ -543,12 +529,33 @@ static id rev_openBlankTabDocument(id self, SEL _cmd) {
     return doc;
 }
 
+@interface NSObject (RevWebPreferences)
++ (id)standardPreferences;
+- (void)_setBoolPreferenceForTestingWithValue:(BOOL)value forKey:(NSString *)key;
+@end
+
+// The page console goes to the engine's own log, so a site that fails in
+// JavaScript can be read on the device instead of rebuilt for.
+static void rev_apply_console_logging(void) {
+    BOOL wanted = revPrefBool(@"ConsoleLog", NO);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        Class preferences = NSClassFromString(@"WebPreferences");
+        if (![preferences respondsToSelector:@selector(standardPreferences)])
+            return;
+        id standard = [preferences standardPreferences];
+        if ([standard respondsToSelector:@selector(_setBoolPreferenceForTestingWithValue:forKey:)])
+            [standard _setBoolPreferenceForTestingWithValue:wanted
+                                                     forKey:@"LogsPageMessagesToSystemConsoleEnabled"];
+    });
+}
+
 __attribute__((constructor))
 static void rev_startpage_init(void) {
     if (!revInjectionEnabledForThisApp())
         return;
     [NSURLProtocol registerClass:[RevStartPageProtocol class]];
     rev_install_wasm_hook();
+    rev_apply_console_logging();
 
     Class tc = NSClassFromString(@"TabController");
     if (!tc) return;
