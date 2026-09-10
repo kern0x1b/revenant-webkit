@@ -38,7 +38,7 @@ device.env*
 
 # Local device screenshots captured during work — may show device content
 .claude/screenshots/
-packaging/.theos/
+.theos/
 packaging/packages/
 packaging/obj/
 # Theos leaves a .stamp beside sources it reaches through a relative path.

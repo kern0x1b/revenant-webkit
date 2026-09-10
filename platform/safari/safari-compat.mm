@@ -171,10 +171,19 @@ static void rev_crash_handler(int sig, siginfo_t* info, void* context) {
 }
 __attribute__((constructor))
 static void rev_crash_init() {
+    // A stack overflow faults on the guard page, so the handler needs a stack of
+    // its own or the process dies without printing anything at all.
+    static char alternateStack[SIGSTKSZ * 4];
+    stack_t signalStack;
+    memset(&signalStack, 0, sizeof(signalStack));
+    signalStack.ss_sp = alternateStack;
+    signalStack.ss_size = sizeof(alternateStack);
+    sigaltstack(&signalStack, NULL);
+
     struct sigaction action;
     memset(&action, 0, sizeof(action));
     action.sa_sigaction = rev_crash_handler;
-    action.sa_flags = SA_SIGINFO;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigemptyset(&action.sa_mask);
     static const int signals[] = { SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGTRAP };
     for (unsigned i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i)
