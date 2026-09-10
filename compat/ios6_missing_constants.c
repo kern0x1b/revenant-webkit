@@ -1,6 +1,7 @@
 /*
- * Constants WebKit imports that this system does not define. Each becomes a
- * distinctly named CFString, so dictionary lookups miss rather than crash.
+ * Constants WebKit imports that this system does not define. Where the value the
+ * system would have used is known, it is used; the rest become distinctly named
+ * CFStrings, so dictionary lookups miss rather than crash.
  */
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CGBase.h>
@@ -23,7 +24,7 @@ const CFStringRef kCGColorSpaceLinearSRGB = CFSTR("kCGColorSpaceLinearSRGB");
 const CFStringRef kCGColorSpaceROMMRGB = CFSTR("kCGColorSpaceROMMRGB");
 const CFStringRef kCGFlexRangeAlternateColorSpace = CFSTR("kCGFlexRangeAlternateColorSpace");
 const CFStringRef kCGGradientInterpolatesPremultiplied = CFSTR("kCGGradientInterpolatesPremultiplied");
-const CFStringRef kIOSurfaceContentHeadroom = CFSTR("kIOSurfaceContentHeadroom");
+const CFStringRef kIOSurfaceContentHeadroom = CFSTR("IOSurfaceContentHeadroom");
 const CFStringRef kIOSurfaceName = CFSTR("IOSurfaceName");
 const CFStringRef kCGImageAuxiliaryDataInfoColorSpace = CFSTR("kCGImageAuxiliaryDataInfoColorSpace");
 const CFStringRef kCGImageAuxiliaryDataInfoMetadata = CFSTR("kCGImageAuxiliaryDataInfoMetadata");
