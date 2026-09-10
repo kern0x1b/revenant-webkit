@@ -57,6 +57,17 @@ device_run() {
     fi
 }
 
+# Copies a file back from the device.
+device_fetch() {
+    device_tunnel
+    if [ -n "$DEVICE_PASSWORD" ]; then
+        sshpass -p "$DEVICE_PASSWORD" \
+            scp "${DEVICE_SSH_OPTS[@]}" -P "$DEVICE_PORT" "root@$DEVICE_HOST:$1" "$2"
+    else
+        scp "${DEVICE_SSH_OPTS[@]}" -P "$DEVICE_PORT" "root@$DEVICE_HOST:$1" "$2"
+    fi
+}
+
 # Copies a local file to the device.
 device_copy() {
     device_tunnel

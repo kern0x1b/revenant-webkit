@@ -113,3 +113,31 @@ What has been ruled out, so nobody pays for it twice:
 What is left to look at: the one gamma encode that happens between the buffer an
 SVG image is rasterised into and the canvas it is drawn onto, on the pixel-reading
 effect path only.
+
+## sweep.sh — the same engine against the web as it is served
+
+`run.sh` measures the engine against numbers it can check itself. Some failures
+never appear that way: an anti-bot challenge that needs an API the port does not
+have looks like a blank page and nothing else. `sweep.sh` loads real sites, one
+browser per site, and reports four things per page:
+
+```
+tests/device/sweep.sh                       # the built-in list
+tests/device/sweep.sh https://example.com   # or the sites you name
+```
+
+| Column | What it means |
+| --- | --- |
+| `ALIVE` | the browser survived the load — a `killall -0`, because this device has no `ps` |
+| `CRASH` | how many times the crash handler fired during the load |
+| `PAINTED` | how much of the page area the screenshot drew, `blank` under 1% |
+| `DIRTY` | the process's dirty memory, which is what jetsam judges by |
+
+Screenshots go to `tests/device/sweep-shots/` (gitignored), so a verdict that
+looks wrong can be looked at.
+
+**The device is not a Unix box.** It carries `sed`, `grep`, `xargs`, `cat`, `ls`,
+`killall`, and the port's own tools — and nothing else. No `ps`, `head`, `tail`,
+`wc`, `cut`, `awk` or `sort`. A pipeline through any of those quietly produces
+nothing, which reads as "the process is gone" and has been mistaken for a crash
+more than once.
