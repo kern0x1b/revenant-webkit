@@ -133,6 +133,20 @@ filter it cannot honour.
 runner serves: the specification exposes it to secure contexts only, and the
 check says so rather than reporting a hole that is not there.
 
+## gl-present.sh — the canvas the GPU drew, on the screen
+
+Every WebGL check in `web-platform.html` passes by reading pixels back out of
+the context, and all of them passed while the canvas on screen was a white
+rectangle: reading back and presenting are different paths, and only one of them
+was working. This loads a canvas cleared to red and looks at the screen.
+
+```sh
+tests/device/gl-present.sh
+```
+
+It prints how much of the page area is red and exits non-zero when the answer is
+`absent`. The screenshot stays in `tests/device/sweep-shots/gl-present.png`.
+
 ## sweep.sh — the same engine against the web as it is served
 
 `run.sh` measures the engine against numbers it can check itself. Some failures

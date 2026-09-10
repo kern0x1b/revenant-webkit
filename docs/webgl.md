@@ -43,13 +43,15 @@ in it, is already platform independent.
   and framebuffer code with nothing platform-specific in it.
 - `IOSurfaceSurfaceEAGL` is the one that had no model. `EGL_ANGLE_iosurface_client_buffer`
   is how a canvas leaves the GPU for the compositor; the CGL backend implements it
-  with `CGLTexImageIOSurface2D`, which hands an existing texture object another
-  texture's storage. GLES has no such call. What it has is
-  `CVOpenGLESTextureCache`, which produces a texture of its own backed by the
-  surface, so this surface owns that texture: `attachToFramebuffer` hands it
-  straight to the framebuffer with nothing copied, and `bindTexImage` - where the
-  caller brings its own texture object and nothing in GLES can repoint it -
-  copies in and back out, two blits per bind.
+  with `CGLTexImageIOSurface2D`, which points an existing texture object at
+  another texture's storage. GLES has no such call. What it has is
+  `CVOpenGLESTextureCache`, which makes a texture of its own out of the surface,
+  so this surface creates that texture and hands the name over:
+  `attachToFramebuffer` gives it to the framebuffer, and `EGL_BindTexImage` gives
+  it to the texture object the caller named, which uses it in place of its own
+  until the image is released. That last step needed one seam in ANGLE proper:
+  `SurfaceGL::getBindTexImageTextureID`, which every other backend answers with
+  zero, and a texture that knows the name it is holding is not its own to delete.
 - `DeviceEAGL` answers nothing, because EAGL has no device object to name.
 - `Display.cpp` selects the backend in the three places that decide a display.
 
@@ -91,6 +93,35 @@ non-separable blend modes, and the suite caught all four. Canvas keeps the bitma
 backend on this port; WebGL makes its own IOSurfaces and does not go through
 there.
 
+## Getting the canvas onto the screen
+
+Everything above can be true while the canvas is a white rectangle, and for a
+while it was: a context, a clear, a triangle, all of it read back correctly with
+`readPixels`, and nothing on the display. Reading back and presenting are
+different paths, and only one of them was working. Two things were in the way.
+
+**The order of the two schedulers.** A canvas hands the compositor its finished
+surface in the rendering update's preparation step, and the compositor picks it
+up when layers are flushed. In WebKit2 those are the same pass. In WebKit1 the
+layer flush is driven by the layer-flush scheduler and the rendering update by
+its own, and here the flush went first every time: the layer was displayed
+before the canvas had been prepared, saw no surface, and cleared itself. Nothing
+marks the layer again afterwards, so on a page that draws once - which is most
+WebGL demos and every screenshot test - the frame never arrived at all.
+`-[WebView _flushCompositingChanges]` now prepares the page's canvases before it
+hands the layers over, through a `Page` entry point that the rendering update
+uses as well.
+
+**What CoreAnimation will accept as layer contents.** Upstream gives the layer
+the IOSurface itself, which this release's CoreAnimation takes without
+complaining and never draws. It is given a `CGImage` over the same surface
+instead - `IOSurface::createNativeImage`, which is the path `toDataURL` was
+already proving correct on this device.
+
+`tests/device/gl-present.sh` is the check that would have caught this: a canvas
+cleared to red, a screenshot, and the share of the page area that is actually
+red. It reads 97%.
+
 ## The tools that proved each step
 
 - `tools/gles-iosurface-probe.m` - can this GPU bind an IOSurface as a texture at
@@ -106,8 +137,9 @@ there.
 - **Conformance.** A triangle is not a test suite. The known risks are this
   driver's own: framebuffer completeness for formats other than RGBA8, and the
   texture formats SGX543 handles differently from the specification.
-- **The bindTexImage copies.** Two blits per bind is the price of GLES having no
-  way to repoint a texture object. A page that redraws a large canvas every frame
-  will feel it.
+- **The `GL_Finish` per frame.** Metal signals frame completion through a shared
+  event; GLES 2.0 has no fence, so the frame is waited for instead. It is the
+  same guarantee and a worse way to get it.
 - **Performance.** Nothing here has been measured for speed, only for
-  correctness.
+  correctness. The presentation path costs one `CGImage` over the surface per
+  displayed frame, which is the part to measure first.
