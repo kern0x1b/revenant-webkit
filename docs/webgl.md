@@ -49,12 +49,52 @@ GPU renders into an IOSurface that the CPU reads back in the byte order ANGLE
 expects. IOSurface is a private framework on this release, so the probe reaches
 it through `dlsym` rather than a link that would not load.
 
+## Stage 1, in part: ANGLE itself builds for armv7
+
+The other thing nobody had checked is whether ANGLE - 134 MB of translator,
+common code and renderers - compiles for a 32-bit ARM target at all with this
+toolchain. It does, and three things had to be settled first. Each is in the
+tree now and costs nothing while `ENABLE_WEBGL` is off:
+
+- **`OpenGL::GLES` had no definition here.** WebCore links that imported target
+  when WebGL is on, and the finder that defines it looks for a pkg-config
+  `glesv2` and a `GLES2/gl2.h`, which is a Linux install. On this platform GLES
+  is a framework. `Source/cmake/OptionsIOS.cmake` defines the target from it.
+- **ANGLE refuses to build against an SDK older than iOS 17.** That floor is the
+  Metal backend's, which calls API only the iOS 17 SDK declares. This port
+  builds against the newest SDK that still emits armv7 and will never run Metal,
+  so the guard in `src/common/platform.h` excludes it.
+- **The Metal renderer is dropped, and the null renderer stands in.**
+  `PlatformIOS.cmake` removes the Metal sources and definition; ANGLE will not
+  compile with no renderer at all, so the null one is the floor until the GLES
+  backend exists. It draws nothing, and a browser must never ship it.
+
+The result is `libANGLE.a` (18 MB, armv7, 261 objects) and `libGLESv2.a`, built
+in a separate `build-254-angle` tree so the shipping build is untouched.
+
+### The three lines where the backend plugs in
+
+`src/libANGLE/Display.cpp` selects a display implementation in three places,
+each keyed on the same platform macros:
+
+| Line | What it does | What EAGL adds |
+| --- | --- | --- |
+| ~62 | includes the display header for the platform | `renderer/gl/eagl/DisplayEAGL.h` |
+| ~346 | picks the default `EGL_PLATFORM_ANGLE_TYPE_*` | `EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE` |
+| ~441 | constructs the display | `new rx::DisplayEAGL(state)` |
+
+That is where stage 1 ends and the port becomes real work: the files behind
+those three lines - `DisplayEAGL`, `ContextEAGL`, `DeviceEAGL` and the surface -
+do not exist and have to be written, using `cgl/` as the model and the texture
+path that stage 0 proved.
+
 ## What is left, and what it costs
 
 | Stage | Work | Estimate |
 | --- | --- | --- |
 | 0 | IOSurface as a GL texture, proven on the device | **done** |
-| 1 | `DisplayEAGL` / `ContextEAGL` / `DeviceEAGL` and the CMake wiring; a headless context that clears and reads back, with no WebKit involved | 1-2 weeks |
+| 1 | the CMake wiring and an ANGLE that builds for armv7 | **done** |
+| 1b | `DisplayEAGL` / `ContextEAGL` / `DeviceEAGL`; a headless context that clears and reads back, with no WebKit involved | 1-2 weeks |
 | 2 | `IOSurfaceSurfaceEAGL`, so a real `<canvas>` clear appears on screen | 1-2 weeks |
 | 3 | `GraphicsContextGLCocoa.mm`: choose the GLES backend, GL fences instead of Metal's, WebXR foveation as a no-op | 3-5 days |
 | 4 | WebGL 1.0 conformance, and the SGX543 driver's own bugs | a week and open |

@@ -44,3 +44,4 @@ packaging/obj/
 # Theos leaves a .stamp beside sources it reaches through a relative path.
 packaging/**/.stamp
 sweep-shots/
+build-254-angle/
