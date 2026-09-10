@@ -143,3 +143,16 @@ bool CGColorSpaceUsesExtendedRange(CGColorSpaceRef space)
     (void)space;
     return false;
 }
+
+/*
+ * CGIOSurfaceContextCreateImageReference hands back an image that keeps
+ * referencing the surface's memory instead of copying it. This release has only
+ * the copying form, which is correct and slower - the caller draws the image and
+ * lets it go, so the difference is a copy per use, not a wrong picture.
+ */
+extern CGImageRef CGIOSurfaceContextCreateImage(CGContextRef);
+
+CGImageRef CGIOSurfaceContextCreateImageReference(CGContextRef context)
+{
+    return CGIOSurfaceContextCreateImage(context);
+}

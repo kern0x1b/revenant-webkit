@@ -45,6 +45,14 @@ Dates are the day the change was measured on the device, not the day it compiled
   process silently. It runs on an alternate stack now.
 
 ### Added
+- **WebGL.** A canvas gets a real GL context on a GPU from 2011: shaders compile
+  and the GPU draws, checked on the device by five tests rather than by eye. The
+  only GL backend upstream ships for this platform goes through ANGLE's Metal
+  renderer and Metal needs an A7, so the port carries an ANGLE backend on EAGL -
+  `DisplayEAGL`, `PbufferSurfaceEAGL`, `IOSurfaceSurfaceEAGL`, `DeviceEAGL` -
+  with ANGLE built for armv7 for the first time, and WebCore's IOSurface support
+  turned on to carry the pixels to the compositor. WebGL 2.0 stays out of reach:
+  it needs OpenGL ES 3.0 and this silicon is ES 2.0. See `docs/webgl.md`.
 - **A page console that can be turned on from Settings.** RevWebKit gains a
   Diagnostics switch that routes what a page logs - including its uncaught errors -
   to `/tmp/rev-safari-stderr.log` with file and line. Reading a site's JavaScript

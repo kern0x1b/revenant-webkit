@@ -59,6 +59,12 @@ needs. Each of those is fixed here.
   64-bit only), **Web Notifications**, **getUserMedia** (camera + microphone),
   `<video>` MediaStream preview, and a wave of self-contained web APIs enabled by
   default.
+- **WebGL.** `canvas.getContext("webgl")` returns a real context: shaders
+  compile, and the GPU draws. Upstream's only GL backend goes through ANGLE's
+  Metal renderer, which needs an A7, so this port carries an ANGLE backend on
+  EAGL - the GLES API this hardware does have. WebGL 2.0 needs OpenGL ES 3.0 and
+  this silicon is an ES 2.0 part; that is a ceiling, not a milestone.
+  [docs/webgl.md](docs/webgl.md) has how it was built and what is left.
 - **Web fonts and form controls.** Both were entirely absent rather than
   approximate: no `@font-face` had ever loaded a font in any format, and every
   button, field, checkbox and select was painted in a fully transparent colour.
@@ -86,7 +92,7 @@ needs. Each of those is fixed here.
 
 Correctness is checked by a numeric suite that runs on the device and reads
 pixels, glyph widths and the platform surface rather than screenshots:
-`tests/device/run.sh`, currently **52 of 52**. Alongside it,
+`tests/device/run.sh`, currently **57 of 57**. Alongside it,
 `tests/device/sweep.sh` loads real sites and reports whether each one survived,
 painted, and what it cost in memory - the failures that only the actual web
 produces do not show up in a suite that checks its own numbers. Both are described

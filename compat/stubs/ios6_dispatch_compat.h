@@ -222,9 +222,8 @@ typedef NSString *NSTextListMarkerFormat;
 
 /* Keys and modes from much newer releases, looked up in dictionaries or
  * compared against; never produced on this device. */
-#ifndef kIOSurfaceContentHeadroom
-#define kIOSurfaceContentHeadroom CFSTR("IOSurfaceContentHeadroom")
-#endif
+// kIOSurfaceContentHeadroom is declared by WTF and defined in the compatibility
+// library, so no macro stands in for it here any more.
 #ifndef kCTFontVariationAxesAttribute
 #define kCTFontVariationAxesAttribute kCTFontVariationAttribute
 #endif
