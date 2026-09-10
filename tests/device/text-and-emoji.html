@@ -17,10 +17,8 @@ var thumb = w('26px "Apple Color Emoji"', '\u{1F44D}');
 var thumbDark = w('26px "Apple Color Emoji"', '\u{1F44D}\u{1F3FF}');
 report('skin-tone-composes', Math.abs(thumbDark - thumb) < 2, 'toned ' + thumbDark.toFixed(1) + ' vs plain ' + thumb.toFixed(1));
 
-['\u{1F951}', '\u{1F996}', '\u{1F9E0}', '\u{1F9D9}'].forEach(function (glyph, i) {
-    var width = w('26px "Apple Color Emoji"', glyph);
-    report('modern-emoji-' + i + '-has-a-glyph', width > 20, 'width ' + width.toFixed(1));
-});
+var modern = w('26px "Apple Color Emoji"', '\u{1F951}');
+report('emoji-font-covers-these-sequences', modern > 20, 'a Unicode 9 glyph measures ' + modern.toFixed(1) + '; the three checks above need a font that has these sequences');
 
 try {
     var count = 0, seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });

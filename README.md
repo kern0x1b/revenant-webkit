@@ -256,6 +256,7 @@ webkit-254/     The engine, a git submodule on the ios6-armv7 branch
 | [docs/webgl.md](docs/webgl.md) | What WebGL would take here, and the stage of it that is already proven on the device |
 | [STUB-AUDIT.md](STUB-AUDIT.md) | The rule that no compatibility stub may answer success while doing nothing |
 | [tests/device/README.md](tests/device/README.md) | What the on-device suite measures, and the one limitation it records |
+| [docs/tools.md](docs/tools.md) | The probes in `tools/`, and the question each one answers on the device |
 | [docs/history.md](docs/history.md) | How the project started, kept as history |
 
 ## Trademarks and screenshots

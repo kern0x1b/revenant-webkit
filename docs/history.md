@@ -147,9 +147,9 @@ Two settings are not obvious:
 tools to generate its data, and once for the device. `build-libcxx.sh` builds
 libc++ and libc++abi from `llvmorg-21.1.0`, matching the header version.
 
-## Patches to WebKit
+## What the port had to change outside its own guards
 
-`patches/ios6-armv7.patch` — six files, thirty added lines:
+Six upstream files, thirty added lines, now carried on the engine branch itself:
 
 - `Source/bmalloc/bmalloc/bmalloc.h` — `aligned_alloc` is C11 and arrived in
   iOS 11; `posix_memalign` has the same contract for these callers

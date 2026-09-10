@@ -17,20 +17,21 @@ unreliable here, and that made a flaky runner look like a flaky engine.
 
 | Page | What it pins down |
 | --- | --- |
-| `text-and-emoji.html` | joined emoji compose into one glyph, skin tones compose, emoji newer than this system have glyphs, ICU's grapheme rules agree, the system font and `sans-serif` both answer `font-weight` |
-
-Four of the emoji checks - `modern-emoji-*-has-a-glyph` - measure the font the
-device happens to have, not the engine: they ask whether a character from a
-later Unicode than this system knows draws anything at all. On a device with the
-font it shipped in 2013 they fail, and that failure is about the font. Shaping,
-composition and the grapheme rules are the engine's, and those are the other
-checks on the page.
+| `text-and-emoji.html` | joined emoji compose into one glyph, skin tones compose, ICU's grapheme rules agree, the system font and `sans-serif` both answer `font-weight` |
 | `gradients-and-blends.html` | a gradient fading to transparent keeps its hue; every blend mode, including the four non-separable ones, is implemented by this CoreGraphics - measured through a canvas |
 | `image-draw-cost.html` | what six hundred cropped draws of one decoded image cost, in milliseconds - the price of purgeable decoded images |
 | `svg-image-filters.html` | a filter inside an SVG loaded through `<img>`: saturate in linear light, saturate in sRGB, and three exactness checks |
 | `web-platform.html` | the APIs a page written this decade reaches for, including WebAssembly running a module and WebGL drawing a triangle - see below |
 
-Today: **58 pass, 0 fail**, twice in a row.
+Composition can only be measured with a font that has the sequences to compose,
+which the font iOS 6 shipped in 2013 does not: it predates skin tone modifiers
+and every ZWJ sequence on the page. `emoji-font-covers-these-sequences` states
+that dependency once - it measures the font, not the engine - so a device
+without a newer emoji font fails it and the three composition checks together,
+and the page says why. Grapheme rules and `font-weight` need nothing from the
+font.
+
+Today: **55 pass, 0 fail**.
 
 Memory is measured separately, over repeated cold runs, by the harness in the
 session notes rather than from here: dirty pages are a property of a process's

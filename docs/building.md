@@ -115,6 +115,22 @@ For everything else, install the package the way any tweak is installed:
 scp packaging/packages/*.deb root@device:/tmp/ && ssh root@device dpkg -i /tmp/*.deb
 ```
 
+## The standalone host, without Safari
+
+`app/rev-webview-host.m` is a plain UIKit app around one `WebView`: no tabs, no
+chrome, one URL. It links the same engine and the same `ModernTLSURLProtocol`,
+so it answers questions about the engine without Safari, `MobileSubstrate` or a
+respring in the way, and it is where a crash is a crash of one process you own.
+
+```sh
+scripts/build-app-rev.sh
+scripts/run-app-rev.sh 20
+```
+
+The runner installs `dist/RevWebViewHost.app`, opens it through its
+`revwebviewhost:` scheme and brings back `/tmp/rev-webview-host.log`. It needs
+the device credentials in `tools/device.env`, as everything under `tools/` does.
+
 ## Verifying an injected dylib will load
 
 A dylib can compile clean and still be refused by dyld, silently. Before

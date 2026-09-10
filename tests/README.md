@@ -46,3 +46,25 @@ The batteries cover what the 32-bit JIT work touched: `correct.js` arithmetic,
 strings, arrays and the modulo and double paths that the softfp ABI fix broke;
 `poly.js` polymorphic inline caches; `coverage.js` Map/Set/iterator builtins;
 `mapdfg.js` the Map and Set DFG intrinsics written by hand for 32-bit.
+
+## In a browser, by hand
+
+Three pages measure the engine under a feed, which is the shape of page this
+device is asked to render and the shape that used to be measured against a live
+site - where the content changes between runs and every comparison is therefore
+worthless.
+
+    tests/enginebench.html    four timings: building a feed, megamorphic property
+                              access, allocation churn, forced relayout
+    tests/membench.html       a long session's feed, built in batches, printing
+                              posts and document height as it grows
+    tests/scrollbench.html    scrolling: the gap distribution between animation
+                              frames, not a mean
+
+`scrollbench.html` has two knobs, because the regime is part of what is
+measured: `?posts=1400` puts the collector in the band a content-bearing feed
+puts it in, and `?heap=40` retains forty megabytes of live objects in the shape
+a component tree has. Its own DOM is 2.2 MB of heap even at 1400 posts, so
+without them the collector never leaves its cheap band and the emergency policy
+under test never engages.
+
