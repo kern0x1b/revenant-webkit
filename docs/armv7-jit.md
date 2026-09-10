@@ -11,8 +11,48 @@ against an engine that has only one JSValue representation, and it is 64-bit. Th
 was worked out before the switch, so that work does not have to be redone.
 
 Everything below was derived from trunk at `1798fb124` (`webkit-trunk-jit`, branch
-`ios6-armv7-jit`) and from the deleted 32-bit backend in
-`../patches/armv7-jit/857bd4334690-remove-armv7-jit.patch`.
+`ios6-armv7-jit`) and from the 32-bit backend upstream deleted.
+
+## The two commits that stand in the way
+
+Reverse-applying both puts the JIT back. They are upstream's own changes, so
+this repository keeps their identity rather than a copy of them:
+
+| Commit | Date | Effect |
+| --- | --- | --- |
+| `653075383222` | 2026-03-13 | `[ARMv7] Disable JIT` — *"no longer working after recent breakage, disabling to keep EWS green"*; 9 files, +19 / -51 |
+| `857bd4334690edda28e6f535e2f828dbc5064c4d` | 2026-08-01 | `[armv7] Remove ARMv7 JIT support` — *"ARMv7 runs on CLoop now"*; 187 files, +455 / -18903 |
+
+```sh
+git -C <a full WebKit clone> show 857bd4334690 > remove-armv7-jit.patch
+```
+
+Most of the second commit deletes whole files, which come back cleanly:
+
+    Source/JavaScriptCore/assembler/MacroAssemblerARMv7.h / .cpp
+    Source/JavaScriptCore/assembler/ARMv7Registers.h
+    Source/JavaScriptCore/dfg/DFGSpeculativeJIT32_64.cpp
+    Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
+    Source/JavaScriptCore/jit/CallFrameShuffler32_64.cpp
+    Source/JavaScriptCore/offlineasm/arm.rb
+
+Reverting restores the code **and the breakage that caused it to be disabled**.
+The March commit points at where that breakage lives: `Repatch.cpp`
+(`linkPolymorphicCall`, `tryCacheArrayGetByVal` / `PutByVal` / `InByVal`) and
+`DFGJITCompiler.cpp` (`link`, `addPropertyInlineCache`) — polymorphic call
+linking and property inline caches. Both are DFG and inline-cache territory, so
+the cheap experiment is to revert both commits and then build with the baseline
+JIT only and the DFG off: if the breakage is confined to the optimising tier,
+that sidesteps it and still buys most of the speedup over the interpreter.
+
+The JIT also needs executable memory. The device is jailbroken and does not
+enforce code signing, so `PROT_EXEC` mappings should be available — untested.
+
+Carrying either revert is a permanent fork of some seventeen thousand lines,
+re-applied on every engine update. Note also that a reverse-apply reintroduces
+`#if USE(JSVALUE64)` guards around code that must always be live, and trunk no
+longer defines that macro at all, so those guards evaluate false and delete the
+code they wrap. That is the first trap in this direction.
 
 ---
 

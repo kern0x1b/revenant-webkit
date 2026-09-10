@@ -230,7 +230,6 @@ app/            The TLS bridge, the WebAssembly bridge, and the embeddable host 
 compat/         Symbols iOS 6 does not have, built into libios6compat.a
 docs/           Documentation and the screenshots in this README
 packaging/      Theos: the loader, compat dylib, TLS dylib, Settings bundle, engine layout
-patches/        The reference copy of upstream's ARMv7 JIT removal, for the record
 platform/
   safari/       The Safari substitution: the loader and the compat/hooks source
   prefs/        The RevWebKit Settings PreferenceBundle

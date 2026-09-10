@@ -23,5 +23,6 @@ SOFTWARE.
 ---
 
 The engine this project builds is WebKit, which carries its own licences (LGPL
-2.1 and a two-clause BSD licence). The patches under patches/engine/ are changes
-to that source and are covered by those licences, not by the one above.
+2.1 and a two-clause BSD licence). This port's changes to that source are commits
+on the branch tracked by the webkit-254 submodule, and are covered by those
+licences rather than by the one above. See THIRD-PARTY.md.
