@@ -247,6 +247,7 @@ webkit-254/     The engine, a git submodule on the ios6-armv7 branch
 | [docs/armv7-jit.md](docs/armv7-jit.md) | Carrying a 64-bit NaN-boxed JSValue on ARMv7, for when the branch drops it |
 | [docs/armv7-assembler.md](docs/armv7-assembler.md) | The assembler API deltas that porting the 2017 encoder would need |
 | [docs/core-update.md](docs/core-update.md) | Moving the port onto a newer engine branch |
+| [docs/webgl.md](docs/webgl.md) | What WebGL would take here, and the stage of it that is already proven on the device |
 | [STUB-AUDIT.md](STUB-AUDIT.md) | The rule that no compatibility stub may answer success while doing nothing |
 | [tests/device/README.md](tests/device/README.md) | What the on-device suite measures, and the one limitation it records |
 | [docs/history.md](docs/history.md) | How the project started, kept as history |
