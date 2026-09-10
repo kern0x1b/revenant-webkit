@@ -86,7 +86,7 @@ needs. Each of those is fixed here.
 
 Correctness is checked by a numeric suite that runs on the device and reads
 pixels, glyph widths and the platform surface rather than screenshots:
-`tests/device/run.sh`, currently **51 of 51**. Alongside it,
+`tests/device/run.sh`, currently **52 of 52**. Alongside it,
 `tests/device/sweep.sh` loads real sites and reports whether each one survived,
 painted, and what it cost in memory - the failures that only the actual web
 produces do not show up in a suite that checks its own numbers. Both are described

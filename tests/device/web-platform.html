@@ -22,7 +22,12 @@ present('workers', function () { return window.Worker; });
 report('crypto-subtle', !window.isSecureContext || !!(window.crypto && crypto.subtle),
     window.isSecureContext ? '' : 'not a secure context, so not exposed');
 present('crypto-random-values', function () { return window.crypto && crypto.getRandomValues; });
-present('clipboard-api', function () { return navigator.clipboard && navigator.clipboard.writeText; });
+// navigator.clipboard is secure-context only, like crypto.subtle above, and the
+// runner serves over plain http. Writing through it is checked by hand instead:
+// a page copies, iOS offers Paste, and the text arrives - see docs, not here,
+// because a copy needs a user gesture that this suite cannot make.
+report('clipboard-api', !window.isSecureContext || !!(navigator.clipboard && navigator.clipboard.writeText),
+    window.isSecureContext ? '' : 'not a secure context, so not exposed');
 present('text-encoder', function () { return window.TextEncoder; });
 present('abort-controller', function () { return window.AbortController; });
 present('structured-clone', function () { return window.structuredClone; });
