@@ -1,9 +1,3 @@
-/*
- * CoreText entry points WebKit uses for text layout that this system does not
- * have. These are not stubs: a stub here means text is measured with zero
- * advances or laid out with a null font, so the page loads and renders nothing
- * legible. Each one is implemented on the CoreText that iOS 6 does have.
- */
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreText/CoreText.h>
 #include <pthread.h>
@@ -12,13 +6,6 @@
 
 typedef uint16_t UTF16Char;
 
-/* These fill-ins share names with functions the system CoreText also exports
- * (e.g. CTFontDescriptorCreateForUIType, CTFontShapeGlyphs). If they are exported
- * from WebCore they INTERPOSE the system ones for the whole process, and UIKit -
- * which resolves the system font through CTFontDescriptorCreateForUIType - then
- * runs OUR version and every UILabel, text field and the status bar clock render
- * blank while WebKit's own text still works. Hiding them keeps WebCore using these
- * internally without shadowing the process's CoreText, which restores UIKit text. */
 #pragma GCC visibility push(hidden)
 
 extern const CFStringRef kCTFontCSSFamilyCursive;
@@ -27,11 +14,6 @@ extern const CFStringRef kCTFontCSSFamilyMonospace;
 extern const CFStringRef kCTFontCSSFamilySansSerif;
 extern const CFStringRef kCTFontCSSFamilySerif;
 
-/*
- * CSS generic families became a CoreText concept in iOS 13. Before that the
- * mapping was the embedder's job, so it is made here — against the fonts iOS 6
- * actually ships.
- */
 CTFontDescriptorRef CTFontDescriptorCreateForCSSFamily(CFStringRef cssFamily, CFStringRef language)
 {
     (void)language;
@@ -57,11 +39,6 @@ CTFontDescriptorRef CTFontDescriptorCreateForCSSFamily(CFStringRef cssFamily, CF
     return descriptor;
 }
 
-/*
- * Font fallback for a run of characters. CTFontCreateForString has been here
- * since the beginning; what it does not report is how much of the run the
- * substitute font covers, so that is measured directly.
- */
 CTFontRef CTFontCreateForCharactersWithLanguageAndOption(CTFontRef currentFont, const UTF16Char *characters, CFIndex length, CFStringRef language, CFOptionFlags options, CFIndex *coveredLength)
 {
     (void)language;
@@ -80,33 +57,12 @@ CTFontRef CTFontCreateForCharactersWithLanguageAndOption(CTFontRef currentFont, 
     if (!substitute)
         return NULL;
 
-    /* Both callers in the engine ignore coveredLength, and measuring it here
-       cost a CoreText round trip and sometimes a malloc on every font-fallback
-       miss - a hot path - for a number nobody reads. It answers the length it
-       was asked about; if a caller ever starts reading it, the measurement above
-       this line in git history is how to do it properly. */
     if (coveredLength)
         *coveredLength = length;
 
     return substitute;
 }
 
-/*
- * Shaping. The caller has already mapped characters to glyphs through the cmap
- * and wants advances, origins and cluster mapping back. Real shaping — kerning,
- * ligatures, reordering, right-to-left — needs the engine that arrived in
- * iOS 17. What can be done here is the horizontal metrics for the glyphs as
- * given, which is correct for scripts that need no reordering, and readable
- * rather than blank for the ones that do.
- *
- * It is not reached: Font::applyTransforms returns early on this port before
- * calling it, and complex text goes through ComplexTextControllerCoreText with
- * CTTypesetter instead, which is real shaping. The symbol has to exist because
- * the call site is still compiled in, and the body has to stay this
- * conservative if it is ever reached again - filling in bulk advances would
- * overwrite the deliberate zero advances the engine sets for a zero-width
- * space and for the padding glyph after an astral character.
- */
 CGSize CTFontShapeGlyphs(CTFontRef font, CGGlyph glyphs[], CGSize advances[], CGPoint origins[], CFIndex indexes[], const UniChar characters[], CFIndex count, CFOptionFlags options, CFStringRef language, void (^handler)(CFRange, CGGlyph **, CGSize **, CGPoint **, CFIndex **))
 {
     (void)characters;
@@ -151,36 +107,23 @@ bool CTFontIsAppleColorEmoji(CTFontRef font)
     return isEmoji;
 }
 
-/* There is no separate system UI font this far back; the UI font is Helvetica. */
 bool CTFontIsSystemUIFont(CTFontRef font)
 {
     (void)font;
     return false;
 }
 
-/* Colour glyph coverage is only consulted to take a faster path; not knowing it
- * costs nothing but the fast path. */
 CFBitVectorRef CTFontCopyColorGlyphCoverage(CTFontRef font)
 {
     (void)font;
     return NULL;
 }
 
-/* Multi-image files (HEIF collections) postdate this system; index 0 is the
- * only image there is. */
 size_t CGImageSourceGetPrimaryImageIndex(CGImageSourceRef source)
 {
     (void)source;
     return 0;
 }
-
-/* ---------------------------------------------------------------------------
- * Font descriptors
- *
- * WebKit builds every font it uses out of descriptors, and a descriptor that
- * comes back null takes CoreText's own matching code down with it. None of
- * these may return nothing.
- */
 
 static CTFontDescriptorRef descriptorForFamily(CFStringRef family)
 {
@@ -193,8 +136,6 @@ static CTFontDescriptorRef descriptorForFamily(CFStringRef family)
     return descriptor;
 }
 
-/* The UI font is reachable through CTFontCreateUIFontForLanguage, which is as
- * old as CoreText itself; only the descriptor-shaped entry point is new. */
 CTFontDescriptorRef CTFontDescriptorCreateForUIType(CTFontUIFontType uiType, CGFloat size, CFStringRef language)
 {
     CTFontRef font = CTFontCreateUIFontForLanguage(uiType, size, language);
@@ -207,7 +148,6 @@ CTFontDescriptorRef CTFontDescriptorCreateForUIType(CTFontUIFontType uiType, CGF
     return descriptorForFamily(CFSTR("Helvetica"));
 }
 
-/* Dynamic Type is iOS 7. Text styles all resolve to the one UI font here. */
 CTFontDescriptorRef CTFontDescriptorCreateWithTextStyle(CFStringRef style, CFStringRef size, CFStringRef language)
 {
     (void)style;
@@ -230,24 +170,6 @@ CTFontDescriptorRef CTFontDescriptorCreateWithTextStyleAndAttributes(CFStringRef
     return descriptor;
 }
 
-/* Answers the size of a Dynamic Type text style, for the CSS system font
- * shorthands (font: -apple-system-headline and its kin) that
- * SystemFontDatabaseCoreText resolves through it.
- *
- * Dynamic Type arrived in iOS 7. This system has no text style scale and no
- * content size category to scale it by: UIKit here has two fixed sizes,
- * +[UIFont systemFontSize] and +[UIFont labelFontSize], and every piece of
- * interface text is one of them. So one size for every style is not an
- * approximation of this platform, it is what this platform does; the value is
- * the label size, which is the body size those shorthands mean.
- *
- * The limit worth knowing: a page asking for -apple-system-caption2 gets body
- * size rather than something smaller. Correcting that would mean shipping
- * Apple's published size-per-style table, which is data this system genuinely
- * does not have, so it is not invented here.
- *
- * A weight of zero is CoreText's regular, which is what these styles are; the
- * only caller passes null for the line spacing. */
 CGFloat CTFontDescriptorGetTextStyleSize(CFStringRef style, CFTypeRef sizeCategory, uint32_t platform, CGFloat *weight, CGFloat *lineSpacing)
 {
     (void)style;
@@ -325,13 +247,6 @@ CTFontUIFontType CTFontGetUIFontType(CTFontRef font)
     return kCTFontNoFontType;
 }
 
-/* ---------------------------------------------------------------------------
- * Web fonts
- *
- * A downloaded font arrives as bytes. CoreGraphics has been able to turn bytes
- * into a font since long before CoreText grew an entry point for it, so
- * @font-face works here rather than silently falling back to system fonts.
- */
 static CTFontDescriptorRef descriptorFromFontData(CFDataRef data)
 {
     if (!data)
@@ -382,11 +297,6 @@ CFArrayRef CTFontManagerCreateFontDescriptorsFromURL(CFURLRef url)
 
 CFArrayRef CTFontManagerCopyAvailableFontFamilyNames(void)
 {
-    /* Built once. The installed fonts do not change while the process runs, and
-     * this walks the whole collection, matches every descriptor and dedupes the
-     * family names - which real CoreText answers from a cache. It showed up in a
-     * profile of the load window under FontDatabase::collectionForFamily, and the
-     * engine asks for this list whenever it resolves a family it has not seen. */
     static CFArrayRef cachedFamilies;
     static pthread_mutex_t cacheLock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -430,10 +340,6 @@ CFArrayRef CTFontManagerCopyAvailableFontFamilyNames(void)
     return families;
 }
 
-/* ---------------------------------------------------------------------------
- * Glyph and run details
- */
-
 bool CTFontGetGlyphsForCharacterRange(CTFontRef font, CGGlyph glyphs[], CFRange range)
 {
     if (!font || !glyphs || range.length <= 0)
@@ -472,7 +378,6 @@ CFBitVectorRef CTFontCopyGlyphCoverageForFeature(CTFontRef font, CFDictionaryRef
     return NULL;
 }
 
-/* sbix is a bitmap-glyph table that postdates this system's CoreText. */
 CGFloat CTFontGetSbixImageSizeForGlyphAndContentsScale(CTFontRef font, const CGGlyph glyph, CGFloat contentsScale)
 {
     (void)font;
@@ -481,7 +386,6 @@ CGFloat CTFontGetSbixImageSizeForGlyphAndContentsScale(CTFontRef font, const CGG
     return 0;
 }
 
-/* Bold Text is an accessibility setting that does not exist here. */
 CGFloat CTFontGetAccessibilityBoldWeightOfWeight(CGFloat weight)
 {
     return weight;

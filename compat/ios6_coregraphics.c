@@ -1,16 +1,7 @@
-/*
- * CoreGraphics entry points WebKit draws through that this system does not have.
- *
- * CGContextDrawPathDirect is no longer here: GraphicsContextCG now issues the
- * native begin-path/add-path/draw sequence iOS 6 already provides, so the shim
- * was removed and the drawing goes straight to the system CoreGraphics.
- */
 #include <CoreGraphics/CoreGraphics.h>
 #include <math.h>
 #include <stdint.h>
 
-/* Corner radii, one per corner, in the order CoreGraphics uses:
- * top-left, top-right, bottom-right, bottom-left. */
 void CGPathAddUnevenCornersRoundedRect(CGMutablePathRef path, const CGAffineTransform *transform, CGRect rect, const CGSize corners[4])
 {
     if (!path)
@@ -41,8 +32,6 @@ void CGPathAddUnevenCornersRoundedRect(CGMutablePathRef path, const CGAffineTran
     CGPathCloseSubpath(path);
 }
 
-/* The "squircle" corner. Approximated by the ordinary rounded rect, which is
- * what every corner on this system looked like anyway. */
 void CGPathAddContinuousRoundedRect(CGMutablePathRef path, const CGAffineTransform *transform, CGRect rect, CGFloat cornerWidth, CGFloat cornerHeight)
 {
     CGSize corners[4];
@@ -57,24 +46,6 @@ CGGradientRef CGGradientCreateWithColorComponentsAndOptions(CGColorSpaceRef spac
     return CGGradientCreateWithColorComponents(space, components, locations, count);
 }
 
-/* A conic gradient has no equivalent here; drawing its first colour beats
- * drawing nothing - which is what this did until now: every parameter cast
- * to void and no paint call made at all, so a site's conic-gradient background
- * or Canvas createConicGradient() came out fully transparent instead of the
- * fallback the comment above already promised.
- *
- * The colour is read back from the gradient itself rather than guessed -
- * CGGradientRef has no accessor for its own stops. One pixel of the gradient
- * is rendered into an off-screen bitmap and read back; the sampled point is
- * placed in the region CGContextDrawLinearGradient extends under
- * kCGGradientDrawsBeforeStartLocation, which CoreGraphics defines as a flat
- * fill of the gradient's colour at location 0. That makes the pixel exactly
- * the first stop, not an interpolated colour near it.
- *
- * The fill target is the context's own clip, the same CGContextGetClipBoundingBox
- * this file's caller (GradientCG.cpp) already reads for the linear and radial
- * cases: Gradient::fill() clips to the shape being painted before any of these
- * draw calls run. */
 void CGContextDrawConicGradient(CGContextRef context, CGGradientRef gradient, CGPoint center, CGFloat angle)
 {
     (void)center;
@@ -90,8 +61,6 @@ void CGContextDrawConicGradient(CGContextRef context, CGGradientRef gradient, CG
     if (!sample)
         return;
 
-    /* The sampled pixel spans device x in [0, 1); the gradient runs from x=4
-     * to x=5, so the whole pixel sits in the "before start" region. */
     CGContextDrawLinearGradient(sample, gradient, CGPointMake(4, 0), CGPointMake(5, 0),
         kCGGradientDrawsBeforeStartLocation);
     CGContextRelease(sample);
@@ -99,8 +68,6 @@ void CGContextDrawConicGradient(CGContextRef context, CGGradientRef gradient, CG
     if (!pixel[3])
         return;
 
-    /* Un-premultiply: the bitmap stores alpha-premultiplied components, and
-     * CGContextSetRGBFillColor wants straight ones plus a separate alpha. */
     CGFloat alpha = pixel[3] / 255.0;
     CGContextSetRGBFillColor(context, pixel[0] / 255.0 / alpha, pixel[1] / 255.0 / alpha,
         pixel[2] / 255.0 / alpha, alpha);
@@ -125,7 +92,6 @@ CGColorSpaceRef CGContextGetColorSpace(CGContextRef context)
     return deviceRGB;
 }
 
-/* Everything this system can display is plain sRGB. */
 CFStringRef CGColorSpaceGetName(CGColorSpaceRef space)
 {
     (void)space;
@@ -144,12 +110,6 @@ bool CGColorSpaceUsesExtendedRange(CGColorSpaceRef space)
     return false;
 }
 
-/*
- * CGIOSurfaceContextCreateImageReference hands back an image that keeps
- * referencing the surface's memory instead of copying it. This release has only
- * the copying form, which is correct and slower - the caller draws the image and
- * lets it go, so the difference is a copy per use, not a wrong picture.
- */
 extern CGImageRef CGIOSurfaceContextCreateImage(CGContextRef);
 
 CGImageRef CGIOSurfaceContextCreateImageReference(CGContextRef context)

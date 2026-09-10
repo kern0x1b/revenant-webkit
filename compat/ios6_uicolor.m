@@ -1,13 +1,3 @@
-/*
- * The semantic UIColors WebCore asks for when it maps CSS system colours.
- * labelColor and its relatives are iOS 13, the systemXColor family is iOS 7;
- * this system has neither, and a missing one is not a degraded colour but an
- * unrecognised selector that kills the process during style resolution.
- *
- * Values are Apple's light-appearance definitions. They are installed with
- * class_addMethod, which fails rather than replaces if the running system does
- * define the selector, so a newer OS keeps its own colours.
- */
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 

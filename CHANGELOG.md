@@ -82,6 +82,17 @@ Dates are the day the change was measured on the device, not the day it compiled
   the rate barely moves with the canvas, so what it costs is per frame, not per
   pixel. `tests/device/gl-frame-rate.sh` is the check that would have caught the
   freeze, which every single-frame check in the suite missed.
+- **Blank labels under the system activities in the share sheet.** The cause was
+  the measurement, not the drawing: this port's `UIStringDrawing` answered a
+  string's typographic bounds as its line height - `ceil(ascent) + ceil(descent)
+  + ceil(leading)`, which is 13 for Helvetica 12 - where UIKit wanted the font's
+  own `lineHeight` of 15. `-[UIActivityButton titleRectForContentRect:]` counts
+  a title's lines as `floor(measured / lineHeight)`, so a single-line title
+  measured at 13 gave zero lines and a label frame of zero height. Safari's own
+  two-line activities measured tall enough, which is why only the system
+  single-line ones were blank. A `UIFont` is now asked for its own line height;
+  raw `CTFont`s, which is what web content uses, keep the typographic height, so
+  page layout is unchanged.
 - **`navigator.share`.** A page can hand a title, a text and a URL to the system
   share sheet, and the promise settles the way the specification says: it
   resolves when an activity ran and rejects with `AbortError` when the sheet is

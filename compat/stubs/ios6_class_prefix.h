@@ -1,7 +1,3 @@
-/* Generated: ObjC class names that collide with the system WebKit/WebCore on
- * iOS 6. Both engines end up in one process (UIKit pulls in the system one),
- * and the runtime keeps whichever registers first — so ours have to be named
- * differently. LightKit solved the same problem the same way. */
 #ifndef IOS6_CLASS_PREFIX_H
 #define IOS6_CLASS_PREFIX_H
 

@@ -1,20 +1,3 @@
-/*
- * Standalone test harness for hosting the engine's own WebView directly -
- * no UIWebView in between, so this is the direct-WebView path rather than
- * the system-engine-substitution path the Safari tweak takes
- * use. Compiled with -include compat/stubs/ios6_class_prefix.h against
- * build-254-rev, "WebView" below is RevWebView at the symbol level, and it
- * runs in the same process as the system's own (unprefixed) UIWebView/WebView
- * without a class-table collision - the whole point of tonight's rename.
- *
- * The hosting mechanism (WAKWindow over a CALayer, WebView as its content
- * view) is the same one the earlier host proved against the unprefixed,
- * substituted engine; this is that same mechanism, pared down to the
- * minimum needed to answer one question standalone: does a directly
- * instantiated, Rev-prefixed WebView render, run script and take touches
- * when nothing but this file is driving it.
- */
-
 #import <stdio.h>
 #import <signal.h>
 #import <string.h>
@@ -45,7 +28,6 @@
 #import "WebKitUIKitDelegate.h"
 #import "RevWebViewHostEmbedding.h"
 
-/* Launched from SpringBoard there is no terminal, so the trace goes to a file. */
 static void hostLog(const char *format, ...)
 {
     static FILE *file;
@@ -105,10 +87,6 @@ extern void WebKitInitialize(void);
 extern void WebThreadLock(void);
 extern void WebThreadUnlock(void);
 
-/* /tmp/rev-url.txt lets the page under test be changed without a rebuild;
- * https://example.com/ is the default because it asks nothing of the network
- * beyond plain TLS and has no anti-bot wall to fail this test for reasons
- * that have nothing to do with the hosting mechanism. */
 static NSString *startPage(void)
 {
     NSString *configured = [NSString stringWithContentsOfFile:@"/tmp/rev-url.txt"
@@ -154,12 +132,6 @@ static void withWebLock(void (^work)(void))
     WebThreadRun(work);
 }
 
-/* A hidden UIKeyInput view: the standard, documented iOS way to get a keyboard
- * for a custom (non-UIWebView) host. It becomes first responder when WebKit's
- * own WebFormDelegate reports a text field focused, and forwards typed
- * characters to the host, which sends them on to WebKit as WebEvent key events
- * - so WebKit types into the focused field itself, natively, with no JS eval
- * (eval polling crashes a process running two WebKit engines). */
 @protocol RevKeyInputConsumer <NSObject>
 - (void)typeCharacters:(NSString *)text;
 - (void)typeBackspace;
@@ -269,21 +241,13 @@ static void withWebLock(void (^work)(void))
     [preferences setDatabasesEnabled:YES];
     [preferences setLocalStorageEnabled:YES];
 
-    /* A modern UA string, the same shape the engine reports for the
-     * substituted-engine test: without it a page can serve a "your browser is
-     * too old" fallback that has nothing to do with whether the engine works. */
     [_webView setCustomUserAgent:
         @"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
         @"(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"];
 
     LOG_STEP("modern TLS: %s", [ModernTLSURLProtocol install] ? "installed" : "unavailable");
     [_webView setFrameLoadDelegate:self];
-    /* WebKit's own focus/blur callbacks for form fields - the native, eval-free
-     * signal to raise and lower the keyboard. */
     [_webView _setFormDelegate:(id<WebFormDelegate>)self];
-    /* UI delegate so console messages and uncaught JS errors (incl. inside the
-     * captcha iframe) are logged - the key to "JavaScript disabled or not
-     * working". */
     [_webView setUIDelegate:(id)self];
 
     _uiKitDelegate = [[WebKitUIKitDelegate alloc] init];
@@ -291,12 +255,6 @@ static void withWebLock(void (^work)(void))
     [_webView _setUIKitDelegate:_uiKitDelegate];
     WebThreadUnlock();
 
-    /* UIKit's own UIWebBrowserView cannot host this WebView - it drives the
-     * view through the SYSTEM WebCore's WKWindowSetContentView, which would
-     * reach into structures belonging to a different WebCore entirely (or,
-     * post-rename, simply fail to typecheck). The window and the layer have
-     * to be ours, built by hand the way UIWebView's own private
-     * implementation would. */
     WebThreadLock();
     _hostLayer = [[CALayer alloc] init];
     [_hostLayer setAnchorPoint:CGPointZero];
@@ -342,9 +300,6 @@ static void withWebLock(void (^work)(void))
     [[_webView mainFrame] loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:page]]];
     WebThreadUnlock();
 
-    /* Manual drag test: scrolling off, and poll the move-event counter so a
-     * real finger drag on the page shows up in the log (no synthetic drag, the
-     * user drives it). */
     if (access("/tmp/rev-dragtest", F_OK) == 0) {
         _selfTestRan = YES;
         [self setScrollingEnabled:NO];
@@ -365,10 +320,6 @@ static void withWebLock(void (^work)(void))
     [self performSelector:@selector(pollDragCount) withObject:nil afterDelay:2.0];
 }
 
-/* This is the future hook point for a login-success redirect: every commit
- * logs the URL the main frame is now on, on the delegate callback that fires
- * for every navigation including ones inside a login flow. Nothing beyond
- * logging happens here - detecting a specific redirect is a later step. */
 - (void)webView:(WebView *)sender didCommitLoadForFrame:(WebFrame *)frame
 {
     if (frame != [sender mainFrame])
@@ -379,11 +330,6 @@ static void withWebLock(void (^work)(void))
         [_hostDelegate webViewHost:self didUpdateURLString:[sender mainFrameURL]
             canGoBack:[sender canGoBack] canGoForward:[sender canGoForward]];
 
-    /* Capture JS errors and missing-API tells early, via the DOM binding (no
-     * stringByEvaluatingJavaScript, which is unstable with two engines): a
-     * script that appends every window.onerror / console.error into a data
-     * attribute we read back through the DOM. Also probe a handful of the JS
-     * APIs a DataDome challenge typically touches so a missing one is named. */
     DOMDocument *doc = [frame DOMDocument];
     DOMElement *root = [doc documentElement];
     if (doc && root) {
@@ -426,8 +372,6 @@ static void withWebLock(void (^work)(void))
         [_hostDelegate webViewHost:self didUpdateProgress:[_webView estimatedProgress]];
 }
 
-/* Read back what the injected trap captured on the captcha page: missing JS
- * APIs, uncaught errors, console.error output. Eval-free (ObjC DOM). */
 - (void)pollCaptchaErrors
 {
     WebView *wv = [_webView retain];
@@ -485,13 +429,6 @@ static void withWebLock(void (^work)(void))
     }
 }
 
-/* Automated proof of the three things the task asks a human to confirm by
- * eye: JS execution (evaluate script and read back a real result), scrolling
- * (move the scroll view and check window.pageYOffset moved with it), and
- * touch dispatch (send a synthetic tap and ask the page what was under it -
- * the same check -tapAtScreenPoint: uses). Runs once, off a
- * flag file so it costs nothing when this harness is driven by a human
- * instead - see /tmp/rev-webview-host.log for the outcome either way. */
 - (void)runSelfTest
 {
     WebView *webView = _webView;
@@ -574,12 +511,6 @@ static void withWebLock(void (^work)(void))
     [self performSelector:@selector(updateContentSize) withObject:nil afterDelay:1.0];
 }
 
-/* WebKitRootLayerHandler. WebKitUIKitDelegate calls -attachRootLayer:
- * unconditionally (no respondsToSelector guard), so this has to exist even in
- * a minimal harness or the first promoted layer (position:fixed content, by
- * default) crashes the process with an unrecognized selector. _hostLayer is
- * already in document coordinates, matching where GraphicsLayer positions
- * the root layer, so parenting it here needs no extra geometry. */
 - (void)attachRootLayer:(CALayer *)rootLayer
 {
     if (_compositingRootLayer == rootLayer)
@@ -598,9 +529,6 @@ static void withWebLock(void (^work)(void))
     [self applyDocumentHeight:content.height];
 }
 
-/* Resizes the host layer (and hence the tile grid) and the scroll view to
- * match the document, so a page taller than one screen can actually be
- * scrolled to instead of clipping at the initial viewport. */
 - (void)setDocumentSize:(CGSize)size
 {
     if (size.width < _viewportSize.width)
@@ -667,9 +595,6 @@ static void withWebLock(void (^work)(void))
     [self performSelector:@selector(updateContentSize) withObject:nil afterDelay:5.0];
 }
 
-/* Touches. WebKitLegacy takes them as WebEvents posted to the WAKWindow -
- * there is no automatic path from UIKit, so without this a rendered page
- * looks frozen however correctly it painted. */
 static WebEvent *touchEvent(WebEventType type, WebEventTouchPhaseType phase, CGPoint point)
 {
     NSArray *locations = [NSArray arrayWithObject:[NSValue valueWithCGPoint:point]];
@@ -721,10 +646,6 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
     });
 }
 
-/* When scrolling is off (a challenge, e.g. a DataDome slider), the scroll view
- * no longer owns the pan, so a drag must be driven into the page directly - as
- * a mouse down/move/up sequence, which slider captchas respond to even when a
- * touch drag alone does not. */
 - (void)sendMouse:(WebEventType)type at:(CGPoint)point
 {
     WAKWindow *window = [_wakWindow retain];
@@ -740,8 +661,6 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
     return ![_scrollView isScrollEnabled];
 }
 
-/* In drag mode the pan recognizer owns the gesture; the raw touch forwarding
- * stays out of the way so the two do not send overlapping event streams. */
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event
 {
     if ([self dragMode]) return;
@@ -794,15 +713,8 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
     });
 }
 
-/* WebFormDelegate: WebKit tells us when a text field takes or loses focus, so
- * the keyboard rises and falls exactly when the page's own focus does - no
- * polling, no JS eval. */
 - (void)raiseKeyboardForType:(NSString *)type
 {
-    /* Text goes in through the DOM binding, not WAK key events, so the WebView
-     * must NOT be made WAK first responder here - doing so blurred the focused
-     * field and bounced the keyboard straight back down. Only the hidden
-     * UIKeyInput view becomes first responder, purely to raise the keyboard. */
     RevKeyInputView *keyInput = _keyInput;
     NSString *t = [type copy];
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -819,8 +731,6 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
 }
 - (void)trackFocusedInput:(DOMHTMLInputElement *)element
 {
-    /* Runs on the web thread (form delegate callback) - safe to touch the DOM
-     * node here; keep it so typed characters can be written straight into it. */
     [element retain];
     [_focusedInput release];
     _focusedInput = element;
@@ -837,18 +747,11 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
 }
 - (void)textFieldDidEndEditing:(DOMHTMLInputElement *)element inFrame:(WebFrame *)frame
 {
-    /* Debounced: a tap that moves focus between fields fires end-then-begin in
-     * quick succession, and resigning immediately would flap the keyboard.
-     * Lower it only if no other field has taken focus shortly after. */
     dispatch_async(dispatch_get_main_queue(), ^{
         [self performSelector:@selector(lowerKeyboard) withObject:nil afterDelay:0.35];
     });
 }
 
-/* WebEvent key events do not reach the editing layer in this hand-built host
- * (verified: the field stays empty), so text goes in through the DOM binding
- * directly - set the focused element's value and fire a bubbling input/change
- * event so the page's own JS (validation, React state) reacts as if typed. */
 - (void)writeToFocusedInput:(NSString *)newValue
 {
     DOMHTMLInputElement *input = [_focusedInput retain];
@@ -869,10 +772,6 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
     });
 }
 
-/* RevKeyInputConsumer: forward typed characters to WebKit as key events, so
- * WebKit inserts them into the focused field itself - the same path a hardware
- * keyboard takes, so the page's own JS (validation, React state) sees real
- * key/input events. */
 - (void)sendKeyCharacters:(NSString *)chars keyCode:(uint16_t)code
 {
     WAKWindow *window = [_wakWindow retain];
@@ -923,7 +822,6 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
 }
 - (void)typeReturn
 {
-    /* Fire a change and try to submit the owning form. */
     DOMHTMLInputElement *input = [_focusedInput retain];
     WebView *wv = [_webView retain];
     WebThreadRun(^{
@@ -938,11 +836,6 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
     });
 }
 
-/* Eval-free self-test of the key->insert path: focus the first input via the
- * ObjC DOM binding, read its value, send test characters as WebEvents inline
- * on the web thread, read the value again. If it changed, WebEvent key input
- * inserts text; if not, the WebEvent path is wrong and a different insert
- * method is needed. Triggered by /tmp/rev-kbdtest. */
 - (void)selfTestKeyInsert
 {
     WebView *wv = [_webView retain];
@@ -951,7 +844,7 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
         DOMDocument *doc = [[wv mainFrame] DOMDocument];
         DOMElement *input = [doc querySelector:@"input[type=email], input[type=text], input"];
         if (!input) { LOG_STEP("selftest: no input yet, will retry on next load"); [wv release]; [win release]; return; }
-        self->_selfTestRan = YES;  // only lock once an input actually exists to test
+        self->_selfTestRan = YES;
         [input focus];
         NSString *before = [(DOMHTMLInputElement *)input value] ?: @"";
         LOG_STEP("selftest: focused input, value-before='%s'", [before UTF8String]);
@@ -966,18 +859,11 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
     });
 }
 
-/* For drag-based content like a DataDome slider captcha, the scroll view must
- * not intercept the horizontal pan or the drag never reaches the page. Turning
- * scrolling off sends every touch straight through as touch events. */
 - (void)setScrollingEnabled:(BOOL)enabled
 {
     [_scrollView setScrollEnabled:enabled];
     [_scrollView setCanCancelContentTouches:enabled];
     if (!enabled && !_dragPan) {
-        /* Forwarding raw touchesMoved through the scroll view breaks a finger
-         * drag into stuttering fragments. A pan recognizer instead delivers one
-         * continuous begin->change...->end stream that follows the finger, which
-         * is what a slider drag needs. */
         _dragPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDragPan:)];
         [_dragPan setMaximumNumberOfTouches:1];
         [_scrollView addGestureRecognizer:_dragPan];
@@ -1008,12 +894,6 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
     }
 }
 
-/* Local, API-free proof that a horizontal drag reaches the page: on a data:
- * URL test page that counts move events into <input id=c>, drive a synthetic
- * drag and read the count back through the ObjC DOM binding (no live captcha,
- * no eval). If the count is 0 the move events never arrive and the touch path
- * is the bug; if it climbs, the mechanism works and the real slider is a
- * coordinate/iframe issue instead. */
 - (void)selfTestDrag
 {
     CGFloat y = 200;
@@ -1053,9 +933,6 @@ static WebEvent *mouseEvent(WebEventType type, CGPoint point)
     return _hostDelegate;
 }
 
-/* Must be called before the view is loaded (i.e. right after -init), so the
- * standalone-harness default of "screen bounds minus the status bar" is never
- * computed in the first place for an embedded host. */
 - (void)setEmbeddedContentFrame:(CGRect)frame
 {
     _embeddedFrame = frame;
@@ -1180,4 +1057,4 @@ int main(int argc, char *argv[])
     [pool release];
     return result;
 }
-#endif /* !REV_WEBVIEW_HOST_NO_MAIN */
+#endif

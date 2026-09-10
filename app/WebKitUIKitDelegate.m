@@ -1,20 +1,9 @@
-/*
- * The UIKit side of WebKitLegacy.
- *
- * WebKit talks to its embedder through this delegate, and calls most of it
- * without checking whether the method exists — a missing one is an unrecognised
- * selector, not a skipped feature. Only one of them matters to a viewer: the
- * root compositing layer, which is where the whole page lives and which WebKit
- * hands over here and nowhere else.
- */
-
 #import "WebKitUIKitDelegate.h"
 
 @implementation WebKitUIKitDelegate
 
 @synthesize handler = _handler;
 
-/* Called on the web thread. */
 - (void)_webthread_webView:(WebView *)webView attachRootLayer:(id)rootLayer
 {
     [_handler performSelectorOnMainThread:@selector(attachRootLayer:)

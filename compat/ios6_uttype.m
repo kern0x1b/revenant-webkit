@@ -1,4 +1,3 @@
-/* Implementation of the UTType subset declared in the compatibility header. */
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @implementation UTType {
@@ -96,8 +95,6 @@
 
 @end
 
-/* NSURLRequest.attribution, iOS 15. Stored in an associated object so both the
- * getter and the setter behave. */
 #import <objc/runtime.h>
 static const void *webKitIOS6AttributionKey = &webKitIOS6AttributionKey;
 
@@ -130,11 +127,6 @@ static const void *webKitIOS6AttributionKey = &webKitIOS6AttributionKey;
 - (CGFloat)potentialEDRHeadroom { return 1.0; }
 @end
 
-/*
- * CFNetwork privacy-proxy and HSTS SPI, none of which exists this far back.
- * WebKit reads these off every request it converts, and an absent one is an
- * unrecognised selector rather than a default.
- */
 @interface NSURLRequest (WebKitIOS6NetworkSPI)
 @end
 
@@ -159,8 +151,6 @@ static const void *webKitIOS6AttributionKey = &webKitIOS6AttributionKey;
 - (void)_setIgnoreHSTS:(BOOL)value { (void)value; }
 @end
 
-/* Resource timing collection is CFNetwork SPI from a later release; without it
- * a load simply reports no timings. */
 @interface NSURLConnection (WebKitIOS6Timing)
 @end
 

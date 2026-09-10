@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 P=$(cd "$(dirname "$0")/.." && pwd)
-SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
+SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
 TC=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
 OUT=$P/third_party/openssl-armv7
 

@@ -226,7 +226,7 @@ reads:
 ## Repository layout
 
 ```
-app/            The TLS bridge, the WebAssembly bridge, and a host app for the web view
+app/            The TLS bridge, the WebAssembly bridge, and the embeddable host for the web view
 compat/         Symbols iOS 6 does not have, built into libios6compat.a
 docs/           Documentation and the screenshots in this README
 packaging/      Theos: the loader, compat dylib, TLS dylib, Settings bundle, engine layout
@@ -244,19 +244,33 @@ webkit-254/     The engine, a git submodule on the ios6-armv7 branch
 
 ## Documentation
 
+**How it works**
+
 | Document | What is in it |
 | --- | --- |
 | [docs/architecture.md](docs/architecture.md) | How the engine is loaded in place of the system one, and what that costs |
-| [docs/building.md](docs/building.md) | The full build, step by step, and how to verify a dylib will load |
-| [docs/ios6-gaps.md](docs/ios6-gaps.md) | What this OS does not have — probed on the device, not read from headers |
+| [docs/network.md](docs/network.md) | HTTPS on a system whose TLS stopped working: the OpenSSL layers, the HTTP cache, the app-shell policy |
+| [docs/compatibility.md](docs/compatibility.md) | What this OS does not have, probed on the device, and the rule that no shim may answer success while doing nothing |
 | [docs/memory-and-caches.md](docs/memory-and-caches.md) | What 512 MB forces: the JS heap, the cache model, tiles, memory pressure |
-| [docs/armv7-jit.md](docs/armv7-jit.md) | Carrying a 64-bit NaN-boxed JSValue on ARMv7, for when the branch drops it |
-| [docs/armv7-assembler.md](docs/armv7-assembler.md) | The assembler API deltas that porting the 2017 encoder would need |
-| [docs/core-update.md](docs/core-update.md) | Moving the port onto a newer engine branch |
-| [docs/webgl.md](docs/webgl.md) | What WebGL would take here, and the stage of it that is already proven on the device |
-| [STUB-AUDIT.md](STUB-AUDIT.md) | The rule that no compatibility stub may answer success while doing nothing |
-| [tests/device/README.md](tests/device/README.md) | What the on-device suite measures, and the one limitation it records |
+| [docs/webgl.md](docs/webgl.md) | The ANGLE backend this port had to write, and what the GPU still refuses |
+
+**Working on it**
+
+| Document | What is in it |
+| --- | --- |
+| [docs/building.md](docs/building.md) | The full build, step by step, the standalone host, and how to verify a dylib will load |
+| [tests/device/README.md](tests/device/README.md) | What the on-device suite measures, and the limitations it records |
+| [tests/README.md](tests/README.md) | The ICU and JavaScript batteries, and the benchmarks meant for a browser |
 | [docs/tools.md](docs/tools.md) | The probes in `tools/`, and the question each one answers on the device |
+| [docs/core-update.md](docs/core-update.md) | Moving the port onto a newer engine branch |
+
+**For the record**
+
+| Document | What is in it |
+| --- | --- |
+| [CHANGELOG.md](CHANGELOG.md) | Every change, dated by the day it was measured on the device |
+| [THIRD-PARTY.md](THIRD-PARTY.md) | Every dependency, its licence, and where its source comes from |
+| [docs/armv7-jit.md](docs/armv7-jit.md) | Carrying a 64-bit NaN-boxed JSValue on ARMv7, for the day the branch drops it |
 | [docs/history.md](docs/history.md) | How the project started, kept as history |
 
 ## Trademarks and screenshots

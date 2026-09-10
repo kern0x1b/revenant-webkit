@@ -1,17 +1,8 @@
-/*
- * Functions WebKit imports that do not exist on iOS 6. No SDK headers are
- * included here on purpose: several of these names are declared with real
- * prototypes in newer SDKs, and a stub must not collide with them.
- *
- * Each reports itself once and returns zero, so anything actually reached at
- * runtime shows up in the log instead of failing silently.
- */
 extern int fprintf(void *stream, const char *format, ...);
 extern void *__stderrp;
 
 static void report(const char *name)
 {
-    /* Called from hot paths; one line per missing symbol, not per call. */
     static const char *seen[512];
     static unsigned count;
     for (unsigned i = 0; i < count; i++)
@@ -45,11 +36,6 @@ long FPFontCreateFontsFromData() { report("FPFontCreateFontsFromData"); return 0
 long FPFontCreateMemorySafeFontsFromData() { report("FPFontCreateMemorySafeFontsFromData"); return 0; }
 long SecCertificateGetSignatureHashAlgorithm() { report("SecCertificateGetSignatureHashAlgorithm"); return 0; }
 long SecTrustDeserialize() { report("SecTrustDeserialize"); return 0; }
-/* SecTrustEvaluateWithError and SecTrustGetTrustResult are implemented for
-   real in ios6_compat.c - both platform/network/cocoa/ResourceResponseCocoa.mm
-   and app/tls-openssl.c's own header comment assume the system genuinely
-   evaluates the peer trust through them; stubbed here they read as "already
-   evaluated, not trusted was never checked" and every caller proceeds. */
 long SecTrustSerialize() { report("SecTrustSerialize"); return 0; }
 long SecTrustSetClientAuditToken() { report("SecTrustSetClientAuditToken"); return 0; }
 long UTTypeCopyAllTagsWithClass() { report("UTTypeCopyAllTagsWithClass"); return 0; }
@@ -58,11 +44,6 @@ long UTTypeIsDynamic() { report("UTTypeIsDynamic"); return 0; }
 long _AXSEnhanceTextLegibilityEnabled() { report("_AXSEnhanceTextLegibilityEnabled"); return 0; }
 long _CFCachedURLResponseGetMemMappedData() { report("_CFCachedURLResponseGetMemMappedData"); return 0; }
 long _CFCachedURLResponseSetBecameFileBackedCallBackBlock() { report("_CFCachedURLResponseSetBecameFileBackedCallBackBlock"); return 0; }
-/* _CFHostIsDomainTopLevel is implemented for real in ios6_compat.c - it is the
-   only thing PublicSuffixStoreCocoa.mm has to decide public suffixes (eTLD/eTLD+1),
-   which document.domain checks, CSP wildcard-source rejection and cookie/storage
-   partitioning all depend on. Stubbed to always return false, every multi-label
-   suffix (co.uk, com.au, ...) reads as an ordinary registrable domain. */
 long _CFRunLoopSetPerCalloutAutoreleasepoolEnabled() { report("_CFRunLoopSetPerCalloutAutoreleasepoolEnabled"); return 0; }
 long _CFURLStorageSessionDisableCache() { report("_CFURLStorageSessionDisableCache"); return 0; }
 long _os_feature_enabled_impl() { report("_os_feature_enabled_impl"); return 0; }
@@ -99,15 +80,7 @@ long os_log_with_args() { report("os_log_with_args"); return 0; }
 long pthread_attr_set_qos_class_np() { report("pthread_attr_set_qos_class_np"); return 0; }
 long pthread_get_qos_class_np() { report("pthread_get_qos_class_np"); return 0; }
 long pthread_set_qos_class_self_np() { report("pthread_set_qos_class_self_np"); return 0; }
-/* No stub for sqlite3_bind_blob64. It used to answer SQLITE_OK and bind
-   nothing, which is how a database write can look like it worked; the call site
-   (SQLiteExtras.h) binds through sqlite3_bind_blob here instead. If something
-   ever reaches for it again, the link will say so, which is the point. */
 long sqlite3_errstr() { report("sqlite3_errstr"); return 0; }
-/* Adding two integer vectors is arithmetic, not platform support: implemented
-   here rather than reported missing, because the stub that returned zero also
-   left the destination untouched, which silently dropped a channel when the
-   audio ring buffer mixed 32-bit integer samples. */
 void vDSP_vaddi(const int *a, long strideA, const int *b, long strideB, int *result, long strideResult, unsigned long count)
 {
     for (unsigned long i = 0; i < count; ++i)
@@ -123,8 +96,6 @@ void *vImageConverter_CreateWithCGImageFormat(void *srcFormat, void *destFormat,
     return 0;
 }
 long vImageCopyBuffer() { report("vImageCopyBuffer"); return -21773; }
-
-/* These are reachable in normal operation, so they are implemented. */
 
 typedef const void *CFTypeRef;
 typedef const void *CFStringRef;
@@ -152,10 +123,6 @@ static CFTypeRef MGCopyAnswer(CFStringRef question, CFDictionaryRef options)
     static int resolved;
     if (!resolved) {
         resolved = 1;
-        /* No standalone framework binary on disk on this iOS version - it
-           only exists inside the dyld shared cache, so RTLD_DEFAULT (the
-           already-mapped image set) resolves it where dlopen-by-path does
-           not. */
         copyAnswer = (CFTypeRef (*)(CFStringRef, CFDictionaryRef))dlsym(RTLD_DEFAULT, "MGCopyAnswer");
         if (!copyAnswer) {
             void *handle = dlopen("/System/Library/PrivateFrameworks/MobileGestalt.framework/MobileGestalt", RTLD_LAZY);
@@ -205,8 +172,6 @@ float MGGetFloat32Answer(CFStringRef question, float defaultValue)
 
 const void *CFAutorelease(const void *object)
 {
-    /* CFAutorelease is iOS 7; a Core Foundation object is toll-free bridged,
-     * so the Objective-C autorelease pool takes it just the same. */
     extern void *objc_msgSend(void *, void *, ...);
     extern void *sel_registerName(const char *);
     if (object)
@@ -238,8 +203,6 @@ int mkostemps(char *templateName, int suffixLength, int flags)
 
 int _dyld_get_shared_cache_uuid(unsigned char uuid[16])
 {
-    /* iOS 8 and later report the dyld shared cache identity; here there is
-     * nothing to report and callers treat false as "unknown". */
     for (int i = 0; i < 16; i++)
         uuid[i] = 0;
     return 0;

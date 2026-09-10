@@ -2,7 +2,7 @@
 set -eu
 P=$(cd "$(dirname "$0")/.." && pwd)
 B=$P/build-254-rev
-SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
+SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
 TC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain
 
 APP_NAME=RevWebViewHost

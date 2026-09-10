@@ -1,24 +1,3 @@
-/*
- * The engine's own TLS.
- *
- * This device's SecureTransport is from 2012. It offers a cipher list that a
- * current server will not accept: measured against claude.ai, every CBC/SHA1
- * suite is refused with a handshake failure and only AEAD suites - AES-GCM and
- * ChaCha20-Poly1305 - are allowed, none of which this system can speak. The
- * certificate side is fine; the device already trusts ISRG Root X1 and X2. The
- * connection simply never gets that far.
- *
- * So the twenty-five SecureTransport entry points that CFNetwork imports are
- * answered here instead, over OpenSSL 1.1.1 built for armv7. CFNetwork still
- * creates the session, still supplies the socket read and write callbacks, and
- * still evaluates the certificate chain through SecTrust - only the protocol in
- * between is ours.
- *
- * Nothing here weakens verification: the peer chain is handed back as a real
- * SecTrustRef built from the certificates the server sent, and the system
- * evaluates it against its own trust store exactly as before.
- */
-
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -37,9 +16,6 @@
 #include <openssl/err.h>
 #include <openssl/x509.h>
 
-/* Asked once. Everything that only exists to be written to that log asks this
- * first, so a session that is not being recorded pays nothing for the timing
- * that would feed it - the read path is per record on every connection. */
 static bool tlsLogEnabled(void)
 {
     static int enabled = -1;
@@ -67,9 +43,6 @@ static void note(const char *format, ...)
     fputc('\n', log);
 }
 
-/* One of these per SSLContextRef the system hands us. The context itself stays
- * the system's object - we never create or free it - and this is the state we
- * keep alongside it, found by pointer. */
 typedef struct Session {
     SSLContextRef context;
     SSL *ssl;
@@ -122,15 +95,11 @@ static void forgetSession(SSLContextRef context)
         *link = session->next;
         if (session->ssl)
             SSL_free(session->ssl);
-        /* The context is shared and outlives every session. */
         free(session);
     }
     pthread_mutex_unlock(&sessionsLock);
 }
 
-/* OpenSSL talks to the socket through the callbacks CFNetwork gave us, so the
- * socket stays entirely the system's: its timeouts, its proxy handling, its
- * non-blocking behaviour. */
 static int bioRead(BIO *bio, char *buffer, int length)
 {
     Session *session = (Session *)BIO_get_data(bio);
@@ -191,14 +160,6 @@ static BIO_METHOD *transportMethod(void)
     return method;
 }
 
-
-/* Sessions kept per host, so a second connection resumes the first.
- *
- * OpenSSL's client cache stores what the server hands out but never looks
- * anything up: a client is expected to know which session belongs to which
- * host. Measured before this, a single tab change did twenty-four full
- * handshakes; a resumed one saves a round trip and the signature work with it.
- */
 #define SESSION_SLOTS 32
 
 static struct {
@@ -259,16 +220,6 @@ static bool startSession(Session *session)
     if (session->ssl)
         return true;
 
-    /* One context for the whole process, so a second connection to a host can
-     * resume the first one's session instead of doing the full handshake again.
-     * A context per connection - which this used to do - makes resumption
-     * impossible by construction: the session cache lives in the context.
-     *
-     * Built once, under a lock. CFNetwork opens connections from more than one
-     * thread, and two of them arriving here together would each build a context
-     * and each get a session cache of its own - which is the thing this exists
-     * to avoid, plus a leak. A session per connection could not race; one
-     * context for all of them can. */
     static pthread_mutex_t contextLock = PTHREAD_MUTEX_INITIALIZER;
     static SSL_CTX *shared;
     pthread_mutex_lock(&contextLock);
@@ -281,15 +232,8 @@ static bool startSession(Session *session)
             SSL_CTX_set_max_proto_version(shared, TLS1_3_VERSION);
             SSL_CTX_set_session_cache_mode(shared, SSL_SESS_CACHE_CLIENT);
             SSL_CTX_sess_set_cache_size(shared, 64);
-            /* Reading and writing in whole records rather than a byte at a
-             * time, and letting a write be satisfied in part, which is what a
-             * socket that can only take so much at once needs. */
             SSL_CTX_set_mode(shared, SSL_MODE_ENABLE_PARTIAL_WRITE
                 | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_RELEASE_BUFFERS);
-            /* The chain is verified by the system afterwards, through the
-             * SecTrustRef built in SSLCopyPeerTrust, which is where this
-             * platform's trust store lives. Verifying here as well would only
-             * duplicate it with a different root list. */
             SSL_CTX_set_verify(shared, SSL_VERIFY_NONE, NULL);
         }
     }
@@ -406,7 +350,6 @@ OSStatus ourSSLHandshake(SSLContextRef context)
     return errSSLClosedAbort;
 }
 
-
 OSStatus ourSSLRead(SSLContextRef context, void *data, size_t length, size_t *processed)
 {
     Session *session = sessionFor(context, false);
@@ -414,15 +357,9 @@ OSStatus ourSSLRead(SSLContextRef context, void *data, size_t length, size_t *pr
         *processed = 0;
     if (!session || !session->ssl)
         return errSSLInternal;
-    /* A zero-length read asks nothing. Falling through would hand SSL_get_error
-     * a result the layer never produced and read a close out of it. */
     if (!length)
         return noErr;
 
-    // As much as the caller asked for, not as much as one record happens to
-    // hold. Returning early leaves the rest for another turn of the run loop,
-    // and a hundred-kilobyte response then arrives in dozens of turns - which is
-    // where a second and a half per request was going.
     size_t filled = 0;
     int result = 0;
     while (filled < length) {
@@ -434,18 +371,11 @@ OSStatus ourSSLRead(SSLContextRef context, void *data, size_t length, size_t *pr
     if (filled) {
         if (session->awaitingFirstByte) {
             session->awaitingFirstByte = false;
-            /* The ticket a 1.3 server sends arrives after the handshake, with or
-             * just before the first response, so the session is taken again
-             * here. This is not measurement: without it nothing resumes. */
             rememberSession(session->host, session->ssl);
         }
         if (tlsLogEnabled()) {
             struct timeval now;
             gettimeofday(&now, NULL);
-            /* A gap between reads while the layer still holds decrypted bytes
-             * means the data arrived and nobody came back for it. That is the
-             * shape of a stall this port has been chasing: the processor idle,
-             * the server finished, and seconds passing. */
             if (session->lastReadAt.tv_sec) {
                 double gap = (now.tv_sec - session->lastReadAt.tv_sec) * 1000.0
                     + (now.tv_usec - session->lastReadAt.tv_usec) / 1000.0;
@@ -456,18 +386,12 @@ OSStatus ourSSLRead(SSLContextRef context, void *data, size_t length, size_t *pr
             session->lastReadAt = now;
             session->leftOverPending = SSL_pending(session->ssl);
 
-            /* How the body arrives, not just when it starts. A response that
-             * takes seconds while its first byte took fifty milliseconds is
-             * arriving in dribs, and the question is who is holding it up. */
             double since = session->wroteAt.tv_sec
                 ? (now.tv_sec - session->wroteAt.tv_sec) * 1000.0
                     + (now.tv_usec - session->wroteAt.tv_usec) / 1000.0
                 : -1;
             size_t was = session->readBytes;
             session->readBytes += filled;
-            /* Only against a request this session actually sent. Before the
-             * first write there is nothing to measure from, and subtracting a
-             * zero timeval reports the age of the epoch. */
             if (since >= 0) {
                 if (!was)
                     note("%s: first byte %.0f ms after a %zu byte request",
@@ -488,12 +412,6 @@ OSStatus ourSSLRead(SSLContextRef context, void *data, size_t length, size_t *pr
     return errSSLClosedAbort;
 }
 
-/* CFNetwork asks this before it decides to wait on the socket. OpenSSL has
- * already taken those bytes off the socket and holds them decrypted, so a socket
- * that will never be readable again is exactly the state a large response ends
- * in: everything delivered, the last record still buffered here, and the load
- * never finishing. Answering with SSL_pending is what lets it come back for
- * them. */
 OSStatus ourSSLGetBufferedReadSize(SSLContextRef context, size_t *bufferSize)
 {
     Session *session = sessionFor(context, false);
@@ -508,7 +426,6 @@ OSStatus ourSSLGetBufferedReadSize(SSLContextRef context, size_t *bufferSize)
     return noErr;
 }
 
-
 OSStatus ourSSLWrite(SSLContextRef context, const void *data, size_t length, size_t *processed)
 {
     Session *session = sessionFor(context, false);
@@ -521,10 +438,6 @@ OSStatus ourSSLWrite(SSLContextRef context, const void *data, size_t length, siz
 
     int result = SSL_write(session->ssl, data, (int)length);
     if (result > 0) {
-        // When a request goes out, the clock starts. The answer to "is the site
-        // slow or is the server slow" is the gap between this and the first byte
-        // that comes back, and it can only be measured here: while the page is
-        // waiting, nothing in the page runs to measure anything.
         if (!session->awaitingFirstByte) {
             gettimeofday(&session->wroteAt, NULL);
             session->awaitingFirstByte = true;
@@ -551,8 +464,6 @@ OSStatus ourSSLClose(SSLContextRef context)
     return noErr;
 }
 
-/* The chain the server actually sent, handed back as the platform's own trust
- * object so the system evaluates it against the system trust store. */
 OSStatus ourSSLCopyPeerTrust(SSLContextRef context, SecTrustRef *trust)
 {
     if (trust)
@@ -584,10 +495,6 @@ OSStatus ourSSLCopyPeerTrust(SSLContextRef context, SecTrustRef *trust)
         }
     }
 
-    /* Bind the evaluation to the host that was asked for. A basic X509 policy
-     * only asks whether the chain is valid, not whether it was issued for this
-     * site, so any certificate a trusted CA ever signed would have been accepted
-     * for any domain. The host is already recorded on the session. */
     SecPolicyRef policy = NULL;
     if (session->host[0]) {
         CFStringRef host = CFStringCreateWithCString(NULL, session->host, kCFStringEncodingUTF8);
@@ -641,9 +548,6 @@ OSStatus ourSSLGetSessionState(SSLContextRef context, SSLSessionState *state)
     return noErr;
 }
 
-/* Accepted and remembered where it costs nothing, answered emptily where the
- * answer only matters to client-certificate authentication, which this port
- * does not do. */
 OSStatus ourSSLSetProtocolVersionMin(SSLContextRef context, SSLProtocol version) { (void)context; (void)version; return noErr; }
 OSStatus ourSSLSetProtocolVersionMax(SSLContextRef context, SSLProtocol version) { (void)context; (void)version; return noErr; }
 OSStatus ourSSLSetSessionOption(SSLContextRef context, SSLSessionOption option, Boolean value) { (void)context; (void)option; (void)value; return noErr; }
@@ -671,18 +575,10 @@ OSStatus ourSSLGetPeerID(SSLContextRef context, const void **identifier, size_t 
     return noErr;
 }
 
-/* Three of the twenty-five are gone from the modern SDK's headers - they were
- * deprecated long after this device shipped - but they are still what its
- * CFNetwork calls, so the originals are declared here to be interposed. */
 extern OSStatus SSLSetAllowAnonymousCiphers(SSLContextRef, Boolean);
 extern OSStatus SSLGetClientSideAuthenticate(SSLContextRef, SSLAuthenticate *);
 extern OSStatus SSLGetCertificate(SSLContextRef, CFArrayRef *);
 
-/* Substituted the way dyld supports with a two-level namespace: a table of
- * (replacement, original) pairs in __DATA,__interpose. CFNetwork keeps calling
- * the names it was linked against, and dyld sends those calls here. Exporting
- * the same names would not be enough, because CFNetwork records which library
- * each symbol came from. */
 #define INTERPOSE(name) \
     __attribute__((used)) static struct { const void *replacement; const void *original; } \
     interpose_##name __attribute__((section("__DATA,__interpose"))) = \

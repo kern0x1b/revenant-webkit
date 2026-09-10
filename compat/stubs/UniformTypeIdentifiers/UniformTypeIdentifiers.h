@@ -1,9 +1,3 @@
-/*
- * UniformTypeIdentifiers.framework is iOS 14. This declares the small part of
- * UTType that WebKit uses, implemented on top of MobileCoreServices, which has
- * been present since iOS 3. The well-known constants become expressions rather
- * than globals so no new symbols are needed at link time.
- */
 #pragma once
 #import <Foundation/Foundation.h>
 #import <MobileCoreServices/MobileCoreServices.h>

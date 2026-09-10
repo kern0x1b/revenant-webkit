@@ -1,10 +1,3 @@
-// Two kinds of gap keep Mobile Safari from running on our WebKit 2.54:
-//   1. Safari-glue classes our WebKit no longer carries and that are NOT in the
-//      system WebUI/WebBookmarks frameworks (only WebGeolocationManager so far).
-//      Everything else resolves to those real frameworks under flat namespace, so
-//      stubbing it would shadow the real class and crash on its real methods.
-//   2. Foundation/UIKit methods our 2.54 code calls that iOS 6 predates. Provided
-//      here as categories that map onto the iOS 6 equivalent.
 #import <Foundation/Foundation.h>
 
 @interface WebGeolocationManager : NSObject @end
@@ -15,10 +8,6 @@
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)s { return [NSMethodSignature signatureWithObjCTypes:"v@:@"]; }
 @end
 
-// -[NSData initWithBytesNoCopy:length:deallocator:] arrived in iOS 7. iOS 6 has
-// initWithBytes:length: (which copies), so copy and immediately hand the caller's
-// buffer to its deallocator - semantically identical, the buffer is no longer
-// referenced.
 @interface NSData (RevIOS6Compat) @end
 @implementation NSData (RevIOS6Compat)
 - (id)initWithBytesNoCopy:(void *)bytes length:(NSUInteger)length deallocator:(void (^)(void *, NSUInteger))deallocator
@@ -29,8 +18,6 @@
 }
 @end
 
-
-// +[NSCalendar calendarWithIdentifier:] is iOS 8+. iOS 6 has the initialiser.
 @interface NSCalendar (RevIOS6Compat) @end
 @implementation NSCalendar (RevIOS6Compat)
 + (id)calendarWithIdentifier:(NSString *)identifier
@@ -39,10 +26,6 @@
 }
 @end
 
-// iOS 6 WebKit/WebCore internal C++ entry points MobileSafari calls that upstream
-// WebKit 2.54 dropped. All are memory diagnostics or simple getters - no-op /
-// best-effort bodies. Mangling ignores return type, so any type that compiles is
-// fine as long as the name matches what Safari imports.
 #include <stddef.h>
 #include <stdint.h>
 #include <mach/mach.h>
@@ -79,10 +62,6 @@ namespace WebCore {
     void* currentCFHTTPCookieStorage() { return 0; }
 }
 
-// iOS 6 WTF threading primitives MobileSafari links that 2.54 renamed away. Safari
-// imports only the Mutex/ThreadCondition CONSTRUCTORS - lock/unlock/wait are
-// inlined in Safari against a member at offset 0 - so these are thin pthread
-// wrappers whose object is a pthread primitive at offset 0.
 #include <pthread.h>
 #include <dispatch/dispatch.h>
 namespace WTF {
@@ -131,10 +110,6 @@ namespace WTF {
 #include <sys/ucontext.h>
 static void rev_crash_handler(int sig, siginfo_t* info, void* context) {
     fprintf(stderr, "[REVCRASH] signal %d\n", sig);
-    // The backtrace below is a chain of return addresses, so its innermost entry
-    // is the caller of the function that faulted, not the fault itself. Print the
-    // program counter and the address the access was for, or an afternoon goes
-    // into symbolising the wrong frame.
     if (context) {
         _STRUCT_MCONTEXT* mc = ((ucontext_t*)context)->uc_mcontext;
         if (mc) {
@@ -147,11 +122,6 @@ static void rev_crash_handler(int sig, siginfo_t* info, void* context) {
                     r + 2, (unsigned long)mc->__ss.__r[r + 2], r + 3, (unsigned long)mc->__ss.__r[r + 3]);
         }
     }
-    // backtrace_symbols_fd names the nearest exported symbol, which in a large
-    // library is usually the wrong function and has sent more than one diagnosis
-    // down the wrong path. Print each engine image's load slide too, so a frame
-    // can be turned into a file offset and symbolised exactly:
-    //   atos -o WebCore -l <slide> <address>
     for (uint32_t i = 0; i < _dyld_image_count(); i++) {
         const char* name = _dyld_get_image_name(i);
         if (!name)
@@ -171,8 +141,6 @@ static void rev_crash_handler(int sig, siginfo_t* info, void* context) {
 }
 __attribute__((constructor))
 static void rev_crash_init() {
-    // A stack overflow faults on the guard page, so the handler needs a stack of
-    // its own or the process dies without printing anything at all.
     static char alternateStack[SIGSTKSZ * 4];
     stack_t signalStack;
     memset(&signalStack, 0, sizeof(signalStack));
@@ -190,8 +158,6 @@ static void rev_crash_init() {
         sigaction(signals[i], &action, NULL);
 }
 
-// ---- Dynamic bookmarks start page: a blank Safari tab renders the user's
-// bookmarks (live from Bookmarks.db) as tiles instead of a white page.
 #import <objc/runtime.h>
 #import <sqlite3.h>
 
@@ -243,9 +209,6 @@ static NSString *revFaviconSafeHost(NSString *host) {
     return [host stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
 }
 
-/* Icons the engine fetched are stored with their bytes as served, so the type is
- * read back from them rather than assumed. Files written by the earlier version
- * of this code are always PNG and carry the .png suffix. */
 static NSString *revFaviconPath(NSString *host) {
     return [revFaviconDir() stringByAppendingFormat:@"/%@.icon", revFaviconSafeHost(host)];
 }
@@ -272,11 +235,6 @@ static NSString *revFaviconMIMEType(NSData *data) {
     return nil;
 }
 
-/* The start page's icon for a host, from what the engine collected while the
- * page was open. It used to be fetched from Google's favicon service, which
- * disclosed every bookmarked host to a third party, went out over a path that
- * did not use this port's own TLS, and could only ever answer for a host rather
- * than for the icon a page actually declares. */
 static NSString *revFaviconSrc(NSString *host) {
     NSData *data = [NSData dataWithContentsOfFile:revFaviconPath(host)];
     NSString *type = data.length > 50 ? revFaviconMIMEType(data) : nil;
@@ -289,8 +247,6 @@ static NSString *revFaviconSrc(NSString *host) {
     return [NSString stringWithFormat:@"data:%@;base64,%@", type, revBase64(data)];
 }
 
-/* Written when the engine finishes fetching a page's declared icon; see
- * WebViewDidLoadMainFrameIconNotification in WebFrameLoaderClient.mm. */
 @interface RevFaviconStore : NSObject
 @end
 
@@ -446,7 +402,6 @@ static NSString *revStartPageHTMLForFolder(int folderId) {
 - (void)loadURL:(NSURL *)url userDriven:(BOOL)userDriven;
 @end
 
-// ---- Preferences (space.kern0x1b.rev, written by the Settings PreferenceBundle).
 static id revPref(NSString *key) {
     CFPreferencesAppSynchronize(CFSTR("space.kern0x1b.rev"));
     CFPropertyListRef v = CFPreferencesCopyAppValue((CFStringRef)key, CFSTR("space.kern0x1b.rev"));
@@ -471,10 +426,6 @@ static BOOL revInjectionEnabledForThisApp(void) {
     return [bid isEqualToString:@"com.apple.mobilesafari"];
 }
 
-// window.WebAssembly (wasm3) is installed at window-object-clear, before the
-// page's scripts run. The engine calls back directly: this dylib is not the
-// frame load delegate - the browser it is loaded into is - and guessing which
-// class to swizzle produced a bridge that was present only sometimes.
 #import "RevWasm.h"
 #include <dlfcn.h>
 typedef void (*RevWindowObjectClearedCallback)(WebView *, WebFrame *);
@@ -488,7 +439,6 @@ static void rev_install_wasm_hook(void) {
         setCallback(rev_window_object_cleared);
         return;
     }
-    // WebKitLegacy may not be bound yet when an inserted library is initialized.
     dispatch_async(dispatch_get_main_queue(), ^{
         void (*late)(RevWindowObjectClearedCallback) =
             (void (*)(RevWindowObjectClearedCallback))dlsym(RTLD_DEFAULT, "WebSetWindowObjectClearedCallback");
@@ -534,8 +484,6 @@ static id rev_openBlankTabDocument(id self, SEL _cmd) {
 - (void)_setBoolPreferenceForTestingWithValue:(BOOL)value forKey:(NSString *)key;
 @end
 
-// The page console goes to the engine's own log, so a site that fails in
-// JavaScript can be read on the device instead of rebuilt for.
 static void rev_apply_console_logging(void) {
     BOOL wanted = revPrefBool(@"ConsoleLog", NO);
     dispatch_async(dispatch_get_main_queue(), ^{

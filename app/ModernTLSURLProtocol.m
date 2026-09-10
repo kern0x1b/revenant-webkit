@@ -1,23 +1,3 @@
-/*
- * HTTPS for a system whose TLS stopped being usable years ago.
- *
- * iOS 6 ships SecureTransport and OpenSSL 0.9.8, neither of which can negotiate
- * with a current server: no TLS 1.2 by default, no modern cipher suites, no SNI
- * in places that need it. Every request WebKit makes goes through NSURLConnection,
- * and NSURLProtocol is the documented place to take those requests over — so the
- * connection is made here, against a current OpenSSL, and handed back to WebKit
- * as an ordinary response.
- *
- * A page is a hundred requests or more, so what a request avoids doing matters as
- * much as what it does. Connections are kept open and handed to the next request
- * for the same host, the certificate store is parsed once for the process instead
- * of once per request, TLS sessions are resumed so a repeat handshake is one round
- * trip rather than two plus a signature check, and a body is passed to WebKit as
- * it arrives instead of being assembled first. On a 512 MB device that last one is
- * a memory measure as much as a speed one: jetsam is the other way a page load
- * ends here.
- */
-
 #import "ModernTLSURLProtocol.h"
 
 #import <openssl/ssl.h>
@@ -44,22 +24,14 @@
 
 static NSString *const kHandledKey = @"ModernTLSHandled";
 
-/* Servers close idle connections on their own schedule — five seconds is a common
- * one — and none of them announce it. Dropping ours early does not avoid the race,
- * only narrows it, so nothing here depends on this number being right. */
 static const NSTimeInterval kIdleTimeout = 20.0;
 
-/* How many spare connections to one host are worth holding open. It is a cap on
- * what is kept, not on what may be open at once: how many requests run in
- * parallel is WebKit's decision, and it makes it per host already. */
 static const NSUInteger kIdlePerHost = 6;
 
-static const int kConnectTimeout = 10;   /* seconds */
-static const int kTransferTimeout = 30;  /* seconds */
+static const int kConnectTimeout = 10;
+static const int kTransferTimeout = 30;
 static const NSTimeInterval kExchangeTimeout = 60.0;
 
-/* Reading a redirect's body only to discard it is worth one buffer's worth of
- * work to keep the connection; past that, closing it is cheaper. */
 static const unsigned long long kDrainLimit = 262144;
 
 static const unsigned long long kImageTranscodeSizeLimit = 6 * 1024 * 1024;
@@ -69,14 +41,10 @@ static SSL_CTX *gContext;
 static int gHostSlot = -1;
 static BOOL gLog;
 
-/* One lock for both tables: they are touched once or twice per request and never
- * held across a blocking call. */
 static pthread_mutex_t gPoolMutex = PTHREAD_MUTEX_INITIALIZER;
 static NSMutableDictionary *gIdleConnections;   /* "host:port" -> connections, oldest first */
-static NSMutableDictionary *gSessions;          /* host -> NSValue wrapping SSL_SESSION * */
+static NSMutableDictionary *gSessions;
 
-/* Header names are case-insensitive, and servers differ on which case they
- * send; HTTP/2 origins answer in lower case even over HTTP/1.1. */
 static NSString *headerValue(NSDictionary *headers, NSString *name)
 {
     for (NSString *field in headers) {
@@ -86,8 +54,6 @@ static NSString *headerValue(NSDictionary *headers, NSString *name)
     return nil;
 }
 
-/* A missing header is nil, and -rangeOfString: on nil answers {0, 0}, which
- * reads as a match. Every header test goes through here instead. */
 static BOOL headerContains(NSDictionary *headers, NSString *name, NSString *token)
 {
     NSString *value = headerValue(headers, name);
@@ -96,8 +62,6 @@ static BOOL headerContains(NSDictionary *headers, NSString *name, NSString *toke
     return [value rangeOfString:token options:NSCaseInsensitiveSearch].location != NSNotFound;
 }
 
-/* RFC 7230 gives header field values as ISO-8859-1, and a Content-Disposition
- * filename is where that still shows up; UTF-8 is what everything else means. */
 static NSString *headerString(const char *bytes)
 {
     NSString *text = [NSString stringWithUTF8String:bytes];
@@ -105,8 +69,6 @@ static NSString *headerString(const char *bytes)
         text = [[[NSString alloc] initWithCString:bytes encoding:NSISOLatin1StringEncoding] autorelease];
     return text;
 }
-
-/* ------------------------------------------------------------------ transport */
 
 #define kDNSCacheHosts 16
 #define kDNSCacheAddresses 6
@@ -316,12 +278,7 @@ static int connectToHost(const char *host, const char *port)
         return -1;
 
     int on = 1;
-    /* A request is one small write that the server cannot answer until it has all
-     * of it, so there is nothing for Nagle to coalesce it with. */
     setsockopt(handle, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
-    /* Writing to a pooled connection the server has closed raises SIGPIPE, whose
-     * default action is to kill the process; the write has to fail instead, which
-     * is what tells us to dial again. */
     setsockopt(handle, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
 
     struct timeval limit;
@@ -332,18 +289,6 @@ static int connectToHost(const char *host, const char *port)
     return handle;
 }
 
-/* The client half of the session cache. OpenSSL's internal store is a server-side
- * thing; on a client the sessions have to be caught as they are issued and looked
- * up by name, and with TLS 1.3 they are issued after the handshake has finished,
- * on the first read — which is why this is a callback and not SSL_get1_session()
- * at connect time.
- *
- * What is kept is a copy, never the session object itself. OpenSSL marks a session
- * unusable when its connection ends without a close_notify, and that is how nearly
- * every server ends a keep-alive connection it no longer wants — so holding the
- * shared object would let one dropped connection cost a full handshake on the
- * next. Measured: with the object shared, every second handshake to a host that
- * drops connections is a full one; with a copy, all of them resume. */
 static int rememberSession(SSL *ssl, SSL_SESSION *session)
 {
     NSString *host = (NSString *)SSL_get_ex_data(ssl, gHostSlot);
@@ -360,11 +305,8 @@ static int rememberSession(SSL *ssl, SSL_SESSION *session)
     [gSessions setObject:[NSValue valueWithPointer:copy] forKey:host];
     pthread_mutex_unlock(&gPoolMutex);
 
-    /* 0 leaves the original where it was, with the connection that earned it. */
     return 0;
 }
-
-/* ---------------------------------------------------------------- connections */
 
 static NSTimeInterval nowSeconds(void);
 
@@ -377,9 +319,6 @@ static NSTimeInterval nowSeconds(void);
     NSTimeInterval _idleSince;
     BOOL _received;
     NSTimeInterval _exchangeDeadline;
-    /* Reading the head of a response almost always pulls the first of the body in
-     * with it, and on a kept connection it can pull in the head of the next one,
-     * so the leftovers belong to the connection rather than to a request. */
     unsigned char _buffer[16384];
     NSUInteger _start;
     NSUInteger _end;
@@ -427,13 +366,8 @@ static NSTimeInterval nowSeconds(void);
     SSL_set_fd(ssl, handle);
     SSL_set_tlsext_host_name(ssl, [host UTF8String]);
     SSL_set1_host(ssl, [host UTF8String]);
-    /* The session callback fires during the handshake as well as after it, and it
-     * has nothing but the SSL to say which host the session belongs to. The name
-     * is the connection's own copy, which outlives the SSL. */
     SSL_set_ex_data(ssl, gHostSlot, connection->_host);
 
-    /* Copied on the way out for the same reason it was copied on the way in: how
-     * this connection ends must not be able to spoil the next one's chances. */
     pthread_mutex_lock(&gPoolMutex);
     SSL_SESSION *stored = (SSL_SESSION *)[[gSessions objectForKey:host] pointerValue];
     SSL_SESSION *offer = stored ? SSL_SESSION_dup(stored) : NULL;
@@ -495,17 +429,12 @@ static NSTimeInterval nowSeconds(void);
     _exchangeDeadline = nowSeconds() + kExchangeTimeout;
 }
 
-/* Whether this connection is worth handing to another request. There is no way to
- * be certain — the server may close it between this answer and the next write —
- * so the caller must still be able to start over; this only makes that rare. */
 - (BOOL)isUsable
 {
     if (_handle < 0 || !_ssl)
         return NO;
     if ([NSDate timeIntervalSinceReferenceDate] - _idleSince > kIdleTimeout)
         return NO;
-    /* Bytes left over from the last response mean its framing was wrong, and
-     * anything read on this connection from here would be misattributed. */
     if (_start < _end || SSL_pending(_ssl) > 0)
         return NO;
 
@@ -519,12 +448,6 @@ static NSTimeInterval nowSeconds(void);
     if (!ready)
         return YES;
 
-    /* Something is waiting, and on TLS 1.3 that is usually a session ticket rather
-     * than trouble. Reading without blocking lets OpenSSL take the ticket — which
-     * is how the next connection to this host gets to resume — and separates a
-     * closed connection, which fails, from a healthy one, which has nothing to
-     * give. Application data here belongs to no request of ours, so its arrival
-     * means the framing is lost and the connection is done. */
     int flags = fcntl(_handle, F_GETFL, 0);
     fcntl(_handle, F_SETFL, flags | O_NONBLOCK);
     unsigned char byte;
@@ -565,8 +488,6 @@ static NSTimeInterval nowSeconds(void);
     return YES;
 }
 
-/* Whatever has arrived, up to limit — never a wait for a full buffer, so a body
- * reaches WebKit at the rate the server sends it. */
 - (NSData *)readUpTo:(NSUInteger)limit
 {
     if (![self fill])
@@ -579,9 +500,6 @@ static NSTimeInterval nowSeconds(void);
     return data;
 }
 
-/* Status lines, header fields and chunk sizes are all one line; a line longer than
- * the caller's buffer is truncated in what it returns but still consumed in full,
- * so the framing survives a header we cannot represent. */
 - (BOOL)readLine:(char *)line size:(size_t)size
 {
     size_t length = 0;
@@ -615,10 +533,6 @@ static NSTimeInterval nowSeconds(void);
 
 @end
 
-/* ----------------------------------------------------------------- the pool */
-
-/* Called with the lock held, from both ends of the pool, so a host nobody visits
- * again still gives its sockets back as soon as anything else happens. */
 static void expireIdleConnections(void)
 {
     NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
@@ -642,8 +556,6 @@ static ModernTLSConnection *takeIdleConnection(NSString *key)
         expireIdleConnections();
         NSMutableArray *bucket = [gIdleConnections objectForKey:key];
         if ([bucket count]) {
-            /* Newest last, and the newest is the one that has been idle for the
-             * shortest time, so it is the least likely to have been closed. */
             connection = [[bucket lastObject] retain];
             [bucket removeLastObject];
         }
@@ -651,8 +563,6 @@ static ModernTLSConnection *takeIdleConnection(NSString *key)
 
         if (!connection)
             return nil;
-        /* -isUsable reads from the socket, which is not something to do under the
-         * lock — hence taking the connection out first and dropping it here. */
         if ([connection isUsable])
             return connection;
         [connection shutdown];
@@ -663,9 +573,6 @@ static ModernTLSConnection *takeIdleConnection(NSString *key)
 static void returnIdleConnection(ModernTLSConnection *connection)
 {
     [connection markIdle];
-    /* Reading now takes the TLS 1.3 session ticket while the connection is still
-     * ours, so a host's first parallel connections can resume rather than each
-     * paying for a full handshake. */
     if (![connection isUsable]) {
         [connection shutdown];
         return;
@@ -686,142 +593,26 @@ static void returnIdleConnection(ModernTLSConnection *connection)
     pthread_mutex_unlock(&gPoolMutex);
 }
 
-/* ------------------------------------------------------------------- the cache */
-
-/*
- * What survives a launch, and why none of it could be borrowed.
- *
- * Nothing else in this process remembers anything between runs. WebCore's memory
- * cache is eight megabytes that die with the process, its back-forward cache
- * holds zero pages under the constructor defaults this app deliberately keeps,
- * and +[WebView _setCacheModel:] — the one call that would size an on-disk cache
- * — runs only off a notification that +[WebPreferences standardPreferences]
- * never posts, so it does not run here at all.
- *
- * NSURLCache looks like the answer and is not. A request answered by an
- * NSURLProtocol subclass is never read from it: with an entry for the request
- * demonstrably present in the shared NSURLCache, -startLoading was still called,
- * -cachedResponse was still nil, and the bytes the protocol produced were the
- * ones returned. Asking for NSURLCacheStorageAllowed in
- * -didReceiveResponse:cacheStoragePolicy: does not change that; it is a request
- * addressed to a loader that is not in the path. That was run against the host's
- * Foundation rather than the device's, since the device has no way to run it —
- * but it decides nothing on its own, because even where the loader does write an
- * entry, nothing ever reads one back on the way in, and the read is the half a
- * cache is for.
- *
- * So all of it is here, and nothing downstream will catch a mistake in it. The
- * rules are RFC 9111's, for a private cache. What is deliberately left out:
- *
- *  - Stale responses are never served. must-revalidate, proxy-revalidate,
- *    stale-while-revalidate and stale-if-error therefore decide nothing and are
- *    not read: they all describe when a stale response may be used, and here the
- *    answer is never. The single exception is NSURLRequestReturnCacheDataElseLoad
- *    and its DontLoad sibling, where WebKit is asking for the stored copy at any
- *    age — that is the client's decision to make, not the origin's.
- *  - s-maxage, public-as-permission and proxy-revalidate address shared caches.
- *    This one is private, so s-maxage is ignored and `private` is honoured by
- *    storing rather than by refusing to.
- *  - GET only. HEAD is answered with the headers a GET would have had, including
- *    a Content-Length for a body it does not carry, so storing one under the key
- *    a GET reads would put a length against no bytes. The other methods are not
- *    cacheable in any case, and the unsafe ones invalidate instead (§4.4).
- *  - Range is not cached. A request carrying one is not answered from the cache
- *    and a 206 is never stored: writing a partial representation into a slot
- *    that will be read back as a whole one is the exact failure this file is not
- *    allowed to have.
- *  - Of the request directives, no-store, no-cache and max-age are honoured.
- *    min-fresh and max-stale are not read, and neither is only-if-cached — that
- *    last one WebKit expresses as NSURLRequestReturnCacheDataDontLoad on the
- *    request instead, which is honoured. WebKit sends none of the three as
- *    headers, and a directive that is read but not obeyed would be worse than
- *    one that is not read.
- *  - No digest is kept of a stored body, so a file corrupted in place is served
- *    as though it were sound. Hashing a hundred kilobytes on this processor is
- *    several milliseconds on exactly the path the cache exists to shorten. What
- *    is defended against instead is the corruption that is actually likely: a
- *    truncated or half-written file, which the recorded lengths catch, and a
- *    body reaching the disk after the rename that published it, which the fsync
- *    in -commit orders against.
- *  - One variant per key. RFC 9111 lets a cache keep several representations of
- *    a URI and choose between them with Vary; this keeps the most recent and
- *    treats a Vary mismatch as a miss. A cache may always evict, so keeping one
- *    is a subset of the allowed behaviour rather than a departure from it.
- *  - The qualified forms — no-cache="field", private="field" — are read as the
- *    unqualified ones. That is stricter than the response asked for, never
- *    looser.
- *  - Bodies are stored decoded. Content-Encoding is undone as the body streams
- *    past and is never held in its encoded form, so the encoded bytes do not
- *    exist to store by the time storing is possible; what is written is exactly
- *    what WebKit was handed, with the coding and framing headers stripped the
- *    same way they are on the wire path. It costs disk against a gzipped copy
- *    and buys a replay that is byte-for-byte the original delivery.
- *  - Set-Cookie is not stored. It was applied to NSHTTPCookieStorage when the
- *    response first arrived and that storage persists on its own; replaying a
- *    weeks-old Set-Cookie on every hit would resurrect cookies the server has
- *    since expired. Keeping session cookies out of a file on a device where
- *    every application runs as the same user is worth having besides.
- */
-
-/* What the cache may occupy. The device shares eight gigabytes of flash with
- * everything else on it, and Library/Caches is a directory the system is
- * entitled to empty when space runs short, so this is a budget and not a
- * reservation. Twenty megabytes is set against what it is for: a site's
- * shell — markup, script, stylesheets, fonts, icons — is two to five megabytes
- * once decoded, so this holds several apps' interfaces with room for the images
- * around them. Nothing here was measured on the device. If it is wrong it is
- * wrong in the direction of being too small, which costs a request rather than
- * correctness. */
 static const unsigned long long kCacheCapacity = 20ULL * 1024 * 1024;
 
-/* Eviction runs down to a low-water mark instead of to the cap, so a sweep is
- * worth the directory walk it costs rather than being due again immediately. */
 static const unsigned long long kCacheLowWater = 16ULL * 1024 * 1024;
 
-/* No single response may take more than an eighth of the cache. This is not an
- * RFC rule, it is admission control: one video or font blob big enough to push
- * the whole shell out makes the second launch slower, which is the one thing
- * the cache exists to prevent. */
 static const unsigned long long kCacheEntryLimit = kCacheCapacity / 8;
 
-/* Twenty megabytes of two-hundred-byte responses is a hundred thousand files,
- * and it is the sweep rather than the lookup that would pay for that — a lookup
- * opens one name it computed. This bounds the walk. */
 static const NSUInteger kCacheEntries = 4000;
 
-/* RFC 9111 §4.2.2 leaves the heuristic to the cache. Ours is the usual tenth of
- * the time since the representation last changed, and it applies only to a
- * response that says when that was — no Last-Modified, no guess, revalidate.
- * The day is a ceiling on how wrong the guess may be. */
 static const NSTimeInterval kHeuristicFraction = 0.1;
 static const NSTimeInterval kHeuristicCeiling = 86400.0;
 
-/* Written once during +install, read without the lock afterwards; nil means the
- * directory could not be made and there is no cache this run. */
 static NSString *gCacheDirectory;
 
-/* Guards the sweep bookkeeping only. The entries themselves need no lock: a
- * write lands on a temporary name and is renamed into place, so a reader sees
- * either the whole of one version or the whole of another. */
 static pthread_mutex_t gCacheMutex = PTHREAD_MUTEX_INITIALIZER;
-/* What the directory holds, as of the last walk plus everything committed since.
- * Keeping the running total is what lets the cap mean the cap: a sweep is due
- * the moment this crosses it, rather than every so many bytes written and
- * therefore some unknown distance past it. */
 static unsigned long long gCacheBytes;
 static unsigned long long gCacheWrittenDuringSweep;
-/* Whether a walk has finished in this process. Until one has, gCacheBytes is not
- * a number, it is a zero standing in for a directory nobody has looked at — and
- * treating that as "plenty of room" is how a cache grows every launch. */
 static BOOL gCacheCounted;
-/* Whether a walk is running *now*. Not whether one has been asked for: a walk
- * that has been queued and not reached is not one anything may defer to. */
 static BOOL gCacheSweeping;
 static unsigned long gCacheSerial;
 
-/* Declared here because a committed write reports itself, and the bookkeeping it
- * reports to is further down with the rest of the housekeeping. isHopByHop() is
- * with the request code it was written for, further down still. */
 static void cacheNoteWrite(unsigned long long bytes);
 static BOOL isHopByHop(NSString *field);
 
@@ -830,13 +621,6 @@ static NSTimeInterval nowSeconds(void)
     return [NSDate timeIntervalSinceReferenceDate] + NSTimeIntervalSince1970;
 }
 
-/* ------------------------------------------------------- dates and directives */
-
-/* RFC 9110 §5.6.7 gives three date formats and says a recipient must accept all
- * three. strptime() would do it in three lines and read the month name through
- * the process locale, which is not ours to depend on: WebKit and ICU are both in
- * this address space and both set locales. The grammar is fixed, so it is parsed
- * here instead. Answers epoch seconds, which is what everything below works in. */
 static BOOL parseHTTPDate(NSString *text, NSTimeInterval *out)
 {
     if (![text length])
@@ -857,15 +641,12 @@ static BOOL parseHTTPDate(NSString *text, NSTimeInterval *out)
         const char *rest = comma + 1;
         while (*rest == ' ')
             rest++;
-        /* IMF-fixdate: 06 Nov 1994 08:49:37 GMT */
         if (sscanf(rest, "%2d %3s %4d %2d:%2d:%2d", &day, month, &year, &hour, &minute, &second) != 6) {
-            /* The obsolete RFC 850 form: 06-Nov-94 08:49:37 GMT */
             if (sscanf(rest, "%2d-%3s-%2d %2d:%2d:%2d", &day, month, &year, &hour, &minute, &second) != 6)
                 return NO;
             twoDigitYear = YES;
         }
     } else {
-        /* asctime: Sun Nov  6 08:49:37 1994 */
         char weekday[8] = {0};
         if (sscanf(bytes, "%3s %3s %2d %2d:%2d:%2d %4d",
                 weekday, month, &day, &hour, &minute, &second, &year) != 7)
@@ -883,8 +664,6 @@ static BOOL parseHTTPDate(NSString *text, NSTimeInterval *out)
         return NO;
 
     if (twoDigitYear) {
-        /* RFC 9110 §5.6.7 again: a two-digit year that would land more than fifty
-         * years ahead means the most recent past year ending in those digits. */
         time_t clock = time(NULL);
         struct tm present;
         gmtime_r(&clock, &present);
@@ -909,10 +688,6 @@ static BOOL parseHTTPDate(NSString *text, NSTimeInterval *out)
     return YES;
 }
 
-/* Cache-Control is a list of directives, some of which carry a value that may be
- * quoted and may itself contain commas — so it cannot be cut on commas first.
- * Names come back lower-cased; a directive with no value maps to an empty string,
- * which is why every caller tests for nil rather than for length. */
 static NSDictionary *parseCacheControl(NSString *text)
 {
     NSMutableDictionary *directives = [NSMutableDictionary dictionary];
@@ -970,10 +745,6 @@ static NSDictionary *parseCacheControl(NSString *text)
     return directives;
 }
 
-/* RFC 9111 §1.2.2: delta-seconds is a run of digits, and a value too large to
- * represent is taken as the largest one that is. Anything else is not a
- * delta-seconds at all — a max-age the cache cannot read is not one it gets to
- * invent a number for. */
 static BOOL parseDeltaSeconds(NSString *value, NSTimeInterval *out)
 {
     if (![value length])
@@ -997,26 +768,18 @@ static BOOL deltaSeconds(NSDictionary *directives, NSString *name, NSTimeInterva
     return parseDeltaSeconds([directives objectForKey:name], out);
 }
 
-/* ------------------------------------------------------------- the entry file */
-
-/* magic | metadata length | body length | metadata | body. The two lengths are
- * in the fixed part rather than inside the metadata because the body length is
- * only known when the body ends, and a fixed field can be written back over
- * without the encoding of the number changing its size. */
 static const char kCacheMagic[8] = { 'M', 'T', 'L', 'S', 'c', 'v', '1', '\0' };
-/* An enumerator rather than a static const, so that it is a constant expression
- * and the header buffer below is an array rather than a variable-length one. */
 enum { kCacheHeaderSize = 20 };
 
 @interface ModernTLSCacheEntry : NSObject
 {
 @public
-    NSData *file;               /* the whole entry, mapped; the body is a range of it */
+    NSData *file;
     NSString *path;
     NSString *url;
     NSInteger status;
-    NSDictionary *headers;      /* as WebKit was handed them, and will be again */
-    NSDictionary *selecting;    /* the Vary-named request fields, as they were then */
+    NSDictionary *headers;
+    NSDictionary *selecting;
     NSTimeInterval requested;
     NSTimeInterval received;
     NSUInteger bodyOffset;
@@ -1056,10 +819,6 @@ static NSString *cachePathForKey(NSString *key)
         [NSString stringWithUTF8String:name]];
 }
 
-/* Reads an entry back, or answers nil for anything it cannot vouch for. Every
- * test here exists because the alternative is handing WebKit bytes that are not
- * the ones the origin sent: a truncated file, a file from an older layout, or —
- * the reason the URL is stored at all — the other side of a hash collision. */
 static ModernTLSCacheEntry *readCacheEntry(NSString *path, NSString *key)
 {
     NSData *file = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:NULL];
@@ -1119,10 +878,6 @@ static void removeCacheEntry(NSString *key)
         unlink([path fileSystemRepresentation]);
 }
 
-/* The body is written as it streams, so the entry never exists whole in memory,
- * and it is written under a name nothing reads. Only the rename at the end makes
- * it visible, which is what lets a reader that arrives at any moment see either
- * the previous version entire or this one entire and never a half of either. */
 @interface ModernTLSCacheWriter : NSObject
 {
     NSString *_temporary;
@@ -1159,9 +914,6 @@ static void removeCacheEntry(NSString *key)
     _temporary = [[gCacheDirectory stringByAppendingPathComponent:
         [NSString stringWithFormat:@"partial-%d-%lu", (int)getpid(), serial]] copy];
 
-    /* 0600 rather than the umask: a cache of a logged-in site's pages is worth
-     * as much as the session that fetched them, and on this device every
-     * application runs as the same user. */
     _handle = open([_temporary fileSystemRepresentation], O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (_handle < 0) {
         [self release];
@@ -1213,12 +965,6 @@ static void removeCacheEntry(NSString *key)
         [self abandon];
         return NO;
     }
-    /* The rename below is a metadata change, and on a journalled filesystem a
-     * metadata change can reach the disk before the data it refers to. Without
-     * this, a reboot at the wrong moment leaves a file of the right length full
-     * of nothing, which reads back as a valid entry and is served as one. Not
-     * F_FULLFSYNC: the point is to order these two writes against each other, not
-     * to promise the entry survives a power cut — a lost entry is only a miss. */
     fsync(_handle);
     close(_handle);
     _handle = -1;
@@ -1242,8 +988,6 @@ static void removeCacheEntry(NSString *key)
 
 @end
 
-/* --------------------------------------------------------------- housekeeping */
-
 typedef struct {
     char name[80];
     off_t size;
@@ -1257,14 +1001,6 @@ static int compareByUse(const void *left, const void *right)
     return first < second ? -1 : first > second ? 1 : 0;
 }
 
-/* Eviction, least recently used first, where "used" is the file's modification
- * time. A hit touches the file with utimes(), which is one syscall against a
- * file that is not rewritten, so keeping the ordering costs nothing on the path
- * the cache exists to make fast. Everything expensive is here instead, off that
- * path and on a background queue. */
-/* One pass. Answers what the directory holds afterwards, and reports through
- * `removed` whether it was able to take anything out — which is what tells the
- * caller apart from a directory it cannot shrink. */
 static unsigned long long sweepOnce(BOOL *removed)
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
@@ -1290,9 +1026,6 @@ static unsigned long long sweepOnce(BOOL *removed)
         if (stat(path, &details) || !S_ISREG(details.st_mode))
             continue;
 
-        /* A partial file belongs to a write that is either still running in this
-         * process — in which case its name carries this pid — or died with an
-         * earlier one and will never be finished. */
         if (!strncmp(listing->d_name, "partial-", 8)) {
             char mine[32];
             snprintf(mine, sizeof(mine), "partial-%d-", (int)getpid());
@@ -1341,16 +1074,10 @@ static unsigned long long sweepOnce(BOOL *removed)
     return held;
 }
 
-/* Passes until the directory is inside the cap, which takes more than one only if
- * enough was committed during a walk to undo it. It cannot spin: a pass that
- * removes nothing ends it, so a directory that will not shrink costs one walk and
- * not a thread. */
 static void sweepCache(void)
 {
     pthread_mutex_lock(&gCacheMutex);
     if (gCacheSweeping) {
-        /* Another thread is in the directory. It re-reads the total before it
-         * stops, so it will see whatever this call was about. */
         pthread_mutex_unlock(&gCacheMutex);
         return;
     }
@@ -1362,7 +1089,6 @@ static void sweepCache(void)
         unsigned long long held = sweepOnce(&removed);
 
         pthread_mutex_lock(&gCacheMutex);
-        /* Entries committed while the walk was running are not in what it counted. */
         gCacheBytes = held + gCacheWrittenDuringSweep;
         gCacheWrittenDuringSweep = 0;
         gCacheCounted = YES;
@@ -1376,11 +1102,6 @@ static void sweepCache(void)
     }
 }
 
-/* The launch-time walk, and the only one that is dispatched: it clears out what
- * the last run left — its temporaries above all — and puts a number on a
- * directory this process has not looked at. Nothing waits on it and the first
- * page load must not, so it is not allowed to be the only walk either; see
- * cacheNoteWrite(). */
 static void scheduleSweep(void)
 {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
@@ -1395,29 +1116,13 @@ static void cacheNoteWrite(unsigned long long bytes)
         gCacheWrittenDuringSweep += bytes;
     else
         gCacheBytes += bytes;
-    /* Over the cap, or over a directory this process has never counted. The
-     * second is not a nicety: the launch-time walk is queued, and a launch that
-     * stores a page and then ends — which is the ordinary shape of one on this
-     * device — can finish before that queue is ever reached. */
     BOOL due = !gCacheCounted || gCacheBytes > kCacheCapacity;
     pthread_mutex_unlock(&gCacheMutex);
 
-    /* Walked on the caller's thread rather than handed to a queue, because a
-     * queued walk is one that a short launch never performs. It costs nothing
-     * that is waiting: this is reached from -commit, after the last byte of the
-     * response has already gone to WebKit. Measured before it was moved here:
-     * thirteen launches storing two megabytes each left twenty-seven megabytes on
-     * disk under a twenty megabyte cap, because only one of the thirteen lived
-     * long enough for its sweep to run. sweepCache() returns at once if another
-     * thread is already in the directory. */
     if (due)
         sweepCache();
 }
 
-/* Library/Caches, under the bundle identifier, because that is the directory the
- * system is entitled to empty when the device runs out of room — which is
- * exactly the licence an HTTP cache wants and the reason not to put this in
- * Documents, where losing it would be the user's problem rather than ours. */
 static BOOL installCache(void)
 {
     NSArray *directories = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
@@ -1432,19 +1137,10 @@ static BOOL installCache(void)
         return NO;
     gCacheDirectory = [path copy];
 
-    /* The one walk that is not triggered by a write: it clears out whatever the
-     * last run left behind, including the temporaries of a run that was killed
-     * mid-request, and it does so on a background queue so the first load of
-     * this one never waits for it. */
     scheduleSweep();
     return YES;
 }
 
-/* ---------------------------------------------------------------- the policy */
-
-/* RFC 9111 §4.1: the cache key. The method is not in it because only GET reaches
- * here, and the fragment is not in it because a fragment is never sent and never
- * distinguishes one response from another. */
 static NSString *cacheKeyForURL(NSURL *url)
 {
     NSString *text = [url absoluteString];
@@ -1459,11 +1155,6 @@ static NSString *cacheKeyForRequest(NSURLRequest *request)
     return cacheKeyForURL([request URL]);
 }
 
-/* RFC 9111 §4.1 again: the fields the response named in Vary, recorded with the
- * values the request carried, so a later request can be told apart from this one.
- * An absent field is recorded as absent rather than as empty — "no Accept-Language
- * at all" and "Accept-Language: " are different requests to a server that varies
- * on it. */
 static NSDictionary *selectingHeaders(NSString *vary, NSDictionary *wire)
 {
     NSMutableDictionary *selecting = [NSMutableDictionary dictionary];
@@ -1493,10 +1184,6 @@ static BOOL selectingHeadersMatch(NSDictionary *selecting, NSDictionary *wire)
     return YES;
 }
 
-/* RFC 9111 §4.2.3, in the order the section gives it. The two timestamps the
- * entry carries are what make this work across a launch: without the moment the
- * request went out, a response that spent an hour in someone else's cache is
- * indistinguishable from one that was fetched a second ago. */
 static NSTimeInterval entryAge(ModernTLSCacheEntry *entry)
 {
     NSTimeInterval dateValue = entry->received;
@@ -1519,9 +1206,6 @@ static NSTimeInterval entryAge(ModernTLSCacheEntry *entry)
     return initial + resident;
 }
 
-/* RFC 9111 §4.2.1, in its order: the response's own max-age, then Expires
- * measured against the response's Date, then the heuristic. s-maxage is skipped
- * on purpose; it is addressed to shared caches and this one is private. */
 static NSTimeInterval entryFreshnessLifetime(ModernTLSCacheEntry *entry, NSDictionary *directives)
 {
     NSTimeInterval maxAge = 0;
@@ -1534,10 +1218,6 @@ static NSTimeInterval entryFreshnessLifetime(ModernTLSCacheEntry *entry, NSDicti
         NSTimeInterval parsed = 0;
         if (parseHTTPDate(headerValue(entry->headers, @"Date"), &parsed))
             dateValue = parsed;
-        /* §5.3: an Expires a cache cannot parse — "0" and "-1" are the ones
-         * actually sent — means already expired, not "no opinion". Falling
-         * through to the heuristic here would invent freshness out of a header
-         * whose whole purpose was to deny it. */
         if (!parseHTTPDate(expires, &expiresValue))
             return 0;
         NSTimeInterval lifetime = expiresValue - dateValue;
@@ -1555,13 +1235,11 @@ static NSTimeInterval entryFreshnessLifetime(ModernTLSCacheEntry *entry, NSDicti
 }
 
 typedef enum {
-    ModernTLSCacheUnusable,   /* nothing stored that answers this request */
-    ModernTLSCacheValidate,   /* stored, but the origin has to say it still holds */
-    ModernTLSCacheFresh       /* answerable from disk, with no connection at all */
+    ModernTLSCacheUnusable,
+    ModernTLSCacheValidate,
+    ModernTLSCacheFresh
 } ModernTLSCacheVerdict;
 
-/* Whether a stored response that has already been matched to this request — see
- * selectingHeadersMatch() — is fresh enough to answer it. */
 static ModernTLSCacheVerdict verdictForEntry(ModernTLSCacheEntry *entry,
     NSDictionary *requestDirectives)
 {
@@ -1569,17 +1247,12 @@ static ModernTLSCacheVerdict verdictForEntry(ModernTLSCacheEntry *entry,
         || [headerValue(entry->headers, @"Last-Modified") length];
     NSDictionary *responseDirectives = parseCacheControl(headerValue(entry->headers, @"Cache-Control"));
 
-    /* §5.2.2.4 and §5.2.1.4. no-cache on either side means the stored response
-     * may be kept but not used without asking, so a stored response with no way
-     * to ask is a stored response that cannot be used. */
     if ([responseDirectives objectForKey:@"no-cache"] || [requestDirectives objectForKey:@"no-cache"])
         return hasValidator ? ModernTLSCacheValidate : ModernTLSCacheUnusable;
 
     NSTimeInterval age = entryAge(entry);
     NSTimeInterval lifetime = entryFreshnessLifetime(entry, responseDirectives);
 
-    /* §5.2.1.1: the request may hold the response to a shorter life than the
-     * origin gave it, never to a longer one. */
     NSTimeInterval requestMaxAge = 0;
     if (deltaSeconds(requestDirectives, @"max-age", &requestMaxAge) && requestMaxAge < lifetime)
         lifetime = requestMaxAge;
@@ -1589,37 +1262,24 @@ static ModernTLSCacheVerdict verdictForEntry(ModernTLSCacheEntry *entry,
     return hasValidator ? ModernTLSCacheValidate : ModernTLSCacheUnusable;
 }
 
-/* RFC 9111 §3. What may be written down, for a private cache and for what this
- * protocol is able to replay afterwards. */
 static BOOL responseIsStorable(NSInteger status, NSDictionary *headers, NSDictionary *directives)
 {
-    /* Not a final response, or not one whose body is the whole representation.
-     * 304 is excluded because it has no body of its own — it updates an entry
-     * rather than becoming one — and 206 because a range is not a representation
-     * this cache can hand back as if it were the document. */
     if (status < 200 || status == 206 || status == 304)
         return NO;
     if ([directives objectForKey:@"no-store"])
         return NO;
 
-    /* §4.1: a Vary of * says no request ever matches this response, so storing it
-     * is storing something that can only ever be a miss. */
     NSString *vary = headerValue(headers, @"Vary");
     if ([[vary stringByTrimmingCharactersInSet:
             [NSCharacterSet whitespaceCharacterSet]] isEqualToString:@"*"])
         return NO;
 
-    /* §15.1's heuristically cacheable set, less 206: a partial representation is
-     * not a representation this cache can hand back whole, and 206 is the only
-     * member of that list whose body is not the whole of anything. */
     static const NSInteger byDefault[] = { 200, 203, 204, 300, 301, 308, 404, 405, 410, 414, 501 };
     for (size_t at = 0; at < sizeof(byDefault) / sizeof(byDefault[0]); at++) {
         if (status == byDefault[at])
             return YES;
     }
 
-    /* Everything else needs the origin to have said, in so many words, that it
-     * may be kept — an explicit expiry, or a directive that grants storage. */
     NSTimeInterval ignored = 0;
     return deltaSeconds(directives, @"max-age", &ignored)
         || [headerValue(headers, @"Expires") length] != 0
@@ -1638,11 +1298,6 @@ static NSDictionary *cacheMetadata(ModernTLSCacheEntry *entry)
         [NSNumber numberWithDouble:entry->received], @"received", nil];
 }
 
-/* RFC 9111 §4.3.4: the fields a 304 carries replace the stored ones. Two are held
- * back. The stored body is decoded and the stored Content-Length describes it as
- * such; a 304's Content-Length and Content-Encoding describe the representation
- * on the wire, and letting them through would leave the entry advertising a
- * length and a coding that its own bytes do not have. */
 static void mergeStoredHeaders(ModernTLSCacheEntry *entry, NSDictionary *fresh)
 {
     NSMutableDictionary *merged = [NSMutableDictionary dictionaryWithDictionary:entry->headers];
@@ -1652,8 +1307,6 @@ static void mergeStoredHeaders(ModernTLSCacheEntry *entry, NSDictionary *fresh)
             || [field caseInsensitiveCompare:@"Content-Encoding"] == NSOrderedSame
             || [field caseInsensitiveCompare:@"Set-Cookie"] == NSOrderedSame)
             continue;
-        /* The stored name may differ from this one only in case, and two spellings
-         * of one field would both be handed to WebKit. */
         for (NSString *existing in [merged allKeys]) {
             if ([existing caseInsensitiveCompare:field] == NSOrderedSame && ![existing isEqualToString:field])
                 [merged removeObjectForKey:existing];
@@ -1665,11 +1318,6 @@ static void mergeStoredHeaders(ModernTLSCacheEntry *entry, NSDictionary *fresh)
     entry->headers = replacement;
 }
 
-/* Writing the whole entry again to change a few header fields is more work than
- * the change is worth, and it is done anyway: metadata sits at the head of the
- * file, so changing it moves the body. It is worth it because of when it happens
- * — after the response has already been handed to WebKit from the copy that is
- * still on disk, so the cost lands on nothing that is waiting. */
 static void rewriteCacheEntry(ModernTLSCacheEntry *entry, NSString *key)
 {
     ModernTLSCacheWriter *writer = [[ModernTLSCacheWriter alloc]
@@ -1693,11 +1341,6 @@ static void rewriteCacheEntry(ModernTLSCacheEntry *entry, NSString *key)
     [writer release];
 }
 
-/* RFC 9111 §4.4. A request that changed something at the origin makes whatever is
- * stored for that URI wrong, and the response to it does not say what the new
- * representation is — only that the old one is no longer it. Location and
- * Content-Location go too, but only when they name the same host: otherwise a
- * server could empty this cache of any URI it cared to name. */
 static void invalidateCacheForRequest(NSURLRequest *request, NSDictionary *headers, NSInteger status)
 {
     if (!gCacheDirectory || status >= 400)
@@ -1723,121 +1366,24 @@ static void invalidateCacheForRequest(NSURLRequest *request, NSDictionary *heade
     }
 }
 
-/* ------------------------------------------- the app-shell policy (not RFC 9111) */
-
-/* Everything above this line is RFC 9111 and serves nothing stale. Nothing below
- * it is, and that is not a bug in the cache — it is a policy, off by default,
- * that a wrapped application turns on for its own origins.
- *
- * This protocol exists so that a site behaves like a native
- * one, and such an application is two things that age at very different speeds.
- * There is a shell — the document, and the scripts, styles and fonts that draw
- * the interface — which changes when the operator ships a release. And there is
- * data, which changes every minute. HTTP has one freshness model for both, so in
- * practice the shell arrives marked no-cache, or with a max-age of a few minutes,
- * and every launch pays a revalidation round trip before the first pixel. On this
- * device, over a phone network, that round trip is most of the time to first
- * paint — and it almost always ends in a 304 saying the shell has not changed.
- *
- * The web's answer to this is a Service Worker running a cache-first strategy.
- * WebKitLegacy has no Service Worker, so the strategy has to live here, in the
- * one place that sees every request. What it does is what a cache-first Service
- * Worker does and no more: a stored shell response is handed over immediately,
- * however stale HTTP considers it, and a revalidation is started behind the page
- * so that the next launch is current.
- *
- * Four things keep this from being a cache that is simply wrong:
- *
- *   - It is off. The embedder has to turn it on and name the hosts its
- *     application is made of. An unconfigured build behaves exactly as it did.
- *   - It is narrow. Only requests classified as shell are served this way, and
- *     the classifier below refuses anything it cannot positively identify. Data
- *     is never served from it: a chat client showing yesterday's messages
- *     instantly is worse than one that waits.
- *   - It is bounded. Past kShellMaxStale the stored copy is not used at all and
- *     the request goes to the network like any other.
- *   - It says so. Every response it serves is logged as a policy decision rather
- *     than as a cache hit, under [shell] rather than [cache].
- *
- * What is *stored* is untouched by any of this: storage stays RFC 9111
- * throughout, so a response the origin said not to keep is still not kept, and
- * turning the policy off restores standard behaviour on the spot — there is no
- * separate store to flush, only a rule that stops being applied. */
-
-/* How stale a shell response may be and still be served without asking. A month
- * is not acceptable and neither is a day.
- *
- * The number does not describe the staleness this policy normally produces. Every
- * cache-first hit queues a revalidation, so an application opened even once a week
- * is refreshed by that launch and the next one starts from a current shell: the
- * steady state is one launch behind, not seven days behind. What this bound
- * describes is the worst case — the application that has not been opened for a
- * long time — and what it costs to be wrong there.
- *
- * Too short, and the policy stops paying for itself: at a day, a user who opens
- * the application every morning waits for the network every morning, which is the
- * round trip this exists to remove. Too long, and the operator loses control of
- * what is running on the device: a shell served from here cannot be revoked any
- * faster than this bound, so it is also how long a bad release can keep painting.
- * A week is the outside edge of "ship a fix and expect it live", and it means the
- * only launches that ever wait are the ones after a real absence — where the user
- * is not comparing this launch against yesterday's anyway.
- *
- * It is deliberately longer than kHeuristicCeiling. That one bounds how wrong a
- * *guess* about an origin's intent may be, and a day is generous for a guess.
- * This one bounds a decision that was made on purpose. */
 static const NSTimeInterval kShellMaxStale = 7 * 86400.0;
 
-/* Revalidations do not run while the page is loading. The device has two slow
- * cores and a hard memory ceiling, and a burst of background requests during the
- * load would spend exactly the time the policy just saved — the round trip would
- * not be on the critical path any more, it would simply be next to it, competing
- * for the same cores, the same sockets and the same jetsam budget.
- *
- * So a hit queues its revalidation and nothing else. The queue drains on one
- * serial background queue, one request at a time, and only once the foreground
- * has been quiet for kShellQuietPeriod — no request started, finished or failed.
- * Two seconds is long enough that a normal subresource chain has ended (each
- * response WebKit gets tends to produce the next request within a few hundred
- * milliseconds) and short enough to still be inside the launch, which is the only
- * time a wrapped application is reliably running at all.
- *
- * Quiet is measured from request boundaries, so a single very long transfer can
- * look quiet while it is still streaming. That is accepted rather than fixed: the
- * cost of being wrong is one background request at background priority, which is
- * the same bound the policy accepts everywhere else. */
 static const NSTimeInterval kShellQuietPeriod = 2.0;
-/* If the foreground never goes quiet — a page that polls, say — revalidations
- * cannot simply never run, or the cache would never move forward. After this long
- * the queue drains anyway, still one at a time and still at background priority. */
 static const NSTimeInterval kShellQuietDeadline = 30.0;
-/* A gap between revalidations, so that a drained queue is a trickle rather than a
- * second page load. */
 static const NSTimeInterval kShellRevalidateGap = 0.25;
-/* A shell is tens of resources, not hundreds. Anything past this is either not a
- * shell or not worth the battery, and the next launch will queue it again. */
 static const NSUInteger kShellQueueLimit = 64;
 
-/* Written by the embedder before any load and read on every request. gShellHosts
- * being nil is what says the policy is off — enabling it without naming hosts is
- * not possible, because a cache-first rule for the whole internet is not a policy,
- * it is a broken cache. */
 static pthread_mutex_t gShellMutex = PTHREAD_MUTEX_INITIALIZER;
 static BOOL gShellCacheFirst;
-static NSSet *gShellHosts;              /* lower-cased host names */
-static NSMutableSet *gShellDeclared;    /* cache keys the embedder called shell outright */
-static NSMutableArray *gShellPending;   /* NSURLRequests waiting to be revalidated */
-static NSMutableSet *gShellInFlight;    /* their keys, so one URL is queued once */
+static NSSet *gShellHosts;
+static NSMutableSet *gShellDeclared;
+static NSMutableArray *gShellPending;
+static NSMutableSet *gShellInFlight;
 static BOOL gShellDraining;
 static dispatch_queue_t gShellRunner;
 static NSTimeInterval gShellForegroundAt;
-static NSString *gShellUserAgent;       /* the last one WebKit sent; see +precacheURLs: */
+static NSString *gShellUserAgent;
 
-/* The client a background revalidation is given. NSURLProtocol requires one and
- * this policy has nobody to answer: the point of the fetch is the file it leaves
- * behind, not the bytes it produces. Everything is dropped on the floor, which is
- * also why -onClientThread:with: calls straight through for a background load
- * instead of hopping to a run loop nobody is running. */
 @interface ModernTLSDiscardedClient : NSObject <NSURLProtocolClient>
 @end
 
@@ -1860,13 +1406,8 @@ static NSString *gShellUserAgent;       /* the last one WebKit sent; see +precac
 + (void)runShellRequest:(NSURLRequest *)request;
 @end
 
-/* Every foreground request pushes the quiet window out. Called at the start of a
- * load and at each of the three ways one ends. */
 static void shellNoteForegroundActivity(void)
 {
-    /* Read without the lock: it is written once, before any load, and a stale
-     * read of NO only means the bookkeeping below is skipped while the policy is
-     * off — which is precisely when it does not matter. */
     if (!gShellCacheFirst)
         return;
     pthread_mutex_lock(&gShellMutex);
@@ -1874,23 +1415,6 @@ static void shellNoteForegroundActivity(void)
     pthread_mutex_unlock(&gShellMutex);
 }
 
-/* WebKit's own word for what a request is for. WebCore sets Sec-Fetch-Dest on
- * every request from a trustworthy origin — which is every request that reaches
- * this file, since it only takes https — from the Fetch destination of the load:
- * "document", "iframe", "style", "script", "font", "image", "json", and "empty"
- * for XMLHttpRequest and fetch(). See CachedResourceLoader::updateHTTPRequestHeaders.
- * That is the distinction this policy needs, made by the code that actually knows
- * the answer, and it is why the shell can be told from the data at all.
- *
- * It can be missing: a site on the quirks list has the header suppressed, and a
- * frame with no document yet is not given one either. Two weaker signals stand in.
- * Accept is set per resource type by CachedResourceRequest::acceptHeaderValueFromType
- * and is unambiguous for exactly two of them — a document and a stylesheet;
- * scripts and XHR are both given the same catch-all and cannot be told apart by
- * it, so nothing is guessed from that. mainDocumentURL is WebKit's first-party-for-cookies URL,
- * which for a top-level navigation is the request's own URL.
- *
- * Answers nil for anything it cannot name, and nil is not shell. */
 static NSString *shellDestinationForRequest(NSURLRequest *request, NSDictionary *wire)
 {
     NSString *destination = headerValue(wire, @"Sec-Fetch-Dest");
@@ -1909,20 +1433,11 @@ static NSString *shellDestinationForRequest(NSURLRequest *request, NSDictionary 
     return nil;
 }
 
-/* Whether the response that is stored is the kind of thing the request said it
- * was asking for. Both halves have to agree before anything stale is served.
- *
- * This is the check that keeps data out. An XMLHttpRequest is "empty" and matches
- * nothing here whatever it fetched, so an HTML fragment pulled in by script is not
- * a document as far as this is concerned. And a destination cannot be taken at its
- * word either: a "script" whose stored response is application/json is a JSON
- * document loaded through a script tag or mislabelled by the origin, and it is not
- * served stale. Nothing is admitted on one signal alone. */
 static BOOL shellEntryMatchesDestination(NSString *destination, ModernTLSCacheEntry *entry)
 {
     NSString *type = headerValue(entry->headers, @"Content-Type");
     if (![type length])
-        return NO;                      /* nothing to check against */
+        return NO;
     NSRange parameters = [type rangeOfString:@";"];
     if (parameters.location != NSNotFound)
         type = [type substringToIndex:parameters.location];
@@ -1951,16 +1466,9 @@ static BOOL shellEntryMatchesDestination(NSString *destination, ModernTLSCacheEn
             || [type isEqualToString:@"application/font-sfnt"]
             || [type isEqualToString:@"application/vnd.ms-fontobject"];
 
-    /* Everything else — image, media, manifest, json, empty, and whatever the
-     * Fetch spec adds next — is not shell. Images are left out on purpose: an
-     * avatar or a piece of album art is data wearing a picture's clothes, and the
-     * ones that really are shell are almost always served under a versioned URL,
-     * where RFC 9111 already answers them from disk without any of this. */
     return NO;
 }
 
-/* The whole of the decision, in one place, for an entry that has already been
- * matched to this request by Vary. */
 static BOOL shellPolicyAppliesTo(NSURLRequest *request, NSDictionary *wire,
     ModernTLSCacheEntry *entry, NSString *key)
 {
@@ -1981,8 +1489,6 @@ static BOOL shellPolicyAppliesTo(NSURLRequest *request, NSDictionary *wire,
     if (!declared && !shellEntryMatchesDestination(shellDestinationForRequest(request, wire), entry))
         return NO;
 
-    /* The bound. Past it the policy stops applying and the request is answered by
-     * the rules above, which is to say by revalidating or by fetching. */
     return entryAge(entry) <= kShellMaxStale;
 }
 
@@ -2000,9 +1506,6 @@ static void shellWaitForQuiet(void)
     }
 }
 
-/* Runs on gShellRunner, which is serial, so there is never more than one of these
- * in the air: one socket, one handshake, one body, against a foreground that has
- * already said it is finished. */
 static void shellDrain(void)
 {
     for (;;) {
@@ -2037,7 +1540,6 @@ static void shellDrain(void)
     }
 }
 
-/* Called with the lock held. */
 static void shellStartDrainingLocked(void)
 {
     if (gShellDraining || ![gShellPending count])
@@ -2051,14 +1553,6 @@ static void shellStartDrainingLocked(void)
     dispatch_async(gShellRunner, ^{ shellDrain(); });
 }
 
-/* Queues the revalidation that pays for the stale response just served. The
- * request is rebuilt rather than reused so that the conditional headers this
- * cache may add are not carried over, and so that it can be given the one cache
- * policy that means "ask the origin, whatever you have on disk". Everything else
- * WebKit sent — the user agent, Accept, Accept-Language, Sec-Fetch-Dest — is
- * copied verbatim, because those are the fields an origin varies on and a
- * revalidation made under a different set of them would store a variant that the
- * next real request misses. */
 static void shellQueueRevalidation(NSURLRequest *request, NSString *key)
 {
     NSMutableURLRequest *refresh = [[[NSMutableURLRequest alloc] initWithURL:[request URL]] autorelease];
@@ -2095,11 +1589,6 @@ static void shellQueueRevalidation(NSURLRequest *request, NSString *key)
     pthread_mutex_unlock(&gShellMutex);
 }
 
-/* ------------------------------------------------------------------- requests */
-
-/* -[NSURL path] hands back a percent-decoded path, which would put raw spaces and
- * other reserved characters into the request line; the escaped form is taken out
- * of the absolute string instead. */
 static NSString *requestTarget(NSURL *url)
 {
     NSString *text = [url absoluteString];
@@ -2122,13 +1611,10 @@ static NSString *requestTarget(NSURL *url)
     return [target length] ? target : @"/";
 }
 
-/* Headers that describe this one hop rather than the message, and so are neither
- * forwarded from WebKit's request nor handed back in the response. */
 static BOOL isHopByHop(NSString *field)
 {
     static NSArray *names;
     static dispatch_once_t once;
-    /* Requests run on several threads at a time, so this is built exactly once. */
     dispatch_once(&once, ^{
         names = [[NSArray alloc] initWithObjects:@"Connection", @"Keep-Alive", @"Transfer-Encoding",
             @"TE", @"Trailer", @"Upgrade", @"Proxy-Connection", @"Proxy-Authenticate", nil];
@@ -2141,10 +1627,10 @@ static BOOL isHopByHop(NSString *field)
 }
 
 typedef enum {
-    ModernTLSExchangeReusable,    /* answered in full; the connection can serve another request */
-    ModernTLSExchangeSpent,       /* finished with, one way or another; close it */
-    ModernTLSExchangeUnanswered,  /* not one byte came back; the request can simply be sent again */
-    ModernTLSExchangeMismatched   /* a 304 about a representation this cache does not hold */
+    ModernTLSExchangeReusable,
+    ModernTLSExchangeSpent,
+    ModernTLSExchangeUnanswered,
+    ModernTLSExchangeMismatched
 } ModernTLSExchange;
 
 typedef enum {
@@ -2159,17 +1645,11 @@ typedef enum {
     NSThread *_clientThread;
     z_stream _inflater;
     BOOL _inflating;
-    /* The cache's share of a request's state. _cacheKey being nil is what says
-     * "this request has nothing to do with the cache" — every store below is
-     * gated on it, so one check covers HEAD, Range, and a request that asked not
-     * to be stored. */
     NSString *_cacheKey;
     NSMutableDictionary *_wireHeaders;
     ModernTLSCacheWriter *_writer;
     ModernTLSCacheEntry *_validating;
     NSTimeInterval _requestTime;
-    /* A revalidation this file started for itself, with no client waiting on the
-     * far end of it. See the app-shell policy section. */
     BOOL _background;
     BOOL _transcodingImage;
     NSMutableData *_imageBuffer;
@@ -2180,8 +1660,6 @@ typedef enum {
 + (BOOL)install
 {
     NSString *authorities = [[NSBundle mainBundle] pathForResource:@"cacert" ofType:@"pem"];
-    // A host without a resource bundle (the out-of-process write helper) has no
-    // bundled cacert; fall back to an explicit path so it can still install.
     if (![authorities length] || ![[NSFileManager defaultManager] fileExistsAtPath:authorities]) {
         const char *envCA = getenv("MODERN_TLS_CA");
         NSString *fallback = envCA ? [NSString stringWithUTF8String:envCA]
@@ -2197,9 +1675,6 @@ typedef enum {
     SSL_library_init();
     SSL_load_error_strings();
 
-    /* One context for the process. Reading and parsing 150-odd certificates is
-     * work worth doing once, and the context is also what a resumable session is
-     * attached to, so sharing it is what makes resumption possible at all. */
     gContext = SSL_CTX_new(TLS_client_method());
     if (!gContext)
         return NO;
@@ -2212,8 +1687,6 @@ typedef enum {
         gContext = NULL;
         return NO;
     }
-    /* Sessions are kept in gSessions, by host, so OpenSSL's own store is left out
-     * of it — on a client it would only grow. */
     SSL_CTX_set_session_cache_mode(gContext, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
     SSL_CTX_sess_set_new_cb(gContext, rememberSession);
     gHostSlot = SSL_get_ex_new_index(0, NULL, NULL, NULL, NULL);
@@ -2221,22 +1694,11 @@ typedef enum {
     gIdleConnections = [[NSMutableDictionary alloc] init];
     gSessions = [[NSMutableDictionary alloc] init];
 
-    /* A cache that cannot be opened is a cache that is not used, and that is all
-     * it is: every request still works, each one just costs what it costs. It is
-     * not a reason to refuse to install the protocol, which is what the return
-     * value here means. */
     if (!installCache() && gLog)
         fprintf(stderr, "[cache] no cache directory; running without one\n");
 
     return [NSURLProtocol registerClass:self];
 }
-
-/* --------------------------------------------- the app-shell policy, configured */
-
-/* See the long comment above shellDestinationForRequest() and the constants near
- * it: this is a deliberate departure from RFC 9111 and these four methods are the
- * whole of its surface. Until +setShellCacheFirstEnabled:forHosts: is called with
- * YES and a non-empty list, none of it runs. */
 
 + (void)setShellCacheFirstEnabled:(BOOL)enabled forHosts:(NSArray *)hosts
 {
@@ -2248,8 +1710,6 @@ typedef enum {
     pthread_mutex_lock(&gShellMutex);
     [gShellHosts release];
     gShellHosts = [named copy];
-    /* Naming no hosts is the same as switching it off. There is no sensible
-     * reading of "cache-first, everywhere". */
     gShellCacheFirst = enabled && [named count] > 0;
     pthread_mutex_unlock(&gShellMutex);
     if (gLog)
@@ -2275,19 +1735,6 @@ typedef enum {
     pthread_mutex_unlock(&gShellMutex);
 }
 
-/* Warms the store, so that a packaged application can fetch its shell once at
- * install time and be instant on the first launch rather than the second.
- *
- * The requests go through the same serial background queue as the revalidations,
- * for the same reason: install time is not necessarily a quiet moment, and a
- * dozen simultaneous handshakes on two cores is not a warm-up, it is a stall.
- *
- * A URL already stored and inside the staleness bound is skipped outright — this
- * is idempotent, and calling it on every launch costs a directory lookup per URL
- * and nothing else. The requests carry the last user agent WebKit was seen to
- * send, if this process has seen one; an origin that varies on the user agent and
- * is precached before any page has loaded will store a variant that the first
- * real request then misses, which wastes the fetch but breaks nothing. */
 + (void)precacheURLs:(NSArray *)urls
 {
     if (!gCacheDirectory)
@@ -2333,11 +1780,6 @@ typedef enum {
     }
 }
 
-/* Drives one request to completion with nobody listening, on the calling thread.
- * The whole of the ordinary path runs — the pool, the handshake, the conditional,
- * the 304 merge, the store — and only the delivery is thrown away, which is what
- * makes a background revalidation and a foreground load the same code rather than
- * a second implementation that can drift from it. */
 + (void)runShellRequest:(NSURLRequest *)request
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
@@ -2345,7 +1787,6 @@ typedef enum {
     ModernTLSURLProtocol *protocol = [[self alloc] initWithRequest:request
         cachedResponse:nil client:sink];
     protocol->_background = YES;
-    /* Released in -dealloc like any other; nothing is ever sent to it. */
     protocol->_clientThread = [[NSThread currentThread] retain];
     [protocol performRequest:request];
     [protocol release];
@@ -2380,8 +1821,6 @@ typedef enum {
             [[u host] UTF8String] ?: "?", [[u path] UTF8String] ?: "");
     }
 
-    /* NSURLProtocol's client must be told about the load on the thread that
-     * started it. Answering from the network thread loses callbacks. */
     _clientThread = [[NSThread currentThread] retain];
 
     NSMutableURLRequest *request = [[self request] mutableCopy];
@@ -2397,14 +1836,9 @@ typedef enum {
 
 - (void)dealloc
 {
-    /* Not in -stopLoading: a delivery scheduled from the network thread may still
-     * be on its way to this thread when the load is cancelled. */
     [_clientThread release];
     if (_inflating)
         inflateEnd(&_inflater);
-    /* A load cancelled mid-body leaves a half-written entry, which -abandon
-     * removes. Committing it would store a truncated representation under a key
-     * that reads back as a whole one. */
     [_writer abandon];
     [_writer release];
     [_validating release];
@@ -2419,11 +1853,6 @@ typedef enum {
 {
     if (_cancelled)
         return;
-    /* A background revalidation is not answering anybody: its client drops
-     * everything, and the thread it was started on is inside -performRequest:
-     * rather than running a run loop. Hopping there would queue every chunk of
-     * every body until the load finished, which on this device is the one cost
-     * this whole policy exists to avoid paying. */
     if (_background) {
         [self performSelector:selector withObject:argument];
         return;
@@ -2431,10 +1860,6 @@ typedef enum {
     [self performSelector:selector onThread:_clientThread withObject:argument
         waitUntilDone:NO modes:[NSArray arrayWithObjects:NSRunLoopCommonModes, nil]];
 }
-
-/* The -deliver methods below all run on the client thread, and so does
- * -stopLoading, which is what makes testing _cancelled here — after the hop, not
- * only before it — enough to stop talking to a client that has gone. */
 
 - (void)deliverResponse:(NSHTTPURLResponse *)response
 {
@@ -2536,14 +1961,6 @@ typedef enum {
         with:[NSError errorWithDomain:NSURLErrorDomain code:code userInfo:info]];
 }
 
-/* ------------------------------------------------------------------ the body */
-
-/* Content-Encoding is undone as the body arrives, so the decoded bytes reach
- * WebKit in the same shape and at the same time the encoded ones reach us, and
- * neither form is ever held whole. */
-/* The one place decoded bytes exist. WebKit gets them and, if this response is
- * being kept, so does the file — written as it passes rather than assembled,
- * which is what lets an entry be stored without ever holding one. */
 - (void)emitDecoded:(NSData *)data
 {
     if (![data length])
@@ -2553,9 +1970,6 @@ typedef enum {
         return;
     }
     if (_writer && ![_writer appendBody:data]) {
-        /* Past the per-entry limit, or the write failed. Delivery is unaffected;
-         * only the stored copy is given up, and whole is the only way to give it
-         * up — a body missing its tail is not a shorter body. */
         [_writer abandon];
         [_writer release];
         _writer = nil;
@@ -2592,11 +2006,6 @@ typedef enum {
     return YES;
 }
 
-/* One chunk: read, handed on, and released inside its own pool. Streaming is only
- * worth doing if the body is never held whole, and a pool that lives as long as
- * the request would hold every chunk of it to the end. Answers the number of
- * bytes taken off the connection, kEnded at the end of the data, or kUndecodable
- * when the content coding gave out. */
 static const NSInteger kEnded = -1;
 static const NSInteger kUndecodable = -2;
 
@@ -2614,9 +2023,6 @@ static const NSInteger kUndecodable = -2;
     return taken;
 }
 
-/* Reads exactly as much as the framing says the body is, delivering as it goes,
- * and answers whether the whole of it arrived. deliver:NO is the redirect case:
- * the bytes are only read so that the connection can be kept. */
 - (BOOL)readBodyFrom:(ModernTLSConnection *)connection
              framing:(ModernTLSFraming)framing
               length:(unsigned long long)length
@@ -2648,7 +2054,6 @@ static const NSInteger kUndecodable = -2;
                 return NO;
             if (![connection readLine:line size:sizeof(line)])
                 return NO;
-            /* strtoull stops at the semicolon of a chunk extension by itself. */
             unsigned long long size = strtoull(line, NULL, 16);
             if (!size)
                 break;
@@ -2662,11 +2067,9 @@ static const NSInteger kUndecodable = -2;
                     return NO;
                 size -= taken;
             }
-            /* The CRLF that closes the chunk. */
             if (![connection readLine:line size:sizeof(line)])
                 return NO;
         }
-        /* Trailers, to the empty line that ends the message. */
         for (int field = 0; field < 64; field++) {
             if (![connection readLine:line size:sizeof(line)])
                 return NO;
@@ -2676,8 +2079,6 @@ static const NSInteger kUndecodable = -2;
         return NO;
     }
 
-    /* No length and no chunking: the close is the framing, so the connection is
-     * spent whatever happens. */
     for (;;) {
         if (_cancelled)
             return NO;
@@ -2689,13 +2090,6 @@ static const NSInteger kUndecodable = -2;
     }
 }
 
-/* --------------------------------------------------------------- the exchange */
-
-/* The header fields as they actually go out, built before they are serialised so
- * that something other than the socket can read them. Vary is matched against
- * this rather than against WebKit's request, because what the server saw
- * included the Cookie and the Accept-Encoding this protocol added and WebKit
- * knows nothing about. */
 - (NSMutableDictionary *)wireHeadersFor:(NSURLRequest *)request
 {
     NSURL *url = [request URL];
@@ -2723,8 +2117,6 @@ static const NSInteger kUndecodable = -2;
         [wire setObject:cookieHeader forKey:@"Cookie"];
 
     NSData *body = [self bodyForRequest:request];
-    /* A request with a body says so even when it is empty, or the server waits for
-     * one that never comes. */
     if (body)
         [wire setObject:[NSString stringWithFormat:@"%lu", (unsigned long)[body length]]
             forKey:@"Content-Length"];
@@ -2768,9 +2160,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
 {
     NSMutableString *head = [NSMutableString stringWithFormat:@"%@ %@ HTTP/1.1\r\n",
         [request HTTPMethod] ?: @"GET", target];
-    /* Host first because RFC 9110 §7.2 asks for it; the rest in whatever order the
-     * dictionary offers, which is allowed — order matters only between repeats of
-     * one field name, and there are none here. */
     [head appendFormat:@"Host: %@\r\n", [wire objectForKey:@"Host"]];
     for (NSString *field in wire) {
         if ([field caseInsensitiveCompare:@"Host"] == NSOrderedSame)
@@ -2780,15 +2169,12 @@ static NSData *collectRequestBody(NSURLRequest *request)
     [head appendString:@"\r\n"];
 
     NSMutableData *message = [NSMutableData dataWithData:[head dataUsingEncoding:NSUTF8StringEncoding]];
-    /* One write, so head and body travel in the same segment where they fit. */
     NSData *body = [self bodyForRequest:request];
     if ([body length])
         [message appendData:body];
     return message;
 }
 
-/* WebKit is told what a redirected request should look like; the rules for what
- * survives a redirect are the browser's, not the server's. */
 - (NSMutableURLRequest *)redirectedRequestTo:(NSURL *)target status:(NSInteger)status
 {
     NSMutableURLRequest *next = [[[self request] mutableCopy] autorelease];
@@ -2806,13 +2192,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
     return next;
 }
 
-
-/* ------------------------------------------------------------ from the cache */
-
-/* Hands a stored response to WebKit exactly as the network path would have, and
- * answers whether it could. The bytes come out of a mapping in sixty-four
- * kilobyte pieces rather than in one, so a large entry is never resident whole
- * on the way past and the client thread can release each piece as it takes it. */
 - (BOOL)deliverEntry:(ModernTLSCacheEntry *)entry
 {
     NSURL *url = [[self request] URL];
@@ -2831,9 +2210,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
         return YES;
     }
 
-    /* Least-recently-used, kept current with one syscall against a file that is
-     * not otherwise touched. Doing this before the delivery rather than after
-     * means an entry counts as used even if the load is cancelled mid-body. */
     utimes([entry->path fileSystemRepresentation], NULL);
 
     [self onClientThread:@selector(deliverResponse:) with:response];
@@ -2851,40 +2227,22 @@ static NSData *collectRequestBody(NSURLRequest *request)
     return YES;
 }
 
-/* Decides what the cache has to say about this request, before anything is
- * dialled. Answers YES when the request has been answered in full from disk —
- * which is the whole point of the file: no socket, no handshake, no round trip.
- * Otherwise it may still have arranged for the request that follows to be a
- * conditional one, and left _validating holding the entry that conditional is
- * about. */
 - (BOOL)answerFromCache:(NSURLRequest *)request wire:(NSMutableDictionary *)wire
 {
     if (!gCacheDirectory)
         return NO;
-    /* Only GET is stored, so only GET can be answered, and leaving _cacheKey nil
-     * is also what keeps the store path below from ever seeing a HEAD — whose
-     * Content-Length describes a body it does not carry. */
     if ([([request HTTPMethod] ?: @"GET") caseInsensitiveCompare:@"GET"] != NSOrderedSame)
         return NO;
-    /* A request WebKit has already made conditional is WebKit revalidating its own
-     * memory cache against the origin. Answering that from here, or adding a
-     * second validator to it, would be answering a question nobody asked. A Range
-     * request is not answerable from an entry that holds whole representations. */
     if (headerValue(wire, @"If-None-Match") || headerValue(wire, @"If-Modified-Since")
         || headerValue(wire, @"Range"))
         return NO;
 
     NSDictionary *requestDirectives = parseCacheControl(headerValue(wire, @"Cache-Control"));
-    /* §5.2.1.5: no-store forbids keeping any part of this request or of its
-     * answer, so this one never touches the file in either direction. */
     if ([requestDirectives objectForKey:@"no-store"])
         return NO;
 
     _cacheKey = [cacheKeyForRequest(request) copy];
 
-    /* WebKit's own cache policy, which it sets on the request and which this is
-     * the only code left to honour. A reload still stores what it fetches — it is
-     * the reading that was refused, not the writing. */
     NSURLRequestCachePolicy policy = [request cachePolicy];
     if (policy == NSURLRequestReloadIgnoringLocalCacheData
         || policy == NSURLRequestReloadIgnoringLocalAndRemoteCacheData)
@@ -2892,17 +2250,9 @@ static NSData *collectRequestBody(NSURLRequest *request)
 
     NSString *path = cachePathForKey(_cacheKey);
     ModernTLSCacheEntry *entry = path ? readCacheEntry(path, _cacheKey) : nil;
-    /* Stored, but against a request that differed where the origin said it
-     * mattered. One variant is kept per key, so this is a miss and the entry that
-     * is here stays here — it is somebody else's answer, not a bad one. */
     if (entry && !selectingHeadersMatch(entry->selecting, wire))
         entry = nil;
 
-    /* The two policies where WebKit is asking for the stored copy at whatever age
-     * it has — a back or forward navigation, where the point is to show the page
-     * that was there. Freshness is the origin's word on when this code may skip
-     * the network of its own accord; here it is the client choosing, which it
-     * may. */
     if (policy == NSURLRequestReturnCacheDataElseLoad
         || policy == NSURLRequestReturnCacheDataDontLoad) {
         if (entry) {
@@ -2911,14 +2261,9 @@ static NSData *collectRequestBody(NSURLRequest *request)
                     fprintf(stderr, "[cache] served on request %s\n", [_cacheKey UTF8String]);
                 return YES;
             }
-            /* Matched and still unusable means the file is not what it claims. */
             removeCacheEntry(_cacheKey);
         }
         if (policy == NSURLRequestReturnCacheDataDontLoad) {
-            /* DontLoad means exactly that. Reaching the network here — which is
-             * what falling through would do — answers a question that was not the
-             * one asked, and this policy is the one place where a failure is the
-             * correct answer. */
             [self failWithMessage:@"Not in the cache, and the request forbids loading it"
                 code:NSURLErrorResourceUnavailable];
             return YES;
@@ -2929,9 +2274,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
         return NO;
 
     ModernTLSCacheVerdict verdict = verdictForEntry(entry, requestDirectives);
-    /* §5.2.1.4 by another route: this policy is WebKit saying the stored copy may
-     * be used only if the origin confirms it, which is the same instruction a
-     * no-cache directive gives. */
     if (policy == NSURLRequestReloadRevalidatingCacheData && verdict == ModernTLSCacheFresh)
         verdict = ModernTLSCacheValidate;
 
@@ -2945,16 +2287,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
         return NO;
     }
 
-    /* ---- the app-shell policy. Not RFC 9111; see its own section above. ----
-     *
-     * A stale shell response is handed over now and made current behind the page.
-     * Everything that could mean "the client wants the origin asked" is honoured
-     * before this is reached and none of it is overridden here: a reload and a
-     * revalidating policy have already returned or been forced to Validate above,
-     * and a request carrying no-cache, Pragma: no-cache or max-age=0 — which is
-     * what WebKit sends for a fetch() with cache: 'no-cache' — is left alone. What
-     * this does override is the *origin's* no-cache and its expiry, deliberately,
-     * which is the whole of the deviation. */
     NSTimeInterval requestedAge = 0;
     BOOL clientWantsOrigin = [requestDirectives objectForKey:@"no-cache"] != nil
         || headerContains(wire, @"Pragma", @"no-cache")
@@ -2974,10 +2306,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
     }
 
     if (verdict == ModernTLSCacheValidate) {
-        /* §4.3.1. Both validators go out when both are known: the origin is told
-         * to prefer the entity tag, and the date is there for one that kept only
-         * that. Neither is invented — a stored response with no validator at all
-         * came back ModernTLSCacheUnusable, not ModernTLSCacheValidate. */
         NSString *tag = headerValue(entry->headers, @"ETag");
         NSString *modified = headerValue(entry->headers, @"Last-Modified");
         if ([tag length])
@@ -3031,10 +2359,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
 {
     NSURL *url = [request URL];
     [connection beginExchange];
-    /* The two moments RFC 9111 §4.2.3 needs. Without the first, a response that
-     * spent an hour in someone else's cache before reaching a slow link cannot be
-     * told from one fetched a second ago, and this cache would carry that error
-     * forward every launch. */
     _requestTime = nowSeconds();
     if (![connection writeData:message])
         return ModernTLSExchangeUnanswered;
@@ -3044,13 +2368,8 @@ static NSData *collectRequestBody(NSURLRequest *request)
     int major = 1, minor = 1;
     NSMutableDictionary *headers = nil;
 
-    /* 1xx is an interim answer — a 100 Continue, or the 103 an origin sends ahead
-     * of the real one — and the response WebKit is waiting for is the next one. */
     for (int interim = 0; interim < 8; interim++) {
         if (![connection readLine:line size:sizeof(line)]) {
-            /* Nothing at all came back. On a connection taken from the pool that
-             * means the server had already closed it, which is not an error: the
-             * caller sends the request again on a new one. */
             if (![connection hasRead])
                 return ModernTLSExchangeUnanswered;
             [self failWithMessage:[NSString stringWithFormat:@"No reply from %@", [url host]]
@@ -3084,7 +2403,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
             if (!name || !value)
                 continue;
             NSString *existing = [headers objectForKey:name];
-            /* Several Set-Cookie lines are normal and must not overwrite each other. */
             [headers setObject:existing ? [existing stringByAppendingFormat:@", %@", value] : value
                 forKey:name];
         }
@@ -3103,10 +2421,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
     NSTimeInterval receivedTime = nowSeconds();
 
     BOOL isHead = [[request HTTPMethod] caseInsensitiveCompare:@"HEAD"] == NSOrderedSame;
-    /* These carry no body however they are described: a HEAD is answered with the
-     * headers a GET would have had, including its Content-Length, and 204 and 304
-     * are defined to end at the blank line. Believing Content-Length here is how a
-     * kept connection deadlocks on a body that is never sent. */
     BOOL bodiless = isHead || status == 204 || status == 304 || (status >= 100 && status < 200);
 
     ModernTLSFraming framing = ModernTLSFramingNone;
@@ -3122,8 +2436,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
     } else
         framing = ModernTLSFramingUntilClose;
 
-    /* HTTP/1.1 keeps the connection unless the server says otherwise; HTTP/1.0 is
-     * the other way round, and not worth pooling for the few origins still on it. */
     BOOL keepable = (major == 1 && minor >= 1)
         && !headerContains(headers, @"Connection", @"close")
         && framing != ModernTLSFramingUntilClose;
@@ -3143,9 +2455,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
 
     invalidateCacheForRequest(request, headers, status);
 
-    /* RFC 9111 §4.3.3: a 304 answering the conditional this cache sent means the
-     * stored response is still the right one, and the exchange ends without a
-     * body having crossed the wire at all. */
     if (status == 304 && _validating) {
         NSString *tag = headerValue(headers, @"ETag");
         NSString *stored = headerValue(_validating->headers, @"ETag");
@@ -3154,16 +2463,10 @@ static NSData *collectRequestBody(NSURLRequest *request)
         _validating = nil;
 
         if ([tag length] && [stored length] && ![tag isEqualToString:stored]) {
-            /* The origin validated a representation other than the one it was
-             * asked about. A body its own validator no longer identifies is not a
-             * body to hand anybody, so the entry goes and the request is put
-             * again with nothing conditional about it. */
             removeCacheEntry(_cacheKey);
             return ModernTLSExchangeMismatched;
         }
 
-        /* §4.3.4, and the clock the age calculation runs on is reset to this
-         * exchange: a revalidated response is fresh again, not merely confirmed. */
         mergeStoredHeaders(entry, headers);
         entry->requested = _requestTime;
         entry->received = receivedTime;
@@ -3173,24 +2476,14 @@ static NSData *collectRequestBody(NSURLRequest *request)
         }
         if (gLog)
             fprintf(stderr, "[cache] validated %s\n", [_cacheKey UTF8String]);
-        /* Only now, with WebKit already answered, is the file brought up to date;
-         * it is the one piece of this that nothing is waiting for. */
         rewriteCacheEntry(entry, _cacheKey);
         return keepable ? ModernTLSExchangeReusable : ModernTLSExchangeSpent;
     }
-    /* A 304 nobody here asked for belongs to WebKit's own conditional request and
-     * is passed through untouched; the stored entry, if there is one, has been
-     * told nothing and stays as it was. */
     [_validating release];
     _validating = nil;
 
     BOOL encoded = !bodiless && headerContains(headers, @"Content-Encoding", @"gzip");
 
-    /* WebKit is handed the entity it is actually given. The framing headers
-     * describe this hop and the coding headers describe bytes it never sees, so
-     * neither is passed on — a Content-Length counting gzipped bytes against a
-     * decoded body is a lie WebKit would be right to believe. This is also
-     * exactly what gets stored, so that a replay is the same delivery. */
     NSMutableDictionary *visible = [NSMutableDictionary dictionaryWithCapacity:[headers count]];
     for (NSString *field in headers) {
         if (isHopByHop(field))
@@ -3201,8 +2494,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
         [visible setObject:[headers objectForKey:field] forKey:field];
     }
 
-    /* What will be kept, decided before a byte of the body has been read so that
-     * the body can be written as it streams past instead of assembled first. */
     if (_cacheKey) {
         NSDictionary *directives = parseCacheControl(headerValue(headers, @"Cache-Control"));
         if (responseIsStorable(status, headers, directives)) {
@@ -3220,25 +2511,10 @@ static NSData *collectRequestBody(NSURLRequest *request)
                     [NSNumber numberWithDouble:_requestTime], @"requested",
                     [NSNumber numberWithDouble:receivedTime], @"received", nil]];
         } else if (status >= 200 && status < 400) {
-            /* The origin has answered for this URI with a representation this
-             * cache is not allowed to keep — it has turned on no-store, or begun
-             * varying on everything. What is on disk predates that answer and has
-             * no business outliving it.
-             *
-             * The status test is the whole of the care needed here. An error is
-             * also unstorable, and an error carries no representation: a 503 to a
-             * revalidation says the origin is having a bad minute, not that
-             * yesterday's copy was wrong, and deleting on it would turn one failed
-             * request into a cold cache. Error pages are routinely sent no-store,
-             * so keying this off the directive rather than the status is exactly
-             * the mistake that costs the entry. */
             removeCacheEntry(_cacheKey);
         }
     }
 
-    /* A redirect is reported to WebKit rather than followed here, so that it
-     * keeps its own record of where the document came from. Its body is read only
-     * to leave the connection at a message boundary. */
     NSString *location = headerValue(headers, @"Location");
     if (status >= 300 && status < 400 && [location length]) {
         NSURL *target = [NSURL URLWithString:location relativeToURL:url];
@@ -3246,9 +2522,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
             [self failWithMessage:@"Unusable redirect" code:NSURLErrorBadServerResponse];
             return ModernTLSExchangeSpent;
         }
-        /* A redirect is nothing but its headers, so its entry is complete the
-         * moment they are read. Storing it is what lets a later launch skip a
-         * round trip whose only answer was ever "somewhere else". */
         if (_writer) {
             [_writer commit];
             [_writer release];
@@ -3266,7 +2539,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
 
     if (encoded) {
         memset(&_inflater, 0, sizeof(_inflater));
-        /* 16 + MAX_WBITS accepts a gzip wrapper; nothing else is asked for. */
         if (inflateInit2(&_inflater, 16 + MAX_WBITS) != Z_OK) {
             [self failWithMessage:@"Cannot decode gzip" code:NSURLErrorCannotDecodeContentData];
             return ModernTLSExchangeSpent;
@@ -3329,9 +2601,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
             [self onClientThread:@selector(deliverData:) with:deliverable];
     }
 
-    /* An entry is only worth having if it is the whole representation, and only
-     * the body's own framing can say that it was. A cancelled load is the same
-     * case seen from the other side. */
     if (_writer) {
         if (whole && !_cancelled)
             [_writer commit];
@@ -3366,10 +2635,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
     NSString *key = [NSString stringWithFormat:@"%@:%@", [host lowercaseString], port];
 
     _wireHeaders = [[self wireHeadersFor:request] retain];
-    /* The only line in this file that makes a launch faster rather than a request
-     * cheaper. Everything below it — the pool, the handshake, the round trip — is
-     * what a stored answer skips, and it skips all of it: the return here is
-     * before the first syscall that would touch the network. */
     if ([self answerFromCache:request wire:_wireHeaders])
         return;
 
@@ -3393,13 +2658,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
 
         ModernTLSExchange outcome = [self exchangeOn:connection message:message request:request];
         if (outcome == ModernTLSExchangeMismatched) {
-            /* The revalidation was answered about something this cache does not
-             * hold, and the entry it was about has already been dropped. Asking
-             * again without the conditional is the only way to end up with the
-             * representation the origin actually has. It cannot happen twice:
-             * _validating is nil from here, so there is no conditional left to
-             * mismatch. A fresh connection because a spent one is cheaper to
-             * replace than to reason about. */
             [connection shutdown];
             [connection release];
             connection = nil;
@@ -3414,13 +2672,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
             [connection shutdown];
             [connection release];
             connection = nil;
-            /* The one case that has to be got right for pooling to be safe at all:
-             * a server may close a kept connection at any moment, and it looks
-             * exactly like this — the write succeeded into a socket that was
-             * already gone, or the read ended before a byte of the reply. Nothing
-             * has been handed to the client and nothing has been read, so the
-             * request is sent again on a connection of our own making, where the
-             * same silence really is a failure. */
             if (pooled) {
                 if (gLog)
                     fprintf(stderr, "[tls] %s was closed; retrying on a new connection\n", [key UTF8String]);
@@ -3432,8 +2683,6 @@ static NSData *collectRequestBody(NSURLRequest *request)
             return;
         }
 
-        /* A cancelled load leaves the body half-read, and half a body is not a
-         * message boundary — that connection cannot be given to anyone else. */
         if (outcome == ModernTLSExchangeReusable && !_cancelled)
             returnIdleConnection(connection);
         else

@@ -1,8 +1,3 @@
-// Substrate tweak: when an app the user enabled launches, put our WebKit 2.54
-// under it. dyld honours no DYLD_* substitution for an already-running image, so
-// the tweak sets the variables and re-execs; the second launch loads our engine
-// first. Which apps get it is read from the space.kern0x1b.rev InjectedApps map
-// (Safari on by default); SpringBoard is never touched.
 #include <stdlib.h>
 #include <unistd.h>
 #include <mach-o/dyld.h>

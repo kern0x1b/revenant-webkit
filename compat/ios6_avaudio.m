@@ -1,8 +1,3 @@
-/*
- * -[AVAudioSession maximumOutputNumberOfChannels] is iOS 9; WebKit reads it when
- * a page asks what audio the device can play. The channel count this system can
- * report is the one it is currently using.
- */
 #import <AVFoundation/AVFoundation.h>
 
 @interface AVAudioSession (WebKitIOS6ChannelCounts)

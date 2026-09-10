@@ -1,9 +1,3 @@
-/* Shared between app/rev-webview-host.m (the WAKWindow/WebView hosting
- * implementation) and app/rev-browser-chrome.m (the Safari-look-alike chrome
- * built around it), so the chrome can drive the host and hear back from it
- * without either file needing the other's full interface. Left unused (and
- * harmless) by the standalone rev-webview-host.m test harness build. */
-
 #import <UIKit/UIKit.h>
 @class WebView;
 
@@ -21,12 +15,7 @@
 @protocol RevWebViewHostControlling <NSObject>
 - (void)setHostDelegate:(id<RevWebViewHostDelegate>)delegate;
 - (id<RevWebViewHostDelegate>)hostDelegate;
-/* Must be called before the view loads (i.e. right after -init) - see the
- * standalone harness's own -loadView for the default it replaces. */
 - (void)setEmbeddedContentFrame:(CGRect)frame;
-/* The URL the host loads on its own in -viewDidLoad. Set before the view
- * loads (right after -init) to hand the page in as a parameter, instead of
- * the standalone harness's /tmp/rev-url.txt default. */
 - (void)setStartURLString:(NSString *)urlString;
 - (void)loadURLString:(NSString *)urlString;
 - (void)goBack;

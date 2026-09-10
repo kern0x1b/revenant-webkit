@@ -1,5 +1,3 @@
-/* See WebKitUIKitDelegate.m. */
-
 #import <Foundation/Foundation.h>
 #import <WebKitLegacy/WebFrame.h>
 #import <WebKitLegacy/WebView.h>

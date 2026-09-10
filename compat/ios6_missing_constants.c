@@ -1,8 +1,3 @@
-/*
- * Constants WebKit imports that this system does not define. Where the value the
- * system would have used is known, it is used; the rest become distinctly named
- * CFStrings, so dictionary lookups miss rather than crash.
- */
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CGBase.h>
 
@@ -86,12 +81,6 @@ const CFStringRef kCTUIFontTextStyleTitle2 = CFSTR("kCTUIFontTextStyleTitle2");
 const CFStringRef kCTUIFontTextStyleTitle3 = CFSTR("kCTUIFontTextStyleTitle3");
 const CFStringRef kCTUIFontTextStyleTitle4 = CFSTR("kCTUIFontTextStyleTitle4");
 
-/*
- * These are data, not functions. Declaring them as function stubs links, and
- * then the address of the stub is used as if it were a string or a struct —
- * which is how NSProcessInfoPowerStateDidChangeNotification reached
- * CFXNotificationRegisterObserver as a garbage name and crashed it.
- */
 const CFStringRef _kCFURLCachePartitionKey = CFSTR("kCFURLCachePartitionKey");
 
 extern const void *const NSHTTPCookieSameSiteLax;
@@ -110,14 +99,8 @@ const void *const NSURLAuthenticationMethodOAuth = CFSTR("NSURLAuthenticationMet
 
 const float NSURLSessionTaskPriorityDefault = 0.5f;
 
-/* Page size is fixed on every device this build can run on. */
 const unsigned long vm_kernel_page_size = 4096;
 
-/* The weight and width ladder CoreText matches a system font against. These are
-   numbers, not names: CoreTextSPI.h declares them as CGFloat, and defining them as
-   CFStrings here meant every one of them was a pointer read as a float - a denormal
-   near zero - so every -apple-system request resolved at Regular whatever its
-   font-weight said. The values are CoreText's own. */
 const CGFloat kCTFontWeightUltraLight = -0.80f;
 const CGFloat kCTFontWeightThin = -0.60f;
 const CGFloat kCTFontWeightLight = -0.40f;

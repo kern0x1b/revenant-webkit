@@ -7,10 +7,6 @@ static NSString *const kRevDomain = @"space.kern0x1b.rev";
 
 @implementation RevAppsListController
 
-// Installed user apps + Safari, as {id,name}, sorted by name. Safari is always
-// first and defaults on; it is the app the engine actually re-execs today. On
-// iOS 6 user apps live under /var/mobile/Applications/<uuid>/<name>.app; each
-// app's Info.plist gives the bundle id and display name.
 static NSArray *revListedApps(void) {
     NSMutableArray *out = [NSMutableArray array];
     [out addObject:@{ @"id": @"com.apple.mobilesafari", @"name": @"Safari", @"default": @YES }];

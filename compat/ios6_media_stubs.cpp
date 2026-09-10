@@ -1,13 +1,3 @@
-/*
- * The AVFoundation media engine is not built for this port: it needs
- * AVContentKeySpecifier, tagged buffer groups and IOSurface, none of which
- * exist on iOS 6. WebCore still references its entry points, so each one is
- * aliased to a single no-op.
- *
- * The call that matters at startup is registerMediaEngine; doing nothing there
- * is exactly right, because there is no engine to register.
- */
-
 #include <stdio.h>
 
 extern "C" long webkitIOS6MediaEngineUnavailable()

@@ -88,5 +88,5 @@ that writes the `space.kern0x1b.rev` preferences domain the engine reads
   TLS library and the Settings bundle; `make -C packaging package FINALPACKAGE=1`
   produces the installable `.deb`, engine frameworks included.
 - Deploy: `make -C packaging package install`, `scripts/deploy-engine.sh`, `tools/device.sh`.
-- Documentation: `docs/` (`architecture.md`, `building.md`, `ios6-gaps.md`, `memory-and-caches.md`).
+- Documentation: `docs/` (`architecture.md`, `network.md`, `compatibility.md`, `building.md`, `memory-and-caches.md`).
 - Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.

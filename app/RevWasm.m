@@ -2,27 +2,16 @@
 #include "wasm3.h"
 #include "m3_env.h"
 
-// RevWasm only needs three WK1 methods; declaring them as an informal protocol on
-// NSObject (used via id) avoids importing/shadowing the real WebView/WebScriptObject
-// classes, which Safari's WebKit provides at runtime under the flat namespace.
 @interface NSObject (RevWasmWebKit)
 - (id)windowScriptObject;
 - (NSString *)stringByEvaluatingJavaScriptFromString:(NSString *)script;
 - (id)callWebScriptMethod:(NSString *)name withArguments:(NSArray *)args;
 @end
 
-// Phase 1: window.WebAssembly over wasm3 - instantiate/compile/validate a module
-// with no imports, then call its exported functions with numeric args. Memory and
-// JS imports come next. The JS side (kRevWasmBootstrap) shapes these primitives
-// into the standard API; instance.exports is a Proxy so no export enumeration is
-// needed - names are resolved lazily on first call.
-
 @class RevWasmHost;
 
-// One imported function: how to read its args off the wasm stack and how to reach
-// the JS function that backs it. Handed to the generic trampoline as m3 userdata.
 typedef struct {
-    RevWasmHost *host;   // unretained; outlived by the instance
+    RevWasmHost *host;
     int instanceId;
     int ordinal;         // position among this module's function imports
     char argTypes[16];   // 'i' 'I' 'f' 'F'
@@ -30,8 +19,6 @@ typedef struct {
     char retType;        // 'i' 'I' 'f' 'F' 'v'
 } RevWasmImport;
 
-// wasm3 references the module bytes it was parsed from rather than copying them,
-// so the bytes must outlive the runtime. This owns both, plus the import contexts.
 @interface RevWasmInstance : NSObject {
 @public
     IM3Runtime rt;
@@ -50,7 +37,6 @@ typedef struct {
 }
 @end
 
-// ---- minimal wasm binary reader: just the type + import sections -------------
 static uint32_t readLEB(const uint8_t **p, const uint8_t *end) {
     uint32_t r = 0; int s = 0; uint8_t b;
     do { if (*p >= end) return r; b = *(*p)++; r |= (uint32_t)(b & 0x7f) << s; s += 7; } while (b & 0x80);
@@ -66,23 +52,15 @@ static char wasmTypeChar(uint8_t t) {
 @interface RevWasmHost : NSObject {
 @public
     IM3Environment _env;
-    NSMutableDictionary *_instances;  // id(NSString) -> RevWasmInstance
+    NSMutableDictionary *_instances;
     int _nextId;
-    WebView *_webView;                // unretained; to call the JS import dispatcher
+    WebView *_webView;
 }
 - (NSString *)op:(NSString *)json;
 @end
 
-// Generic trampoline: wasm calls an import -> read its args off the wasm stack,
-// hand them to window.__revwasm_dispatch(instance, ordinal, args) synchronously
-// (we are already on the web thread inside the JS->native call), write the numeric
-// result back. Re-entering JS from a native call the JS itself triggered is the
-// normal host-callback pattern; JSC allows it on the same thread.
 static const void *revWasmTrampoline(IM3Runtime rt, IM3ImportContext ctx, uint64_t *sp, void *mem) {
     RevWasmImport *imp = (RevWasmImport *)ctx->userdata;
-    // wasm3 raw-function ABI: sp[0..numRets) are the return slots; the arguments
-    // follow. A function returning one value reads its args from sp[1] onward and
-    // writes its result to sp[0].
     int argBase = (imp->retType != 'v') ? 1 : 0;
     NSMutableArray *args = [NSMutableArray arrayWithCapacity:imp->argc];
     for (int i = 0; i < imp->argc; i++) {
@@ -94,8 +72,6 @@ static const void *revWasmTrampoline(IM3Runtime rt, IM3ImportContext ctx, uint64
             default:  [args addObject:[NSNumber numberWithInt:(int)(uint32_t)slot]]; break;
         }
     }
-    // Pass the args as a JSON string, not a nested NSArray: the old WebScript
-    // bridge does not turn an NSArray argument into a JS array.
     NSData *aj = [NSJSONSerialization dataWithJSONObject:args options:0 error:NULL];
     NSString *argsJson = [[[NSString alloc] initWithData:aj encoding:NSUTF8StringEncoding] autorelease];
     id win = [(id)imp->host->_webView windowScriptObject];
@@ -111,7 +87,7 @@ static const void *revWasmTrampoline(IM3Runtime rt, IM3ImportContext ctx, uint64
             default:  *(uint64_t *)&sp[0] = (uint32_t)(int64_t)rv; break;
         }
     }
-    return NULL;  // m3Err_none
+    return NULL;
 }
 
 static NSData *b64decode(NSString *s) {
@@ -157,17 +133,14 @@ static NSString *jsonOut(NSDictionary *d) {
     RevWasmInstance *inst = [[RevWasmInstance alloc] init];
     inst->rt = rt;
     inst->mod = mod;
-    inst->bytes = [bytes retain];   // wasm3 keeps a pointer into these
+    inst->bytes = [bytes retain];
     int iidInt = _nextId++;
     NSString *iid = [NSString stringWithFormat:@"%d", iidInt];
 
-    // Parse the type + import sections to find function imports, then link a
-    // trampoline for each so the wasm can call back into JS.
     NSMutableArray *importList = [NSMutableArray array];
     const uint8_t *base = [bytes bytes], *p = base, *end = base + [bytes length];
     if ([bytes length] > 8) {
-        p += 8;  // magic + version
-        // temp type table
+        p += 8;
         typedef struct { char ret; int argc; char args[16]; } TSig;
         TSig *types = NULL; uint32_t numTypes = 0;
         RevWasmImport *imps = NULL; int numImps = 0;
@@ -176,11 +149,11 @@ static NSString *jsonOut(NSDictionary *d) {
             uint32_t slen = readLEB(&p, end);
             const uint8_t *sEnd = p + slen;
             if (sEnd > end) break;
-            if (sid == 1) {                       // type section
+            if (sid == 1) {
                 numTypes = readLEB(&p, end);
                 types = calloc(numTypes ? numTypes : 1, sizeof(TSig));
                 for (uint32_t t = 0; t < numTypes; t++) {
-                    if (p < end && *p == 0x60) p++;   // func form
+                    if (p < end && *p == 0x60) p++;
                     uint32_t np = readLEB(&p, end);
                     types[t].argc = (int)(np < 16 ? np : 16);
                     for (uint32_t a = 0; a < np; a++) { char c = wasmTypeChar(*p++); if (a < 16) types[t].args[a] = c; }
@@ -188,14 +161,14 @@ static NSString *jsonOut(NSDictionary *d) {
                     types[t].ret = nr ? wasmTypeChar(*p) : 'v';
                     for (uint32_t rr = 0; rr < nr; rr++) p++;
                 }
-            } else if (sid == 2) {                // import section
+            } else if (sid == 2) {
                 uint32_t nImp = readLEB(&p, end);
                 imps = calloc(nImp ? nImp : 1, sizeof(RevWasmImport));
                 for (uint32_t im = 0; im < nImp; im++) {
                     uint32_t ml = readLEB(&p, end); const char *mn = (const char *)p; p += ml;
                     uint32_t fl = readLEB(&p, end); const char *fn = (const char *)p; p += fl;
                     uint8_t kind = *p++;
-                    if (kind == 0x00) {           // function import
+                    if (kind == 0x00) {
                         uint32_t ti = readLEB(&p, end);
                         RevWasmImport *ip = &imps[numImps];
                         ip->host = self; ip->instanceId = iidInt; ip->ordinal = numImps;
@@ -246,7 +219,6 @@ static NSString *jsonOut(NSDictionary *d) {
     return jsonOut(@{@"ok": [NSNumber numberWithBool:ok]});
 }
 
-// {cmd:call, instance:id, fn:name, args:[numbers]} -> {ok, result:number|null}
 - (NSString *)call:(NSDictionary *)req {
     RevWasmInstance *inst = [_instances objectForKey:[req objectForKey:@"instance"]];
     if (!inst) return jsonOut(@{@"ok": @NO, @"err": @"bad instance"});
@@ -258,7 +230,6 @@ static NSString *jsonOut(NSDictionary *d) {
 
     NSArray *args = [req objectForKey:@"args"] ?: @[];
     uint32_t argc = m3_GetArgCount(f);
-    // Storage that outlives the call: one 8-byte slot per arg, pointers passed in.
     uint64_t slots[16]; const void *ptrs[16];
     if (argc > 16) return jsonOut(@{@"ok": @NO, @"err": @"too many args"});
     for (uint32_t i = 0; i < argc; i++) {
@@ -344,16 +315,12 @@ static NSString *jsonOut(NSDictionary *d) {
     }
 }
 
-// WebScripting: expose only -op: to JS, as __revwasm.op(json).
 + (BOOL)isSelectorExcludedFromWebScript:(SEL)sel { return sel != @selector(op:); }
 + (NSString *)webScriptNameForSelector:(SEL)sel { return sel == @selector(op:) ? @"op" : nil; }
 + (BOOL)isKeyExcludedFromWebScript:(const char *)name { return YES; }
 
 @end
 
-// Standard-shaped API on top of __revwasm.op(). instance.exports is a Proxy that
-// resolves export names lazily. Bytes cross as base64 since the WebScript bridge
-// does not hand ArrayBuffers to ObjC directly.
 static NSString *const kRevWasmBootstrap =
 @"(function(){ if (window.WebAssembly) return; var H=window.__revwasm; if(!H) return;"
 @"function b64(buf){var u=buf instanceof Uint8Array?buf:new Uint8Array(buf.buffer||buf);"
@@ -405,7 +372,7 @@ static NSString *const kRevWasmBootstrap =
 
 + (void)installInWebView:(WebView *)webView forFrame:(WebFrame *)frame {
     RevWasmHost *host = [[RevWasmHost alloc] init];
-    host->_webView = webView;   // unretained; used to reach the JS import dispatcher
+    host->_webView = webView;
     [[(id)webView windowScriptObject] setValue:host forKey:@"__revwasm"];
     [host release];
     [(id)webView stringByEvaluatingJavaScriptFromString:kRevWasmBootstrap];

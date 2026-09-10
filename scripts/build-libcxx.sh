@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-SDK=${IOS_SDK:-$HOME/sdks/iPhoneOS13.7.sdk}
+SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
 XC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain
 SRC=$ROOT/third_party/llvm-project
 

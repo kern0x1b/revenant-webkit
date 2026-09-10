@@ -1,5 +1,3 @@
-/* Not in this SDK. WebKit reads these counters through a soft-linked object that
- * never exists on iOS 6, so the declarations only have to typecheck. */
 #pragma once
 #import <Foundation/Foundation.h>
 @interface AVVideoPerformanceMetrics : NSObject

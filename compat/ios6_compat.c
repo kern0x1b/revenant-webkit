@@ -1,8 +1,3 @@
-/*
- * Symbols WebKit expects from libSystem that iOS 6 does not have. Defining them
- * here means the static linker resolves the references locally instead of
- * recording an import that dyld cannot satisfy on the device.
- */
 #include <time.h>
 #include <sys/time.h>
 #include <mach/mach_time.h>
@@ -29,7 +24,7 @@ int clock_gettime(clockid_t clockID, struct timespec *ts)
         return -1;
     }
     switch ((int)clockID) {
-    case 0: { /* CLOCK_REALTIME */
+    case 0: {
         struct timeval tv;
         if (gettimeofday(&tv, 0))
             return -1;
@@ -37,7 +32,7 @@ int clock_gettime(clockid_t clockID, struct timespec *ts)
         ts->tv_nsec = tv.tv_usec * 1000;
         return 0;
     }
-    default: { /* every monotonic / uptime flavour */
+    default: {
         uint64_t nanos = (uint64_t)(mach_absolute_time() * machToNanos());
         ts->tv_sec = (time_t)(nanos / 1000000000ULL);
         ts->tv_nsec = (long)(nanos % 1000000000ULL);
@@ -54,24 +49,17 @@ uint64_t clock_gettime_nsec_np(clockid_t clockID)
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
-/* ---- CommonCrypto: CCRandomGenerateBytes is iOS 8 ---- */
 #include <stdlib.h>
 int CCRandomGenerateBytes(void *bytes, size_t count)
 {
     arc4random_buf(bytes, count);
-    return 0; /* kCCSuccess */
+    return 0;
 }
 
-/* ---- mach clocks added after iOS 6 ---- */
 uint64_t mach_approximate_time(void) { return mach_absolute_time(); }
 uint64_t mach_continuous_time(void) { return mach_absolute_time(); }
 uint64_t mach_continuous_approximate_time(void) { return mach_absolute_time(); }
 
-/* ---- the POSIX 2008 *at family arrived in iOS 8 ----
- * Resolve the directory descriptor back to a path with F_GETPATH and fall
- * through to the plain call. Not atomic the way the real ones are, but these
- * callers only ever walk directories they already hold open.
- */
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
@@ -138,7 +126,6 @@ DIR *fdopendir(int fd)
     return d;
 }
 
-/* ---- mkostemp is iOS 10; the flags callers pass are O_CLOEXEC at most ---- */
 int mkostemp(char *templateName, int flags)
 {
     int fd = mkstemp(templateName);
@@ -147,7 +134,6 @@ int mkostemp(char *templateName, int flags)
     return fd;
 }
 
-/* ---- dyld helpers added after iOS 6 ---- */
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 int _dyld_get_image_uuid(const struct mach_header *header, uuid_t uuid)
@@ -165,7 +151,6 @@ const struct mach_header *dyld_image_header_containing_address(const void *addre
     return 0;
 }
 
-/* ---- introduced long after iOS 6 ---- */
 #include <stdbool.h>
 const struct mach_header *_dyld_get_dlopen_image_header(void *handle)
 {
@@ -173,23 +158,12 @@ const struct mach_header *_dyld_get_dlopen_image_header(void *handle)
     return 0;
 }
 
-/* Gates Apple-internal debugging behaviour; a shipping device answers no. */
 bool os_variant_allows_internal_security_policies(const char *subsystem)
 {
     (void)subsystem;
     return false;
 }
 
-/* ---- SecTrustGetTrustResult (iOS 7) and SecTrustEvaluateWithError (iOS 12),
- * in terms of SecTrustEvaluate, present since iOS 2. Both are declared with
- * real prototypes in newer SDKs, which is why they were stubs in
- * ios6_missing.c instead of failing to link - and both are load-bearing:
- * they are the step app/tls-openssl.c's own file comment describes as "the
- * system evaluates it against its own trust store exactly as before", the
- * actual accept/reject decision for every WebSocket connection and for
- * ResourceResponseCocoa.mm's certificate metadata. Stubbed, that step never
- * ran.
- */
 #include <Security/Security.h>
 OSStatus SecTrustGetTrustResult(SecTrustRef trust, SecTrustResultType *result)
 {
@@ -210,7 +184,6 @@ bool SecTrustEvaluateWithError(SecTrustRef trust, CFErrorRef *error)
     return result == kSecTrustResultProceed || result == kSecTrustResultUnspecified;
 }
 
-/* ---- SecTrustCopyCertificateChain is iOS 14 ---- */
 #include <Security/Security.h>
 CFArrayRef SecTrustCopyCertificateChain(SecTrustRef trust)
 {
@@ -226,11 +199,6 @@ CFArrayRef SecTrustCopyCertificateChain(SecTrustRef trust)
     return chain;
 }
 
-/* ---- mach exception server stubs ----
- * The mig-generated server code always references all three handlers even
- * though only one can be reached. WebKit says the same in its own copy: they
- * exist so the generated file links.
- */
 #include <mach/mach.h>
 #include <mach/exception_types.h>
 
@@ -277,36 +245,6 @@ kern_return_t catch_mach_exception_raise_state_identity_protected(mach_port_t ex
     return KERN_FAILURE;
 }
 
-/* ---- _CFHostIsDomainTopLevel is PublicSuffixStoreCocoa.mm's only source of
- * public-suffix (eTLD/eTLD+1) data on any Cocoa port - its own in-memory cache
- * (enablePublicSuffixCache/addPublicSuffix) is never populated on this port
- * either, so this is genuinely the only thing standing behind:
- *   - SecurityOrigin.cpp's document.domain relaxation checks (must not let a
- *     page claim ownership of a whole public suffix)
- *   - ContentSecurityPolicySourceList.cpp's rejection of CSP wildcard sources
- *     that would cover an entire public suffix (e.g. "*.co.uk")
- *   - RegistrableDomain.h's eTLD+1 computation, which cookie/storage
- *     partitioning is keyed on
- * declared in WebCore/PAL/pal/spi/cf/CFNetworkSPI.h as:
- *   Boolean _CFHostIsDomainTopLevel(CFStringRef domain);
- * "domain" here is a candidate suffix being tested in isolation (e.g. "uk",
- * "co.uk", "com", "github.io"), not a full hostname - PublicSuffixStore walks
- * a host label by label and asks this question about each shrinking suffix.
- *
- * This now answers from the real Mozilla Public Suffix List, via libpsl
- * (third_party/libpsl-armv7, scripts/build-libpsl.sh) - the same data source
- * WebKit's own soup/libpsl backend uses (platform/soup/PublicSuffixStoreSoup.cpp).
- * A previous version of this function was a hand-curated table of ~90 common
- * suffixes, an honestly-documented heuristic standing in for the several
- * thousand rules in the real list; that gap is gone now that the actual list
- * is linked in. libpsl is built with --enable-builtin (the PSL data compiled
- * into libpsl.a, not read from a file the device would have to carry and
- * update) and --disable-runtime (no libidn2/libunistring cross-compiled for
- * armv7; psl_is_public_suffix() does not need them - only IDNA punycode
- * normalization of non-ASCII input would, and _CFHostIsDomainTopLevel is
- * only ever called with the ASCII labels PublicSuffixStoreCocoa.mm already
- * split a hostname into).
- */
 #include <CoreFoundation/CoreFoundation.h>
 #include <libpsl.h>
 #include <string.h>

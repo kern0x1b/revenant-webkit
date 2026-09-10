@@ -1,8 +1,3 @@
-/*
- * Classes WebKit references that iOS 6 does not have. dyld binds these at load
- * time, so they must be real classes rather than something registered later.
- * They carry no behaviour; reaching one means a code path needs guarding.
- */
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
 #include <dlfcn.h>
@@ -23,13 +18,6 @@
 + (instancetype)blockQuoteIntentWithIdentity:(NSInteger)identity nestedInsideIntent:(NSPresentationIntent *)parent;
 @end
 
-/* Only referrerURL is set anywhere in this port's compiled code
- * (WebFrameLoaderClient.mm, the sole caller of LSAppLink openWithURL:
- * configuration: - WebKit's UIProcess/webpushd callers of the real
- * sensitive/allowURLOverrides/frontBoardOptions properties are WebKit2 code
- * this legacy-engine port does not build). LSAppLink's own +openWithURL:
- * configuration:completionHandler: below ignores the configuration object
- * entirely, so this is purely a data holder to stop the setter crash. */
 @interface _LSOpenConfiguration : NSObject
 @property (nonatomic, retain) NSURL *referrerURL;
 @end
@@ -45,17 +33,6 @@
     return [super alloc];
 }
 
-/* The unitsStyle/allowedUnits/formattingContext/maximumUnitCount properties
- * work - they're auto-synthesized from Foundation.h's real @interface, which
- * this file has no @interface of its own to override. This method is not a
- * property, so nothing synthesizes it: WebKit's media accessibility duration
- * text (RenderThemeCocoa.mm) sets those properties and then calls this, gets
- * an unrecognized-selector exception, and that killed the process on real
- * playback/scroll - "WebKit discarding exception" only catches what the
- * BEGIN_BLOCK_OBJC_EXCEPTIONS wrapper is still inside when it throws, not
- * whatever runs after. Largest-unit-first, up to maximumUnitCount units,
- * matching the "full" style's word form since that's the only style this
- * engine's one caller asks for. */
 - (NSString *)stringFromTimeInterval:(NSTimeInterval)interval
 {
     if (!(interval >= 0))
@@ -117,14 +94,6 @@
     return [super alloc];
 }
 
-/* WebFrameLoaderClient.mm calls this class method directly - no +alloc
- * involved, so the log-once above never fires for it - whenever WebKit
- * treats a navigation as an app-link candidate (an outbound link that
- * looks like it could open a native app instead). No app-link resolver
- * actually exists on this system to ask, so the honest answer is always
- * "no", which is exactly what makes the caller fall through to opening the
- * link in this browser itself - not a crash from an unimplemented class
- * method. */
 + (void)openWithURL:(NSURL *)url configuration:(id)configuration completionHandler:(void (^)(BOOL success, NSError *error))completionHandler
 {
     static BOOL said_LSAppLink_open; if (!said_LSAppLink_open) { said_LSAppLink_open = YES; fprintf(stderr, "[ios6] class unavailable: LSAppLink openWithURL:\n"); }
@@ -157,14 +126,6 @@
     return [super alloc];
 }
 
-/* NodeHTMLConverter.mm's <blockquote> pasteboard/copy conversion is the only
- * caller anywhere in this port's compiled code (WebKit/Shared/Cocoa's
- * CoreIPCPresentationIntent, which needs the other kinds -
- * paragraph/header/list/table/... - is WebKit2 IPC code this legacy-engine
- * port does not build). Only this one factory method and the parentIntent
- * getter it reads back are implemented; the other real factory methods
- * (paragraphIntentWithIdentity:..., headerIntentWithIdentity:level:..., etc.)
- * are not, on purpose - nothing here calls them. */
 + (instancetype)blockQuoteIntentWithIdentity:(NSInteger)identity nestedInsideIntent:(NSPresentationIntent *)parent
 {
     NSPresentationIntent *intent = [[self alloc] init];
@@ -202,8 +163,6 @@
 
 #pragma clang diagnostic pop
 
-/* Power and thermal state arrived in iOS 9. A device this old has neither, and
- * WebKit only uses them to throttle itself. */
 @interface NSProcessInfo (WebKitIOS6Power)
 @end
 
@@ -212,11 +171,6 @@
 - (NSInteger)thermalState { return 0; /* NSProcessInfoThermalStateNominal */ }
 @end
 
-/*
- * UITraitCollection is iOS 8. WebCore soft-links it and traps when it is
- * missing, so the class has to exist; it only ever stores and returns the
- * current collection, which on a system with no traits is nil.
- */
 @implementation UITraitCollection
 
 static UITraitCollection *webKitIOS6CurrentTraitCollection;
@@ -236,13 +190,6 @@ static UITraitCollection *webKitIOS6CurrentTraitCollection;
 
 @end
 
-/*
- * +[CATransaction addCommitHandler:forPhase:] is iOS 9. WebKit registers two
- * handlers around each rendering update: one before layout and one after the
- * commit. Both callers run from a run-loop observer immediately before the
- * commit, so running the pre-layout block now is the same moment; the
- * post-commit block maps onto the completion block CoreAnimation has always had.
- */
 @interface CATransaction (WebKitIOS6CommitHandlers)
 @end
 
@@ -253,22 +200,6 @@ static UITraitCollection *webKitIOS6CurrentTraitCollection;
     if (!block)
         return;
     if (phase == 2 /* kCATransactionPhasePostCommit */) {
-        // Back to the thread that registered it, never to the main queue.
-        //
-        // The engine registers this from the web thread, at the end of its own
-        // rendering update. Hopping to the main queue put the post-commit work
-        // on the main thread without the web lock its callers assume - and worse,
-        // that work calls schedulePostRenderingUpdate(), which binds a repeating
-        // run loop observer to whatever run loop it finds and never rebinds it.
-        // Bound to the main run loop, in the common modes, its body begins with
-        // WebThreadLock(): the main thread was taking the web lock on every turn
-        // of its own run loop, for the life of the process, including inside a
-        // scroll. That is the freeze - taps ignored, no frames, the web thread
-        // holding the lock in a script handler while the interface queued up
-        // behind it.
-        //
-        // On the web thread the same observer binds to the web run loop, where
-        // WebThreadLock() is a recursive no-op.
         void (^copied)(void) = [block copy];
         void (*runOnWebThread)(void (^)(void)) = (void (*)(void (^)(void)))dlsym(RTLD_DEFAULT, "WebThreadRun");
         if (runOnWebThread) {
@@ -287,10 +218,6 @@ static UITraitCollection *webKitIOS6CurrentTraitCollection;
 
 @end
 
-/*
- * -[CADisplayLink setPreferredFramesPerSecond:] is iOS 10. The same thing is
- * expressed here as a frame interval: how many display refreshes to skip.
- */
 @interface CADisplayLink (WebKitIOS6FrameRate)
 @end
 

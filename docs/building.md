@@ -7,8 +7,11 @@ target. Current clang compiles C++23 for a 2011 phone; only the SDK is old.
 Host requirements: Xcode's toolchain, `cmake`, `ninja`, `ldid` (ad-hoc signing),
 and [Theos](https://theos.dev) for the packages.
 
+Theos keeps its SDKs in `$THEOS/sdks`, which is where every script looks by
+default. Point `IOS_SDK` somewhere else if yours lives elsewhere:
+
 ```sh
-export IOS_SDK="$HOME/sdks/iPhoneOS13.7.sdk"
+export IOS_SDK="$HOME/theos/sdks/iPhoneOS13.7.sdk"
 ```
 
 ## 1. The engine source
@@ -35,7 +38,7 @@ running alone when only it changed:
 | `scripts/build-libwebp.sh` | libwebp | this ImageIO cannot decode WebP |
 | `scripts/build-libxslt.sh` | libxslt | XSLT |
 | `scripts/build-woff2.sh` | woff2 | web fonts in the format the web serves them |
-| `scripts/build-compat.sh` | `libios6compat.a` | the symbols this OS predates — see [../STUB-AUDIT.md](../STUB-AUDIT.md) |
+| `scripts/build-compat.sh` | `libios6compat.a` | the symbols this OS predates — see [compatibility.md](compatibility.md) |
 | `scripts/check-cacert.sh` | nothing — it verifies | the trust store the standalone application carries, against the hash this project reviewed; `--upstream` says whether curl serves the same extract today |
 
 ## 3. The engine
@@ -115,12 +118,19 @@ For everything else, install the package the way any tweak is installed:
 scp packaging/packages/*.deb root@device:/tmp/ && ssh root@device dpkg -i /tmp/*.deb
 ```
 
-## The standalone host, without Safari
+## The engine without Safari
 
-`app/rev-webview-host.m` is a plain UIKit app around one `WebView`: no tabs, no
-chrome, one URL. It links the same engine and the same `ModernTLSURLProtocol`,
-so it answers questions about the engine without Safari, `MobileSubstrate` or a
-respring in the way, and it is where a crash is a crash of one process you own.
+`app/rev-webview-host.m` is a plain UIKit view controller around one `WebView`:
+no tabs, no chrome, one URL. It exists for two reasons.
+
+**As a harness.** It links the engine and `ModernTLSURLProtocol` and nothing
+else, so it answers questions about the engine with no `MobileSubstrate`, no
+respring and no Safari in the way — and a crash is a crash of one process you
+own, with its own log at `/tmp/rev-webview-host.log`. It is also the direct
+`WebView` path rather than the substitution path: `UIWebBrowserView` cannot host
+this engine, because it drives its view through the *system* WebCore's
+`WKWindowSetContentView`, so the window and layer are built here by hand the way
+`UIWebView`'s own implementation would.
 
 ```sh
 scripts/build-app-rev.sh
@@ -128,8 +138,41 @@ scripts/run-app-rev.sh 20
 ```
 
 The runner installs `dist/RevWebViewHost.app`, opens it through its
-`revwebviewhost:` scheme and brings back `/tmp/rev-webview-host.log`. It needs
-the device credentials in `tools/device.env`, as everything under `tools/` does.
+`revwebviewhost:` scheme and brings back the log. It needs the device
+credentials in `tools/device.env`, as everything under `tools/` does.
+
+**As an embedding surface.** Compiled with `-DREV_WEBVIEW_HOST_NO_MAIN` the file
+carries no `main()`, and `RevWebViewHostControlling` in
+`app/RevWebViewHostEmbedding.h` is the whole interface another application
+drives it through — load, back, forward, reload, stop, a content frame, and a
+delegate that reports title, progress, URL, scroll offset and failures. That is
+the consumer the app-shell cache policy in [network.md](network.md) was written
+for: a wrapped site that has to launch like a native application. Nothing in
+this repository embeds it today; it is a capability, kept because the
+substitution path cannot serve an application that is not Safari.
+
+### What hosting the engine by hand requires
+
+Four things this file had to learn, for anyone embedding it:
+
+- **A root-layer handler must exist.** `WebKitUIKitDelegate` calls
+  `-attachRootLayer:` with no `respondsToSelector:` guard, so without it the
+  first promoted layer — `position: fixed` content, by default — kills the
+  process with an unrecognized selector. The host layer is already in document
+  coordinates, which is where `GraphicsLayer` puts the root layer, so parenting
+  it needs no extra geometry.
+- **Touches have to be posted.** WebKitLegacy takes them as `WebEvent`s sent to
+  the `WAKWindow`; there is no automatic path from UIKit, and without it a
+  correctly painted page looks frozen. A drag needs a pan recognizer rather than
+  raw `touchesMoved:` forwarding, which arrives as stuttering fragments.
+- **The keyboard follows WebKit's own focus.** `WebFormDelegate` reports a text
+  field taking and losing focus, which is the native, poll-free signal to raise
+  a hidden `UIKeyInput` view. Only that view may become first responder: making
+  the `WebView` the WAK first responder blurs the focused field and bounces the
+  keyboard straight back down. Resigning is debounced, because a tap moving
+  focus between fields fires end-then-begin.
+- **The host layer has to be resized to the document.** Otherwise a page taller
+  than the initial viewport clips instead of scrolling.
 
 ## Verifying an injected dylib will load
 
@@ -148,6 +191,25 @@ nm -u dist/rev-safari-compat.dylib | c++filt
 
 Never `-undefined dynamic_lookup` a dylib that is eligible for the shared cache,
 and never change a dylib's install name away from where it is deployed.
+
+## Reading a crash
+
+The engine installs a fault handler that prints, for each thread, the program
+counter and the address the access was for. The backtrace below it is a chain of
+*return* addresses, so its innermost frame is the caller of the function that
+faulted, not the fault — symbolising that frame is an afternoon spent on the
+wrong function. `backtrace_symbols_fd` names the nearest exported symbol, which
+in a library this size is usually the wrong one for the same reason.
+
+What makes a frame exact is the load slide, which the handler prints for every
+engine image:
+
+```sh
+atos -o WebCore -l <slide> <address>
+```
+
+The handler runs on a stack of its own, because a stack overflow faults on the
+guard page and would otherwise die without printing anything at all.
 
 ## Checking it took
 

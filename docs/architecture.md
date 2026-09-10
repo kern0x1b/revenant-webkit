@@ -118,7 +118,7 @@ Restoring it was the last step before the first successful load.
 
 ## Related
 
-- [ios6-gaps.md](ios6-gaps.md) — the API this OS does not have, and how each gap is answered
+- [compatibility.md](compatibility.md) — the API this OS does not have, how each gap is answered, and the rule every shim answers to
 - [memory-and-caches.md](memory-and-caches.md) — what 512 MB forces
 - [core-update.md](core-update.md) — moving the port to a newer engine branch
-- [../STUB-AUDIT.md](../STUB-AUDIT.md) — the rule that no compatibility stub may claim success while doing nothing
+- [network.md](network.md) — the TLS and HTTP layers this port brings with it
