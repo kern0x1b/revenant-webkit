@@ -7,7 +7,48 @@ Dates are the day the change was measured on the device, not the day it compiled
 
 ## [Unreleased]
 
+### Fixed
+- **Pages that stopped dead at their first inline script.** developer.mozilla.org
+  rendered a white page: the script reads `localStorage`, which blocks the web
+  thread until the storage import finishes, and the import could not finish
+  because SQLite's one-time initialization hops to the main thread - which, in
+  WebKitLegacy, *is* the web thread. Three threads deadlocked. SQLite is now
+  initialized on the calling thread, as every non-Darwin port already does; the
+  main-thread hop exists for a Network process this port does not have. It looked
+  intermittent because it depends on which thread opens a database first: an
+  origin that already has a storage file on disk loses the race every time.
+- **Every site behind an AWS WAF challenge.** `window.WebAssembly` was installed
+  by swizzling whichever class the runtime happened to list first as answering the
+  window-object-cleared delegate method, so it was present only sometimes. The
+  challenge needs WebAssembly, retries without it, and gives up - amazon.com
+  rendered one sentence about attempts exceeded. The engine now offers a
+  registration point for an embedder that is not the frame load delegate, and the
+  bridge uses it.
+- **A user agent no browser has ever sent.** The browser names itself after the
+  engine it shipped with in 2012, so the string paired `AppleWebKit/605.1.15` with
+  `Version/6.0 Safari/8536.25`. Sites branch on those tokens and were serving this
+  engine the workarounds written for the one it replaced. It now reports
+  `Version/18.7 Mobile/15E148 Safari/604.1`, consistent with the frozen OS version
+  beside it.
+- **Translucent bars that smeared on sites using the modern spelling.** This port
+  drops backdrop filters and makes the element's background opaque instead, but
+  only the prefixed property reached that rule; `backdrop-filter` unprefixed is
+  behind a setting that was off, so a site declaring only the standard spelling
+  got the smearing bar the rule exists to prevent.
+- **A crash handler that printed nothing for stack overflows.** The handler had no
+  stack of its own, so the class of crash that exhausts the stack killed the
+  process silently. It runs on an alternate stack now.
+
 ### Added
+- **A page console that can be turned on from Settings.** RevWebKit gains a
+  Diagnostics switch that routes what a page logs - including its uncaught errors -
+  to `/tmp/rev-safari-stderr.log` with file and line. Reading a site's JavaScript
+  failure used to mean rebuilding the engine with a preference flipped.
+- **A platform report card and a real-site sweep.** `tests/device/web-platform.html`
+  checks the APIs a page written this decade reaches for, and `tests/device/sweep.sh`
+  loads real sites and reports whether each survived, painted, and what it held in
+  memory. Both exist because the WebAssembly failure above was invisible to a suite
+  that only checks numbers it produces itself.
 - **WebP, which was being asked for and could not be read.** The image Accept
   header offered WebP, AVIF, JPEG-XL and HEIC ahead of everything else, and ImageIO
   here decodes none of them - WebP arrived in it with iOS 14, AVIF with iOS 16,

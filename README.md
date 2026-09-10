@@ -85,9 +85,12 @@ needs. Each of those is fixed here.
   home URL, and per-app engine injection. See [The Settings pane](#the-settings-pane).
 
 Correctness is checked by a numeric suite that runs on the device and reads
-pixels and glyph widths rather than screenshots: `tests/device/run.sh`, currently
-**24 of 24**. What it covers, and the one limitation it records, are in
-[tests/device/README.md](tests/device/README.md).
+pixels, glyph widths and the platform surface rather than screenshots:
+`tests/device/run.sh`, currently **51 of 51**. Alongside it,
+`tests/device/sweep.sh` loads real sites and reports whether each one survived,
+painted, and what it cost in memory - the failures that only the actual web
+produces do not show up in a suite that checks its own numbers. Both are described
+in [tests/device/README.md](tests/device/README.md).
 
 ## How it works
 
