@@ -7,15 +7,13 @@ from, and `scripts/port-delta.sh` prints exactly that. Today, against
 `origin/webkitglib/2.54`:
 
 ```
-1389 files changed, 53291 insertions(+), 10124 deletions(-)
+1396 files changed, 52650 insertions(+), 9987 deletions(-)
 
-  Source/WebCore          580 files  +25151  -5207
-  Source/WebKitLegacy     389 files  +5268   -306
-  Source/JavaScriptCore   174 files  +15064  -1177
+  Source/WebCore          585 files  +24105  -5358
+  Source/WebKitLegacy     389 files  +5181   -313
+  Source/JavaScriptCore   169 files  +14478  -1107
   Source/bmalloc           56 files  +5392   -13
-  Source/WTF               55 files  +2075   -237
-
-1247 modified, 82 added, 60 deleted
+  Source/WTF               56 files  +1851   -328
 ```
 
 ## How far behind the snapshot is
@@ -27,12 +25,12 @@ one we already carry is where the snapshot sits. Today:
 
 ```
 branch tip: 2026-09-03  Cherry-pick 305413.1005@safari-7624.5.1.10-branch
-we carry:   2026-09-03  Cherry-pick 305413.982@safari-7624.5.1.10-branch
-behind by:  5 commits
+we carry:   2026-09-03  Cherry-pick 305413.1005@safari-7624.5.1.10-branch
+behind by:  0 commits
 ```
 
 So the engine is not on an old WebKit: it is on the current stable series,
-version 626.1.1, five commits behind that branch's tip. The series is alive -
+version 626.1.1, level with that branch's tip. The series is alive -
 `webkitglib/2.54` last moved on 2026-09-03 and `2.52` on 2026-09-04, both taking
 cherry-picks from Safari's branch, while `2.50` stopped in March.
 
@@ -62,17 +60,17 @@ adapt current WebKit to a 2012 system.
 
 ## Why a re-graft is realistic
 
-Of the 1298 files changed under `Source`, **367 carry the `WEBKIT_IOS6` guard**
-and announce themselves - 1014 occurrences of it in the tree. Those hunks say
+Of the 1309 files changed under `Source`, **375 carry the `WEBKIT_IOS6` guard**
+and announce themselves. Those hunks say
 what they are and where they belong, and they can be replayed onto a newer tree
 by matching the guard rather than by matching context lines.
 
-**931 do not**, and they are where the cost is. By area:
+**934 do not**, and they are where the cost is. By area:
 
 ```
-Source/WebKitLegacy   374
+Source/WebKitLegacy   373
 Source/WebCore        328
-Source/JavaScriptCore 111
+Source/JavaScriptCore 106
 Source/bmalloc         56
 ```
 
@@ -85,9 +83,9 @@ are the real work of an update.
 They cost very different things, and only one of them is a graft.
 
 **Inside the series** — `webkitglib/2.54` taking security and stability picks
-from Safari's branch. Today the port is five commits behind its tip. The port's
-own commits sit on top of a snapshot with no shared ancestry, so there is
-nothing to merge or rebase onto; what carries the picks across is their diff:
+from Safari's branch. The port's own commits sit on top of a snapshot with no
+shared ancestry, so there is nothing to merge or rebase onto; what carries the
+picks across is their diff:
 
 ```sh
 git -C webkit-254 fetch --deepen 200 origin webkitglib/2.54
@@ -97,7 +95,10 @@ git -C webkit-254 apply -3 /tmp/picks.patch          # three-way, so conflicts s
 ```
 
 Conflicts land only where a pick touches a file this port also changed, which
-`scripts/port-delta.sh` lists. Build, then `tests/device/run.sh`.
+`scripts/port-delta.sh` lists. Build, then `tests/device/run.sh`. Done this way
+on 2026-09-10, taking the branch's five newest picks: none of them touched a
+port-changed file, the engine rebuilt whole because one of them changed a
+WebCore base class, and the suite stayed at 55 of 55.
 
 **Changing series** — 2.54 to 2.56 or later. That is the graft below, and it is
 the one that also has to carry the ARMv7 JIT forward.

@@ -8,6 +8,15 @@ Dates are the day the change was measured on the device, not the day it compiled
 ## [Unreleased]
 
 ### Fixed
+- **The engine took its branch's five newest security picks**, bringing the
+  snapshot to `305413.1005@safari-7624.5.1.10-branch`. Two are use-after-free
+  fixes on paths this port actually runs: `ShareDataReader` held a raw `this`
+  in the blob loader's completion handler, so a share whose document went away
+  finished into freed memory, and `Attr::setValue` passed an unprotected
+  `contextDocument()` into the trusted-types check, which an iframe removed
+  during the call could free. The other three are B3, ANGLE's Metal shader
+  translator and WebKit2's back-forward list, none of which reach the device.
+  None of the five touched a file this port has changed.
 - **Pages that stopped dead at their first inline script.** A documentation site
   rendered a white page: the script reads `localStorage`, which blocks the web
   thread until the storage import finishes, and the import could not finish
