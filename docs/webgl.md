@@ -170,10 +170,17 @@ Two that are still open:
 
 - **NPOT cube maps with a `LINEAR` filter do not draw.** Two checks in
   `texture-npot`. NPOT 2D textures are fine.
-- **Culling culls everything once `cullFace` or `frontFace` is set explicitly.**
-  Four checks in `rendering/culling`: with the default state, faces draw and are
-  culled correctly, and every case that sets the state by hand and expects a face
-  to be drawn gets nothing. Drawing with `CULL_FACE` off is unaffected.
+- **`cullFace(FRONT_AND_BACK)` does not cull.** Four checks in
+  `rendering/culling`, all of them that mode; `BACK` and `FRONT` are correct.
+  Where it is not: `tools/gles-cull-probe.m` runs the same sequence on the device
+  with no ANGLE and no WebKit, into a renderbuffer and into a texture
+  attachment, and the driver culls correctly both times. Beacons in
+  `StateManagerGL::setCullFace` show ANGLE sending `glCullFace(0x408)` and
+  `glEnable(GL_CULL_FACE)` before the draw. So the state is set, the driver
+  honours it when asked directly, and the triangle is still drawn through
+  WebKit. The next measurement is the one that closes it: read `GL_CULL_FACE`
+  and `GL_CULL_FACE_MODE` back from the driver inside the draw call itself, to
+  see who changes them in between.
 
 ## The tools that proved each step
 

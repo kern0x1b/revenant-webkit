@@ -35,7 +35,12 @@ function next(){
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
       if (/^\s*PASS\b/.test(line)) pass++;
-      else if (/^\s*FAIL\b/.test(line)) fails.push(line.replace(/\s+/g, " ").slice(0, 90));
+      else if (/^\s*FAIL\b/.test(line)) {
+        // The detail - what was read against what was expected - is on the line
+        // after the message, because that is how testFailed writes it.
+        var detail = lines[i + 1] && !/^\s*(PASS|FAIL)\b/.test(lines[i + 1]) ? " " + lines[i + 1] : "";
+        fails.push((line + detail).replace(/\s+/g, " ").slice(0, 220));
+      }
     }
     var kinds = {};
     for (var k = 0; k < fails.length; k++) kinds[fails[k]] = (kinds[fails[k]] || 0) + 1;

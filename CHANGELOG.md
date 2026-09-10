@@ -66,7 +66,9 @@ Dates are the day the change was measured on the device, not the day it compiled
   away when sampling and cleared once in the surface itself - which is what the
   CGL backend does. Found by Khronos' conformance suite, which now runs on the
   device through `tests/device/conformance.sh`: 2236 of its checks pass over the
-  areas run so far, and the two failures left are recorded in `docs/webgl.md`.
+  areas run so far, and the two failures left - NPOT cube maps with a `LINEAR`
+  filter, and `cullFace(FRONT_AND_BACK)` not culling - are recorded in
+  `docs/webgl.md` with what has already been ruled out for each.
 - **WebGL that animates, rather than drawing one frame.** A page that redrew in
   `requestAnimationFrame` froze the web thread after its first frame - no timers,
   no callbacks, no crash. `CVOpenGLESTextureCache` requires a flush to let go of
