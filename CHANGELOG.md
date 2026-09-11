@@ -8,7 +8,25 @@ Dates are the day the change was measured on the device, not the day it compiled
 ## [Unreleased]
 
 ### Fixed
-- **The engine took its branch's five newest security picks**, bringing the
+- **A crash at load that had not happened yet.** Taking the engine branch's 97
+  newest commits rolled ANGLE forward, and the new ANGLE calls `crc32_z` - a
+  zlib function from 1.2.9, in 2016. This system ships zlib 1.2.5, so the
+  frameworks would have been refused at load: no crash log, no output, a browser
+  that simply does not start. The compatibility library implements it now,
+  table-driven and self-contained, checked against the standard
+  `crc32("123456789") == 0xcbf43926`. It was caught before deploying by a new
+  gate that records every symbol the frameworks leave undefined and fails when
+  the set grows.
+- **A missing include in the 32-bit DFG.** `DFGSpeculativeJIT32_64.cpp` used
+  `JSSet::offsetOfStorage()` without including `JSSet.h`. The device build never
+  noticed, because it compiles that file inside a unified source that happens to
+  include the header; a standalone 32-bit build does not.
+- **The engine is level with its branch again.** First the five newest picks,
+  then the 97 that a stale mirror had hidden - the fork's copy of
+  `webkitglib/2.54` was that far behind upstream's. Two files conflicted, both
+  in WTF's locks, where upstream replaced hand-rolled spin counters with a
+  `SpinBackoff` helper and this port's measured iOS 6 spin policy now sits beside
+  it under the guard rather than instead of it. The five picks brought the
   snapshot to `305413.1005@safari-7624.5.1.10-branch`. Two are use-after-free
   fixes on paths this port actually runs: `ShareDataReader` held a raw `this`
   in the blob loader's completion handler, so a share whose document went away
