@@ -77,6 +77,20 @@ The manifest is the cheapest tier by an order of magnitude: it reads the tree,
 needs no compiler and no phone, and it is the thing that answers "what did this
 merge quietly take away from us".
 
+### When the symbol gate fires
+
+It is a question, not a verdict. Each new undefined symbol is looked up against
+what iOS 6 has, and there are only two outcomes: either the system has it - the
+engine loads, the suite passes, and the pin is regenerated with
+`scripts/symbol-check.sh --pin` so the new baseline is one the device has
+verified - or it does not, and something has to provide it.
+
+The first time this ran in anger, on 2026-09-11, it was the second case: an
+ANGLE roll had started calling `crc32_z`, which zlib gained in 1.2.9 and this
+system's 1.2.5 does not have. Nothing in a build would have said so. On the
+device it is a refusal at load, with no crash log and no output - the failure
+this port has spent the most time chasing blind.
+
 ## The test pyramid, and what needs the phone
 
 | Tier | Needs | Cost | What it catches |
