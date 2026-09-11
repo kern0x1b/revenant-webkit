@@ -1,0 +1,8 @@
+#include "runtime/IntlDisplayNamesConstructor.cpp"
+#include "runtime/IntlDisplayNamesPrototype.cpp"
+#include "runtime/IntlDurationFormatConstructor.cpp"
+#include "runtime/IntlDurationFormatPrototype.cpp"
+#include "runtime/IntlListFormatConstructor.cpp"
+#include "runtime/IntlListFormatPrototype.cpp"
+#include "runtime/IntlLocale.cpp"
+#include "runtime/IntlLocaleConstructor.cpp"

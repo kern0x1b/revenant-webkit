@@ -1,0 +1,8 @@
+#include "runtime/IntlLocalePrototype.cpp"
+#include "runtime/IntlNumberFormatConstructor.cpp"
+#include "runtime/IntlNumberFormatPrototype.cpp"
+#include "runtime/IntlObject.cpp"
+#include "runtime/IntlPartObject.cpp"
+#include "runtime/IntlPluralRulesConstructor.cpp"
+#include "runtime/IntlPluralRulesPrototype.cpp"
+#include "runtime/IntlRelativeTimeFormat.cpp"

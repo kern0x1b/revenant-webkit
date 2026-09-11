@@ -1,0 +1,8 @@
+#include "b3/B3WasmStructFieldValue.cpp"
+#include "b3/B3WasmStructGetValue.cpp"
+#include "b3/B3WasmStructNewValue.cpp"
+#include "b3/B3WasmStructSetValue.cpp"
+#include "b3/B3Width.cpp"
+#include "b3/air/AirAllocateRegistersAndStackAndGenerateCode.cpp"
+#include "b3/air/AirAllocateRegistersByGraphColoring.cpp"
+#include "b3/air/AirAllocateRegistersByGreedy.cpp"

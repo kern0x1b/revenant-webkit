@@ -1,0 +1,8 @@
+#include "runtime/JSPromiseCombinatorsContext.cpp"
+#include "runtime/JSPromiseCombinatorsGlobalContext.cpp"
+#include "runtime/JSPromiseConstructor.cpp"
+#include "runtime/JSPromisePrototype.cpp"
+#include "runtime/JSPromiseReaction.cpp"
+#include "runtime/JSPropertyNameEnumerator.cpp"
+#include "runtime/JSRawJSONObject.cpp"
+#include "runtime/JSRegExpStringIterator.cpp"

@@ -30,7 +30,8 @@ run_host_tests() {
     "$bin/icu-locales" | tail -2 || failures=$((failures + 1))
 }
 
-IPHONE_UDID=${IPHONE_UDID:-7bbc450898f1db61da9a5aac3e4c5d8119d7d358}
+[ -f "$root/device.env" ] && . "$root/device.env"
+IPHONE_UDID=${IPHONE_UDID:-${DEVICE_UDID:-}}
 SSH_PORT=${SSH_PORT:-2225}
 ssh_opts=(-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa
     -o KexAlgorithms=+diffie-hellman-group1-sha1 -o Ciphers=+aes128-cbc
@@ -41,7 +42,7 @@ ssh_opts=(-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa
 # so unplugging the cable does not turn the device tests into a failure.
 DEVICE_HOST=127.0.0.1
 device_ready() {
-    if pgrep -f "iproxy $SSH_PORT:22 -u $IPHONE_UDID" > /dev/null \
+    if [ -n "$IPHONE_UDID" ] && pgrep -f "iproxy $SSH_PORT:22 -u $IPHONE_UDID" > /dev/null \
         && $DEVICE_SSH "${ssh_opts[@]}" -p "$SSH_PORT" root@127.0.0.1 true 2>/dev/null; then
         DEVICE_HOST=127.0.0.1
         return 0
@@ -103,7 +104,8 @@ device_run() {
 run_device_tests() {
     if ! device_ready; then
         echo "device tests: iPhone not reachable" >&2
-        echo "  start the tunnel with: iproxy 2225:22 -u $IPHONE_UDID &" >&2
+        echo "  start the tunnel with: iproxy 2225:22 -u <udid> &" >&2
+        echo "  and put that udid in device.env as DEVICE_UDID" >&2
         echo "  or put its Wi-Fi address in DEVICE_WIFI_ADDRESSES" >&2
         failures=$((failures + 1))
         return

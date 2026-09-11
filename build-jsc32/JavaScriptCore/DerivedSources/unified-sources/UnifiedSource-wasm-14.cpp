@@ -1,0 +1,8 @@
+#include "wasm/js/WebAssemblyStructConstructor.cpp"
+#include "wasm/js/WebAssemblyStructPrototype.cpp"
+#include "wasm/js/WebAssemblySuspendErrorConstructor.cpp"
+#include "wasm/js/WebAssemblySuspendErrorPrototype.cpp"
+#include "wasm/js/WebAssemblySuspending.cpp"
+#include "wasm/js/WebAssemblySuspendingConstructor.cpp"
+#include "wasm/js/WebAssemblySuspendingPrototype.cpp"
+#include "wasm/js/WebAssemblyTableConstructor.cpp"

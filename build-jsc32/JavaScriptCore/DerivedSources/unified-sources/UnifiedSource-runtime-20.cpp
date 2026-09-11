@@ -1,0 +1,8 @@
+#include "runtime/JSArrayBufferView.cpp"
+#include "runtime/JSArrayIterator.cpp"
+#include "runtime/JSAsyncDisposableStack.cpp"
+#include "runtime/JSAsyncFromSyncIterator.cpp"
+#include "runtime/JSAsyncFunction.cpp"
+#include "runtime/JSAsyncFunctionGenerator.cpp"
+#include "runtime/JSAsyncGenerator.cpp"
+#include "runtime/JSAsyncGeneratorFunction.cpp"

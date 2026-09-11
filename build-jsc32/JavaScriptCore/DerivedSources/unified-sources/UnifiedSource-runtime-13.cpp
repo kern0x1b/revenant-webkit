@@ -1,0 +1,8 @@
+#include "runtime/FunctionRareData.cpp"
+#include "runtime/FuzzerAgent.cpp"
+#include "runtime/FuzzerPredictions.cpp"
+#include "runtime/GeneratorFunctionConstructor.cpp"
+#include "runtime/GeneratorFunctionPrototype.cpp"
+#include "runtime/GeneratorPrototype.cpp"
+#include "runtime/GetPutInfo.cpp"
+#include "runtime/GetterSetter.cpp"

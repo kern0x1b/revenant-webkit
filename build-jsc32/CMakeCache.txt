@@ -103,8 +103,56 @@ CMAKE_EXPORT_COMPILE_COMMANDS:BOOL=
 //Value Computed by CMake.
 CMAKE_FIND_PACKAGE_REDIRECTS_DIR:STATIC=/build/CMakeFiles/pkgRedirects
 
+//User executables (bin)
+CMAKE_INSTALL_BINDIR:PATH=bin
+
+//Read-only architecture-independent data (DATAROOTDIR)
+CMAKE_INSTALL_DATADIR:PATH=
+
+//Read-only architecture-independent data root (share)
+CMAKE_INSTALL_DATAROOTDIR:PATH=share
+
+//Documentation root (DATAROOTDIR/doc/PROJECT_NAME)
+CMAKE_INSTALL_DOCDIR:PATH=
+
+//C header files (include)
+CMAKE_INSTALL_INCLUDEDIR:PATH=include
+
+//Info documentation (DATAROOTDIR/info)
+CMAKE_INSTALL_INFODIR:PATH=
+
+//Object code libraries (lib)
+CMAKE_INSTALL_LIBDIR:PATH=lib
+
+//Program executables (libexec)
+CMAKE_INSTALL_LIBEXECDIR:PATH=libexec
+
+//Locale-dependent data (DATAROOTDIR/locale)
+CMAKE_INSTALL_LOCALEDIR:PATH=
+
+//Modifiable single-machine data (var)
+CMAKE_INSTALL_LOCALSTATEDIR:PATH=var
+
+//Man documentation (DATAROOTDIR/man)
+CMAKE_INSTALL_MANDIR:PATH=
+
+//C header files for non-gcc (/usr/include)
+CMAKE_INSTALL_OLDINCLUDEDIR:PATH=/usr/include
+
 //Install path prefix, prepended onto install directories.
 CMAKE_INSTALL_PREFIX:PATH=/usr/local
+
+//Run-time variable data (LOCALSTATEDIR/run)
+CMAKE_INSTALL_RUNSTATEDIR:PATH=
+
+//System admin executables (sbin)
+CMAKE_INSTALL_SBINDIR:PATH=sbin
+
+//Modifiable architecture-independent data (com)
+CMAKE_INSTALL_SHAREDSTATEDIR:PATH=com
+
+//Read-only single-machine data (etc)
+CMAKE_INSTALL_SYSCONFDIR:PATH=etc
 
 //Path to a program.
 CMAKE_LINKER:FILEPATH=/usr/bin/arm-linux-gnueabihf-ld
@@ -792,19 +840,19 @@ ICU_ICUINFO_EXECUTABLE:FILEPATH=/usr/bin/icuinfo
 ICU_ICUPKG_EXECUTABLE:FILEPATH=/usr/sbin/icupkg
 
 //ICU include directory
-ICU_INCLUDE_DIR:PATH=ICU_INCLUDE_DIR-NOTFOUND
+ICU_INCLUDE_DIR:PATH=/usr/include
 
 //ICU makeconv executable
 ICU_MAKECONV_EXECUTABLE:FILEPATH=/usr/bin/makeconv
 
 //ICU Makefile.inc data file
-ICU_MAKEFILE_INC:FILEPATH=/usr/lib/arm-linux-gnueabihf/icu/Makefile.inc
+ICU_MAKEFILE_INC:FILEPATH=/usr/lib/arm-linux-gnueabihf/icu/72.1/Makefile.inc
 
 //ICU pkgdata executable
 ICU_PKGDATA_EXECUTABLE:FILEPATH=/usr/bin/pkgdata
 
 //ICU pkgdata.inc data file
-ICU_PKGDATA_INC:FILEPATH=/usr/lib/arm-linux-gnueabihf/icu/pkgdata.inc
+ICU_PKGDATA_INC:FILEPATH=/usr/lib/arm-linux-gnueabihf/icu/72.1/pkgdata.inc
 
 //ICU uconv executable
 ICU_UCONV_EXECUTABLE:FILEPATH=/usr/bin/uconv
@@ -821,6 +869,140 @@ LIBEXEC_INSTALL_DIR:PATH=/usr/local/bin
 //Absolute path to library installation directory
 LIB_INSTALL_DIR:PATH=/usr/local/lib
 
+//Build object library
+MI_BUILD_OBJECT:BOOL=ON
+
+//Build shared library
+MI_BUILD_SHARED:BOOL=OFF
+
+//Build static library
+MI_BUILD_STATIC:BOOL=OFF
+
+//Build test executables
+MI_BUILD_TESTS:BOOL=OFF
+
+//Use full internal invariant checking in DEBUG mode (deprecated,
+// use MI_DEBUG_FULL instead)
+MI_CHECK_FULL:BOOL=OFF
+
+//Enable assertion checks (enabled by default in a debug build)
+MI_DEBUG:BOOL=OFF
+
+//Enable assertion checks and expensive internal heap invariant
+// checking
+MI_DEBUG_FULL:BOOL=OFF
+
+//Enable assertion and internal invariant checks (enabled by default
+// in a debug build)
+MI_DEBUG_INTERNAL:BOOL=OFF
+
+//Build with thread sanitizer (needs clang)
+MI_DEBUG_TSAN:BOOL=OFF
+
+//Build with undefined-behavior sanitizer (needs clang++)
+MI_DEBUG_UBSAN:BOOL=OFF
+
+//Extra pre-processor definitions (use as `-DMI_EXTRA_CPPDEFS="opt1=val1;opt2=val2"`)
+MI_EXTRA_CPPDEFS:BOOL=OFF
+
+//Build with guard pages behind certain object allocations (implies
+// MI_NO_PADDING=ON)
+MI_GUARDED:BOOL=OFF
+
+//Install directly into $CMAKE_INSTALL_PREFIX instead of PREFIX/lib/mimalloc-version
+MI_INSTALL_TOPLEVEL:BOOL=OFF
+
+//Enable this when linking with musl libc
+MI_LIBC_MUSL:BOOL=OFF
+
+//Use local-dynamic-tls, a slightly slower but dlopen-compatible
+// thread local storage mechanism (Unix)
+MI_LOCAL_DYNAMIC_TLS:BOOL=OFF
+
+//Do not use architecture specific optimizations (like '-march=armv8.1-a'
+// for example) (has priority over MI_OPT_ARCH)
+MI_NO_OPT_ARCH:BOOL=OFF
+
+//Force no use of padding even in DEBUG mode etc.
+MI_NO_PADDING:BOOL=OFF
+
+//Disable transparent huge pages support on Linux/Android for the
+// mimalloc process only
+MI_NO_THP:BOOL=OFF
+
+//Use plain C compilation (has priority over MI_USE_CXX)
+MI_NO_USE_CXX:BOOL=OFF
+
+//Only for optimized builds: turn on architecture specific optimizations
+// (for x64: '-march=haswell;-mavx2' (2013), for arm64: '-march=armv8.1-a'
+// (2016))
+MI_OPT_ARCH:BOOL=OFF
+
+//Use SIMD instructions (requires MI_OPT_ARCH to be enabled)
+MI_OPT_SIMD:BOOL=OFF
+
+//Use interpose to override standard malloc on macOS
+MI_OSX_INTERPOSE:BOOL=OFF
+
+//Use malloc zone to override standard malloc on macOS
+MI_OSX_ZONE:BOOL=ON
+
+//Override the standard malloc interface (i.e. define entry points
+// for 'malloc', 'free', etc)
+MI_OVERRIDE:BOOL=OFF
+
+//Enable padding to detect heap block overflow (always on in DEBUG
+// or SECURE mode, or with Valgrind/ASAN)
+MI_PADDING:BOOL=OFF
+
+//Use full security mitigations (like guard pages, allocation randomization,
+// double-free mitigation, and free-list corruption detection)
+MI_SECURE:BOOL=OFF
+
+//Generate assembly files
+MI_SEE_ASM:BOOL=OFF
+
+//Show error and warning messages by default (only enabled by default
+// in DEBUG mode)
+MI_SHOW_ERRORS:BOOL=OFF
+
+//Skip collecting memory on program exit
+MI_SKIP_COLLECT_ON_EXIT:BOOL=OFF
+
+//Compile with address sanitizer support (adds a small overhead)
+MI_TRACK_ASAN:BOOL=OFF
+
+//Compile with Windows event tracing (ETW) support (adds a small
+// overhead)
+MI_TRACK_ETW:BOOL=OFF
+
+//Compile with Valgrind support (adds a small overhead)
+MI_TRACK_VALGRIND:BOOL=OFF
+
+//Use the C++ compiler to compile the library (instead of the C
+// compiler)
+MI_USE_CXX:BOOL=OFF
+
+//Explicitly link with -latomic (on older systems) (deprecated
+// and detected automatically)
+MI_USE_LIBATOMIC:BOOL=OFF
+
+//Use only direct TLS slots on Windows to avoid extra tests in
+// the malloc fast path (only works if the program uses less than
+// 64 TlsAlloc'd slots in total)
+MI_WIN_DIRECT_TLS:BOOL=OFF
+
+//Use redirection module ('mimalloc-redirect') on Windows if compiling
+// mimalloc as a DLL
+MI_WIN_REDIRECT:BOOL=ON
+
+//Use Fiber local storage on Windows to detect thread termination
+// (deprecated)
+MI_WIN_USE_FLS:BOOL=OFF
+
+//Enable abort() call on memory allocation failure by default
+MI_XMALLOC:BOOL=OFF
+
 //Path to a program.
 PERL_EXECUTABLE:FILEPATH=/usr/bin/perl
 
@@ -836,6 +1018,9 @@ Ruby_EXECUTABLE:FILEPATH=/usr/bin/ruby
 //generate an installation rule to install the built JavaScript
 // shell
 SHOULD_INSTALL_JS_SHELL:BOOL=OFF
+
+//Path to unifdef executable
+UNIFDEF_EXECUTABLE:FILEPATH=/build/bin/unifdef
 
 //Support 64 KB userspace page size (reduces security and performance)
 USE_64KB_PAGE_BLOCK:BOOL=OFF
@@ -892,6 +1077,15 @@ WebKit_IS_TOP_LEVEL:STATIC=ON
 
 //Value Computed by CMake
 WebKit_SOURCE_DIR:STATIC=/src
+
+//Value Computed by CMake
+libmimalloc_BINARY_DIR:STATIC=/build/Source/bmalloc/mimalloc/mimalloc
+
+//Value Computed by CMake
+libmimalloc_IS_TOP_LEVEL:STATIC=OFF
+
+//Value Computed by CMake
+libmimalloc_SOURCE_DIR:STATIC=/src/Source/bmalloc/mimalloc/mimalloc
 
 
 ########################
@@ -981,8 +1175,40 @@ CMAKE_HAVE_LIBC_PTHREAD:INTERNAL=1
 //Source directory with the top level CMakeLists.txt file for this
 // project
 CMAKE_HOME_DIRECTORY:INTERNAL=/src
+//ADVANCED property for variable: CMAKE_INSTALL_BINDIR
+CMAKE_INSTALL_BINDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_DATADIR
+CMAKE_INSTALL_DATADIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_DATAROOTDIR
+CMAKE_INSTALL_DATAROOTDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_DOCDIR
+CMAKE_INSTALL_DOCDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_INCLUDEDIR
+CMAKE_INSTALL_INCLUDEDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_INFODIR
+CMAKE_INSTALL_INFODIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_LIBDIR
+CMAKE_INSTALL_LIBDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_LIBEXECDIR
+CMAKE_INSTALL_LIBEXECDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_LOCALEDIR
+CMAKE_INSTALL_LOCALEDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_LOCALSTATEDIR
+CMAKE_INSTALL_LOCALSTATEDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_MANDIR
+CMAKE_INSTALL_MANDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_OLDINCLUDEDIR
+CMAKE_INSTALL_OLDINCLUDEDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_RUNSTATEDIR
+CMAKE_INSTALL_RUNSTATEDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_SBINDIR
+CMAKE_INSTALL_SBINDIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_SHAREDSTATEDIR
+CMAKE_INSTALL_SHAREDSTATEDIR-ADVANCED:INTERNAL=1
 //Install .so files without execute permission.
 CMAKE_INSTALL_SO_NO_EXE:INTERNAL=1
+//ADVANCED property for variable: CMAKE_INSTALL_SYSCONFDIR
+CMAKE_INSTALL_SYSCONFDIR-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_LINKER
 CMAKE_LINKER-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_MAKE_PROGRAM
@@ -1000,7 +1226,7 @@ CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_NM
 CMAKE_NM-ADVANCED:INTERNAL=1
 //number of local generators
-CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=1
+CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=12
 //ADVANCED property for variable: CMAKE_OBJCOPY
 CMAKE_OBJCOPY-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_OBJDUMP
@@ -1092,6 +1318,8 @@ CXX_COMPILER_SUPPORTS_-Wformat-security:INTERNAL=1
 CXX_COMPILER_SUPPORTS_-Wmissing-format-attribute:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-Wno-array-bounds
 CXX_COMPILER_SUPPORTS_-Wno-array-bounds:INTERNAL=1
+//Test CXX_COMPILER_SUPPORTS_-Wno-cast-align
+CXX_COMPILER_SUPPORTS_-Wno-cast-align:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-Wno-character-conversion
 CXX_COMPILER_SUPPORTS_-Wno-character-conversion:INTERNAL=
 //Test CXX_COMPILER_SUPPORTS_-Wno-dangling-pointer
@@ -1120,10 +1348,16 @@ CXX_COMPILER_SUPPORTS_-Wno-psabi:INTERNAL=1
 CXX_COMPILER_SUPPORTS_-Wno-stringop-overflow:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-Wno-stringop-overread
 CXX_COMPILER_SUPPORTS_-Wno-stringop-overread:INTERNAL=1
+//Test CXX_COMPILER_SUPPORTS_-Wno-stringop-truncation
+CXX_COMPILER_SUPPORTS_-Wno-stringop-truncation:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-Wno-subobject-linkage
 CXX_COMPILER_SUPPORTS_-Wno-subobject-linkage:INTERNAL=1
+//Test CXX_COMPILER_SUPPORTS_-Wno-suggest-attribute__format
+CXX_COMPILER_SUPPORTS_-Wno-suggest-attribute__format:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-Wno-tautological-compare
 CXX_COMPILER_SUPPORTS_-Wno-tautological-compare:INTERNAL=1
+//Test CXX_COMPILER_SUPPORTS_-Wno-undef
+CXX_COMPILER_SUPPORTS_-Wno-undef:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-Wpointer-arith
 CXX_COMPILER_SUPPORTS_-Wpointer-arith:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-Wundef
@@ -1138,6 +1372,8 @@ CXX_COMPILER_SUPPORTS_-fcoroutines:INTERNAL=1
 CXX_COMPILER_SUPPORTS_-fdata-sections:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-fdiagnostics-color__always
 CXX_COMPILER_SUPPORTS_-fdiagnostics-color__always:INTERNAL=1
+//Test CXX_COMPILER_SUPPORTS_-ffp-contract__off
+CXX_COMPILER_SUPPORTS_-ffp-contract__off:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-ffunction-sections
 CXX_COMPILER_SUPPORTS_-ffunction-sections:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-fmax-errors__20
@@ -1146,6 +1382,8 @@ CXX_COMPILER_SUPPORTS_-fmax-errors__20:INTERNAL=1
 CXX_COMPILER_SUPPORTS_-fno-exceptions:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-fno-rtti
 CXX_COMPILER_SUPPORTS_-fno-rtti:INTERNAL=1
+//Test CXX_COMPILER_SUPPORTS_-fno-slp-vectorize
+CXX_COMPILER_SUPPORTS_-fno-slp-vectorize:INTERNAL=
 //Test CXX_COMPILER_SUPPORTS_-fno-strict-aliasing
 CXX_COMPILER_SUPPORTS_-fno-strict-aliasing:INTERNAL=1
 //Test CXX_COMPILER_SUPPORTS_-fno-unswitch-loops
@@ -1174,26 +1412,42 @@ C_COMPILER_SUPPORTS_-Wextra:INTERNAL=1
 C_COMPILER_SUPPORTS_-Wformat-security:INTERNAL=1
 //Test C_COMPILER_SUPPORTS_-Wmissing-format-attribute
 C_COMPILER_SUPPORTS_-Wmissing-format-attribute:INTERNAL=1
+//Test C_COMPILER_SUPPORTS_-Wno-cast-align
+C_COMPILER_SUPPORTS_-Wno-cast-align:INTERNAL=1
 //Test C_COMPILER_SUPPORTS_-Wno-character-conversion
 C_COMPILER_SUPPORTS_-Wno-character-conversion:INTERNAL=
+//Test C_COMPILER_SUPPORTS_-Wno-discarded-qualifiers
+C_COMPILER_SUPPORTS_-Wno-discarded-qualifiers:INTERNAL=1
 //Test C_COMPILER_SUPPORTS_-Wno-expansion-to-defined
 C_COMPILER_SUPPORTS_-Wno-expansion-to-defined:INTERNAL=1
+//Test C_COMPILER_SUPPORTS_-Wno-ignored-qualifiers
+C_COMPILER_SUPPORTS_-Wno-ignored-qualifiers:INTERNAL=1
+//Test C_COMPILER_SUPPORTS_-Wno-implicit-fallthrough
+C_COMPILER_SUPPORTS_-Wno-implicit-fallthrough:INTERNAL=1
 //Test C_COMPILER_SUPPORTS_-Wno-maybe-uninitialized
 C_COMPILER_SUPPORTS_-Wno-maybe-uninitialized:INTERNAL=1
 //Test C_COMPILER_SUPPORTS_-Wno-misleading-indentation
 C_COMPILER_SUPPORTS_-Wno-misleading-indentation:INTERNAL=1
+//Test C_COMPILER_SUPPORTS_-Wno-missing-field-initializers
+C_COMPILER_SUPPORTS_-Wno-missing-field-initializers:INTERNAL=1
+//Test C_COMPILER_SUPPORTS_-Wno-missing-format-attribute
+C_COMPILER_SUPPORTS_-Wno-missing-format-attribute:INTERNAL=1
 //Test C_COMPILER_SUPPORTS_-Wno-nullability-completeness
 C_COMPILER_SUPPORTS_-Wno-nullability-completeness:INTERNAL=
 //Test C_COMPILER_SUPPORTS_-Wno-parentheses-equality
 C_COMPILER_SUPPORTS_-Wno-parentheses-equality:INTERNAL=
 //Test C_COMPILER_SUPPORTS_-Wno-psabi
 C_COMPILER_SUPPORTS_-Wno-psabi:INTERNAL=1
+//Test C_COMPILER_SUPPORTS_-Wno-sign-compare
+C_COMPILER_SUPPORTS_-Wno-sign-compare:INTERNAL=1
 //Test C_COMPILER_SUPPORTS_-Wno-stringop-overflow
 C_COMPILER_SUPPORTS_-Wno-stringop-overflow:INTERNAL=1
 //Test C_COMPILER_SUPPORTS_-Wno-subobject-linkage
 C_COMPILER_SUPPORTS_-Wno-subobject-linkage:INTERNAL=
 //Test C_COMPILER_SUPPORTS_-Wno-tautological-compare
 C_COMPILER_SUPPORTS_-Wno-tautological-compare:INTERNAL=1
+//Test C_COMPILER_SUPPORTS_-Wno-unused-parameter
+C_COMPILER_SUPPORTS_-Wno-unused-parameter:INTERNAL=1
 //Test C_COMPILER_SUPPORTS_-Wpointer-arith
 C_COMPILER_SUPPORTS_-Wpointer-arith:INTERNAL=1
 //Test C_COMPILER_SUPPORTS_-Wundef
@@ -1510,6 +1764,8 @@ ENABLE_WK_WEB_EXTENSIONS-ADVANCED:INTERNAL=1
 ENABLE_WRITING_TOOLS-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: ENABLE_XSLT
 ENABLE_XSLT-ADVANCED:INTERNAL=1
+//Details about finding ICU
+FIND_PACKAGE_MESSAGE_DETAILS_ICU:INTERNAL=[/usr/include][/usr/lib/arm-linux-gnueabihf/libicudata.so;/usr/lib/arm-linux-gnueabihf/libicui18n.so;/usr/lib/arm-linux-gnueabihf/libicuuc.so][ON][v72.1(70.1)]
 //Details about finding Perl
 FIND_PACKAGE_MESSAGE_DETAILS_Perl:INTERNAL=[/usr/bin/perl][v5.36.0(5.10.0)]
 //Details about finding PerlModules
@@ -1648,6 +1904,8 @@ USE_SYSTEM_UNIFDEF-ADVANCED:INTERNAL=1
 USE_WOFF2-ADVANCED:INTERNAL=1
 //linker supports push/pop state
 _CMAKE_LINKER_PUSHPOP_STATE_SUPPORTED:INTERNAL=TRUE
+//CMAKE_INSTALL_PREFIX during last run
+_GNUInstallDirs_LAST_CMAKE_INSTALL_PREFIX:INTERNAL=/usr/local
 //Compiler reason failure
 _Python_Compiler_REASON_FAILURE:INTERNAL=
 //Development reason failure
@@ -1659,4 +1917,10 @@ _Python_INTERPRETER_PROPERTIES:INTERNAL=Python;3;11;2;32;;;/usr/lib/python3.11;/
 _Python_INTERPRETER_SIGNATURE:INTERNAL=4c8bfa8951e99fa32e4000a94f8c04a2
 //NumPy reason failure
 _Python_NumPy_REASON_FAILURE:INTERNAL=
+//Test mi_has_libatomic
+mi_has_libatomic:INTERNAL=1
+//Test mi_has_libpthread
+mi_has_libpthread:INTERNAL=1
+//Test mi_has_librt
+mi_has_librt:INTERNAL=1
 

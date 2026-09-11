@@ -38,7 +38,9 @@ step "symbols"
 bash "$P/scripts/symbol-check.sh" || die "the symbol surface moved - check each line against the device"
 
 step "host checks"
-bash "$P/tests/run-tests.sh" host || die "host checks failed"
+out=$(bash "$P/tests/run-tests.sh" host 2>&1) || die "host checks failed"
+echo "$out" | tail -4
+echo "$out" | grep -q "skip host tests" && echo "WARNING: the ICU tier did not run - scripts/build-icu.sh has not been run in this tree"
 
 step "device"
 if bash "$P/tools/device.sh" >/dev/null 2>&1 && bash -c ". $P/tools/device.sh; device_run 10 'echo up'" 2>/dev/null | grep -q up; then

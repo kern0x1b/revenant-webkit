@@ -1,0 +1,8 @@
+#include "runtime/JSFunction.cpp"
+#include "runtime/JSFunctionWithFields.cpp"
+#include "runtime/JSGenerator.cpp"
+#include "runtime/JSGeneratorFunction.cpp"
+#include "runtime/JSGenericTypedArrayViewConstructor.cpp"
+#include "runtime/JSGenericTypedArrayViewPrototype.cpp"
+#include "runtime/JSGlobalLexicalEnvironment.cpp"
+#include "runtime/JSGlobalObject.cpp"

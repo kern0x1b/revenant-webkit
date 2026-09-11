@@ -1,0 +1,8 @@
+#include "bytecode/LinkTimeConstant.cpp"
+#include "bytecode/MetadataTable.cpp"
+#include "bytecode/MethodOfGettingAValueProfile.cpp"
+#include "bytecode/ModuleNamespaceAccessCase.cpp"
+#include "bytecode/ModuleProgramCodeBlock.cpp"
+#include "bytecode/ObjectPropertyCondition.cpp"
+#include "bytecode/ObjectPropertyConditionSet.cpp"
+#include "bytecode/Opcode.cpp"

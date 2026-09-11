@@ -1,0 +1,8 @@
+#include "runtime/temporal/core/CalendarFields.cpp"
+#include "runtime/temporal/core/CalendarICUBridge.cpp"
+#include "runtime/temporal/core/DurationArithmetic.cpp"
+#include "runtime/temporal/core/ISOArithmetic.cpp"
+#include "runtime/temporal/core/InstantCore.cpp"
+#include "runtime/temporal/core/PlainDateTimeCore.cpp"
+#include "runtime/temporal/core/Rounding.cpp"
+#include "runtime/temporal/core/TimeZoneICUBridge.cpp"
