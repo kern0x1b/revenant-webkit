@@ -106,6 +106,49 @@ because one of them changed a WebCore base class, and the suite stayed at 55 of
 **Changing series** — 2.54 to 2.56 or later, or to `main`. That is the work
 below, and it is the one that also has to carry the ARMv7 JIT forward.
 
+## The trunk attempt, 2026-09-11
+
+Tried for real, on a branch, to see what it costs rather than to guess. What the
+merge with `upstream/main` produced, and what came out of working through it:
+
+**202 conflicted paths.** 179 both-modified, 16 files this port changed that
+upstream deleted, 6 added on both sides, 1 the other way round. Of those, 21
+were upstream against upstream - the series' own cherry-picks against trunk's
+evolution, in files this port never touched - and taking trunk's side is right
+for all of them. 35 more are in code this port does not build. That leaves
+**about 145 files that have to be read**, 199 conflict hunks, and roughly half
+carry a `WEBKIT_IOS6` guard on one side.
+
+**476 files the merge deleted without conflicting at all.** Most are upstream's
+own removals over 3222 commits, but five were load-bearing here - the 32-bit
+LLInt, the ARMv7 registers and macro assembler, two 32-bit JIT sources - and
+nothing in git said so, because this port had not touched them since the branch
+point. `scripts/carry-check.sh` named all five in under a second. That is the
+clearest argument for the manifest that exists.
+
+**Two build systems have to be carried, not merged.** Upstream removed the iOS
+CMake port outright: `Source/cmake/OptionsIOS.cmake` and every
+`PlatformIOS.cmake` are gone from trunk, so they become this port's files rather
+than edits to upstream's. The offlineasm backend list and the JavaScriptCore
+source list lost their ARMv7 entries the same silent way the sources did.
+
+**Preferences changed shape.** `UnifiedWebPreferences.yaml` is validated far
+more strictly on trunk: a frontend that only carries a default must be written
+as a scalar, frontends must appear in the order WebKitLegacy, WebKit, WebCore,
+and a value equal to the shared default has to be left out. The port's 33
+enabled features transplant cleanly once written that way, and the list of
+exactly which 33 comes out of `git diff` rather than memory.
+
+Where it stopped: JavaScriptCore and WTF are fully merged, 68 files in WebCore
+and below are not, and the 32-bit JavaScriptCore build against trunk gets as far
+as compiling WTF. `JSCJSValue.h` needs its 32-bit half re-threaded into a
+conditional chain trunk rewrote around it - that one is real work, not a
+mechanical merge.
+
+The branch is `trunk-integration` in the engine fork, and `git rerere` recorded
+183 resolutions along the way, so redoing the merge replays them instead of
+asking again.
+
 ## The procedure this argues for
 
 1. Run `scripts/port-delta.sh` against the current base and keep the output. It
