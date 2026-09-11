@@ -1,8 +1,0 @@
-#include "runtime/SuppressedError.cpp"
-#include "runtime/SuppressedErrorConstructor.cpp"
-#include "runtime/SuppressedErrorPrototype.cpp"
-#include "runtime/Symbol.cpp"
-#include "runtime/SymbolConstructor.cpp"
-#include "runtime/SymbolObject.cpp"
-#include "runtime/SymbolPrototype.cpp"
-#include "runtime/SymbolTable.cpp"

@@ -1,8 +1,0 @@
-#include "tools/CellList.cpp"
-#include "tools/CharacterPropertyDataGenerator.cpp"
-#include "tools/CompilerTimingScope.cpp"
-#include "tools/FunctionAllowlist.cpp"
-#include "tools/FunctionOverrides.cpp"
-#include "tools/HeapVerifier.cpp"
-#include "tools/Integrity.cpp"
-#include "tools/JSDollarVM.cpp"

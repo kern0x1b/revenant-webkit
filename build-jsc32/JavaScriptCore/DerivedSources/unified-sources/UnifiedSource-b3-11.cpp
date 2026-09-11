@@ -1,8 +1,0 @@
-#include "b3/B3WasmAddressValue.cpp"
-#include "b3/B3WasmArrayElementValue.cpp"
-#include "b3/B3WasmArrayGetValue.cpp"
-#include "b3/B3WasmArrayLengthValue.cpp"
-#include "b3/B3WasmArrayNewValue.cpp"
-#include "b3/B3WasmArraySetValue.cpp"
-#include "b3/B3WasmBoundsCheckValue.cpp"
-#include "b3/B3WasmRefTypeCheckValue.cpp"

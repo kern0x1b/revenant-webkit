@@ -1,8 +1,0 @@
-#include "runtime/WeakMapPrototype.cpp"
-#include "runtime/WeakObjectRefConstructor.cpp"
-#include "runtime/WeakObjectRefPrototype.cpp"
-#include "runtime/WeakSetConstructor.cpp"
-#include "runtime/WeakSetPrototype.cpp"
-#include "runtime/WideningNumberPredictionFuzzerAgent.cpp"
-#include "runtime/WrapForValidIteratorPrototype.cpp"
-#include "runtime/temporal/core/CalendarArithmetic.cpp"

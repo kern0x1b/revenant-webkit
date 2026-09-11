@@ -1,8 +1,0 @@
-#include "dfg/DFGStructureAbstractValue.cpp"
-#include "dfg/DFGTZoneImpls.cpp"
-#include "dfg/DFGThunks.cpp"
-#include "dfg/DFGTierUpCheckInjectionPhase.cpp"
-#include "dfg/DFGToFTLDeferredCompilationCallback.cpp"
-#include "dfg/DFGToFTLForOSREntryDeferredCompilationCallback.cpp"
-#include "dfg/DFGTransition.cpp"
-#include "dfg/DFGTypeCheckHoistingPhase.cpp"

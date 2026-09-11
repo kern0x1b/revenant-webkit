@@ -1,8 +1,0 @@
-#include "runtime/JSCellButterfly.cpp"
-#include "runtime/JSCustomGetterFunction.cpp"
-#include "runtime/JSCustomSetterFunction.cpp"
-#include "runtime/JSDataView.cpp"
-#include "runtime/JSDataViewPrototype.cpp"
-#include "runtime/JSDestructibleObjectHeapCellType.cpp"
-#include "runtime/JSDisposableStack.cpp"
-#include "runtime/JSFinalizationRegistry.cpp"

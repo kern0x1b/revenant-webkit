@@ -1,8 +1,0 @@
-#include "wasm/WasmMemory.cpp"
-#include "wasm/WasmMemoryInformation.cpp"
-#include "wasm/WasmMergedProfile.cpp"
-#include "wasm/WasmModule.cpp"
-#include "wasm/WasmModuleInformation.cpp"
-#include "wasm/WasmNameSectionParser.cpp"
-#include "wasm/WasmOMGIRGenerator.cpp"
-#include "wasm/WasmOMGPlan.cpp"

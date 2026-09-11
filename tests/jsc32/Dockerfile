@@ -11,6 +11,7 @@ FROM debian:bookworm
 
 RUN dpkg --add-architecture armhf && apt-get update && apt-get install -y --no-install-recommends \
         crossbuild-essential-armhf libicu-dev:armhf zlib1g-dev:armhf \
+        build-essential perl \
         cmake ninja-build ruby python3 git ca-certificates qemu-user-static \
     && rm -rf /var/lib/apt/lists/*
 

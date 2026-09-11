@@ -1,8 +1,0 @@
-#include "heap/PreciseAllocation.cpp"
-#include "heap/PreciseSubspace.cpp"
-#include "heap/RootMarkReason.cpp"
-#include "heap/SimpleMarkingConstraint.cpp"
-#include "heap/SlotVisitor.cpp"
-#include "heap/SpaceTimeMutatorScheduler.cpp"
-#include "heap/StochasticSpaceTimeMutatorScheduler.cpp"
-#include "heap/StopIfNecessaryTimer.cpp"

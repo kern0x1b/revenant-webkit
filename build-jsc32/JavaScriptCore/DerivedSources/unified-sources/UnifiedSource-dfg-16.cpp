@@ -1,8 +1,0 @@
-#include "dfg/DFGUnificationPhase.cpp"
-#include "dfg/DFGUseKind.cpp"
-#include "dfg/DFGValidate.cpp"
-#include "dfg/DFGValidateUnlinked.cpp"
-#include "dfg/DFGValueRepReductionPhase.cpp"
-#include "dfg/DFGValueSource.cpp"
-#include "dfg/DFGValueStrength.cpp"
-#include "dfg/DFGVarargsForwardingPhase.cpp"

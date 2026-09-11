@@ -1,8 +1,0 @@
-#include "bytecode/ICStatusUtils.cpp"
-#include "bytecode/InByStatus.cpp"
-#include "bytecode/InByVariant.cpp"
-#include "bytecode/InlineAccess.cpp"
-#include "bytecode/InlineCacheCompiler.cpp"
-#include "bytecode/InlineCacheHandler.cpp"
-#include "bytecode/InlineCallFrame.cpp"
-#include "bytecode/InlineCallFrameSet.cpp"

@@ -1,8 +1,0 @@
-#include "wasm/debugger/WasmMemoryHandler.cpp"
-#include "wasm/debugger/WasmModuleDebugInfo.cpp"
-#include "wasm/debugger/WasmModuleManager.cpp"
-#include "wasm/debugger/WasmQueryHandler.cpp"
-#include "wasm/debugger/WasmVirtualAddress.cpp"
-#include "wasm/js/JSToWasm.cpp"
-#include "wasm/js/JSWebAssembly.cpp"
-#include "wasm/js/JSWebAssemblyCompileError.cpp"

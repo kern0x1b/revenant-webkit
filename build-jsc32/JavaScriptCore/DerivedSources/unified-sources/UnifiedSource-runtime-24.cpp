@@ -1,8 +1,0 @@
-#include "runtime/JSGlobalObjectDebuggable.cpp"
-#include "runtime/JSGlobalObjectFunctions.cpp"
-#include "runtime/JSGlobalProxy.cpp"
-#include "runtime/JSIterator.cpp"
-#include "runtime/JSIteratorConstructor.cpp"
-#include "runtime/JSIteratorHelper.cpp"
-#include "runtime/JSIteratorHelperPrototype.cpp"
-#include "runtime/JSIteratorPrototype.cpp"

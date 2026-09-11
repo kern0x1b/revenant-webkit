@@ -1,8 +1,0 @@
-#include "wasm/js/WebAssemblyBuiltinTrampoline.cpp"
-#include "wasm/js/WebAssemblyCompileErrorConstructor.cpp"
-#include "wasm/js/WebAssemblyCompileErrorPrototype.cpp"
-#include "wasm/js/WebAssemblyCompileOptions.cpp"
-#include "wasm/js/WebAssemblyExceptionConstructor.cpp"
-#include "wasm/js/WebAssemblyExceptionPrototype.cpp"
-#include "wasm/js/WebAssemblyFunction.cpp"
-#include "wasm/js/WebAssemblyFunctionBase.cpp"

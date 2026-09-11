@@ -1,8 +1,0 @@
-#include "wasm/WasmStreamingParser.cpp"
-#include "wasm/WasmStreamingPlan.cpp"
-#include "wasm/WasmTZoneImpls.cpp"
-#include "wasm/WasmTable.cpp"
-#include "wasm/WasmTag.cpp"
-#include "wasm/WasmThunks.cpp"
-#include "wasm/WasmTierUpCount.cpp"
-#include "wasm/WasmTypeDefinition.cpp"

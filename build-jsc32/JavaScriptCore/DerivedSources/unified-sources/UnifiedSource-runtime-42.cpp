@@ -1,8 +1,0 @@
-#include "runtime/StringPrototype.cpp"
-#include "runtime/StringRecursionChecker.cpp"
-#include "runtime/StringReplaceCache.cpp"
-#include "runtime/Structure.cpp"
-#include "runtime/StructureCache.cpp"
-#include "runtime/StructureChain.cpp"
-#include "runtime/StructureRareData.cpp"
-#include "runtime/StructuredCloneTags.cpp"

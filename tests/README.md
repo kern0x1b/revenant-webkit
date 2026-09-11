@@ -68,3 +68,23 @@ a component tree has. Its own DOM is 2.2 MB of heap even at 1400 posts, so
 without them the collector never leaves its cheap band and the emergency policy
 under test never engages.
 
+## jsc32: the 32-bit engine, without the phone
+
+The most expensive thing this port carries is the part of JavaScriptCore that
+upstream deleted: the 32-bit JSValue representation and the ARMv7 JIT. Neither
+needs iOS to run, so neither needs the device to be tested.
+
+    tests/jsc32/build-and-test.sh            build, then a smoke run
+    tests/jsc32/build-and-test.sh stress     and a slice of JSTests/stress
+
+A Debian container cross-compiles `jsc` for `armv7` at native speed - the
+compiler runs on the host architecture and only the product is 32-bit - and the
+binary is then run under `qemu-arm-static`. The engine under test is this port's
+own tree, mounted read-only, so what runs is the same JSValue layout, the same
+macro assembler and the same DFG that run on the phone.
+
+It earned its place on the first build it completed: `DFGSpeculativeJIT32_64.cpp`
+used `JSSet::offsetOfStorage()` without including `JSSet.h`, which the device
+build never noticed because it bundles that file into a unified source that
+happens to include the header. Compiled on its own, it does not build.
+

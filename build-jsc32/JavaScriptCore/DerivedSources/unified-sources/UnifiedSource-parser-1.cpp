@@ -1,8 +1,0 @@
-#include "parser/Lexer.cpp"
-#include "parser/LexerUnicodeProperties.cpp"
-#include "parser/ModuleAnalyzer.cpp"
-#include "parser/Nodes.cpp"
-#include "parser/NodesAnalyzeModule.cpp"
-#include "parser/ParserArena.cpp"
-#include "parser/SourceProvider.cpp"
-#include "parser/SourceProviderCache.cpp"

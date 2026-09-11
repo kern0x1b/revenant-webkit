@@ -18,6 +18,7 @@ build-icu-armv7/
 build-icu-host/
 build-jit/
 build-jsc/
+build-jsc32/
 build-libcxx/
 build-trunk/
 

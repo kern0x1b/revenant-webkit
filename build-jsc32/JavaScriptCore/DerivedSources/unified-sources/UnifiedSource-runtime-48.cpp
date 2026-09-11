@@ -1,8 +1,0 @@
-#include "runtime/TypeLocationCache.cpp"
-#include "runtime/TypeProfiler.cpp"
-#include "runtime/TypeProfilerLog.cpp"
-#include "runtime/TypeSet.cpp"
-#include "runtime/TypedArrayController.cpp"
-#include "runtime/TypedArrayType.cpp"
-#include "runtime/TypeofType.cpp"
-#include "runtime/VM.cpp"

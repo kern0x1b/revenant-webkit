@@ -1,8 +1,0 @@
-#include "runtime/JSModuleNamespaceObject.cpp"
-#include "runtime/JSModuleRecord.cpp"
-#include "runtime/JSNativeStdFunction.cpp"
-#include "runtime/JSONObject.cpp"
-#include "runtime/JSObject.cpp"
-#include "runtime/JSOrderedHashTable.cpp"
-#include "runtime/JSPIContext.cpp"
-#include "runtime/JSPromise.cpp"

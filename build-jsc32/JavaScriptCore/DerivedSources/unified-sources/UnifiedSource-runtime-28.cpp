@@ -1,8 +1,0 @@
-#include "runtime/JSRemoteFunction.cpp"
-#include "runtime/JSRunLoopTimer.cpp"
-#include "runtime/JSScope.cpp"
-#include "runtime/JSSegmentedVariableObject.cpp"
-#include "runtime/JSSentinel.cpp"
-#include "runtime/JSSet.cpp"
-#include "runtime/JSSetIterator.cpp"
-#include "runtime/JSSourceCode.cpp"

@@ -89,13 +89,14 @@ merge quietly take away from us".
 | 6. Device long runs | the iPhone | tens of minutes | WebGL conformance, memory bands over cold launches, a crash sweep |
 
 Tiers 1 to 4 are the answer to the question of testing without a phone, and tier
-4 is the one worth building next. The trick is that the 32-bit value
-representation is not iOS-specific: a JSCOnly build for 32-bit ARM Linux, run
-under `qemu-user`, exercises the same `JSVALUE32_64` code and the same ARMv7 JIT
-that the phone runs, and it can be driven by JavaScriptCore's own suites -
-`run-javascriptcore-tests` with test262 and the stress tests, thousands of cases
-per run. That is coverage of our largest and most fragile carry, on the host, in
-a container, with no device in the loop.
+4 exists: `tests/jsc32/`. The 32-bit value representation is not iOS-specific, so
+a JSCOnly build for 32-bit ARM Linux exercises the same `JSVALUE32_64` code, the
+same macro assembler and the same DFG that the phone runs. A container
+cross-compiles it at native speed and `qemu-arm-static` runs it, driven by
+JavaScriptCore's own suites. That is coverage of this port's largest and most
+fragile carry, on the host, with no device in the loop - and it found a real
+missing include the device build hides inside a unified source on the first run
+it completed.
 
 What the phone remains irreplaceable for is everything the manifest cannot
 describe and a Linux container does not have: a 2012 UIKit, this CoreText, this

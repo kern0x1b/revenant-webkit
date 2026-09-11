@@ -1,8 +1,0 @@
-#include "wasm/WasmTypeSectionState.cpp"
-#include "wasm/WasmValueLocation.cpp"
-#include "wasm/WasmWorklist.cpp"
-#include "wasm/debugger/WasmBreakpointManager.cpp"
-#include "wasm/debugger/WasmDebugServer.cpp"
-#include "wasm/debugger/WasmDebugServerUtilities.cpp"
-#include "wasm/debugger/WasmExecutionHandler.cpp"
-#include "wasm/debugger/WasmGDBPacketParser.cpp"

@@ -1,8 +1,0 @@
-#include "jit/JITPlan.cpp"
-#include "jit/JITPropertyAccess.cpp"
-#include "jit/JITRightShiftGenerator.cpp"
-#include "jit/JITSafepoint.cpp"
-#include "jit/JITSizeStatistics.cpp"
-#include "jit/JITStubRoutine.cpp"
-#include "jit/JITSubGenerator.cpp"
-#include "jit/JITTZoneImpls.cpp"
