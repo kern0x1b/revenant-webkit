@@ -61,12 +61,14 @@ What it asserts about a merged tree:
 - **Build facts that must hold**: `ENABLE_JIT` on and `ENABLE_C_LOOP` off for
   armv7, `USE(JSVALUE32_64)` reached by the armv7 configuration, the CMake
   entries that name the files above.
-- **Symbols that must stay exported** — not implemented yet, and the next thing
-  to add: the 147 imports the system's own libraries take from WebKit, WebCore
-  and JavaScriptCore, pinned as a file and compared with `nm` against the built
-  frameworks. UIKit needs 80 of them, and a missing one is a launch-time death
-  with no crash log. It needs a build to check, so it belongs to tier 3 rather
-  than to this one.
+- **The symbol surface**, in `carry-symbols.txt` and checked by
+  `scripts/symbol-check.sh` once a build exists: every symbol the three
+  frameworks leave undefined - 6603 of them - and every Objective-C class they
+  export by name. A *new* undefined symbol is the important one: it means an
+  upstream change reached for API this system may not have, and dyld kills the
+  process at load with no crash log. A lost exported class is the same death
+  from the other side, since UIKit and Safari link `WebView` and its siblings by
+  name.
 - **The guard census**: how many files carry `WEBKIT_IOS6`, by area. A merge that
   reverts one of our hunks usually shows up here first — the count drops in one
   directory.
@@ -79,9 +81,9 @@ merge quietly take away from us".
 
 | Tier | Needs | Cost | What it catches |
 | --- | --- | --- | --- |
-| 1. Carry manifest | nothing | seconds | our code deleted, a flag flipped, a symbol gone |
+| 1. Carry manifest | nothing | seconds | our code deleted, a flag flipped, a guard reverted |
 | 2. Host checks | Mac | seconds | ICU data damage, the CA bundle's pin, generated encoding lists |
-| 3. armv7 build | Mac | minutes | every API change upstream made to code we touch |
+| 3. armv7 build, then the symbol check | Mac | minutes | every API change upstream made to code we touch, and any new dependency on API iOS 6 may not have |
 | 4. 32-bit JSC suites | Mac + container | tens of minutes | our own 32-bit JSValue and JIT carry, against upstream's own test262 and stress suites |
 | 5. Device suite | the iPhone | minutes | UIKit, CoreText, CoreGraphics, the GPU, and whether pages actually paint |
 | 6. Device long runs | the iPhone | tens of minutes | WebGL conformance, memory bands over cold launches, a crash sweep |
@@ -104,7 +106,9 @@ rather than screenshots.
 ## How an update actually runs
 
 ```sh
-scripts/integrate.sh upstream/main      # or a series branch
+scripts/integrate.sh upstream/webkitglib/2.54   # the series' own picks
+scripts/integrate.sh upstream/main              # the base change, when it is time
+scripts/integrate.sh --no-merge                 # just run the gates on what is here
 ```
 
 In order, stopping at the first failure that matters:
@@ -115,9 +119,10 @@ In order, stopping at the first failure that matters:
 3. `scripts/port-delta.sh` — the delta and the guard census, against the new
    base, kept as the before-and-after of the merge.
 4. The armv7 build.
-5. Host tests, then the 32-bit JSC suites.
-6. The device suite, if the phone answers; otherwise the run is marked as
-   unverified and is not shippable.
+5. `scripts/symbol-check.sh` against the pin.
+6. Host tests.
+7. Deploy, then the device suite — if the phone answers. If it does not, the run
+   exits 3 and says the integration is unverified and must not be shipped.
 
 Only a run that reached the end green becomes `main`. The integration branch is
 allowed to be red for as long as it takes — that is what it is for.
@@ -131,6 +136,25 @@ allowed to be red for as long as it takes — that is what it is for.
 - **Weekly**: the base series' own security picks, then the full pyramid, with
   the device.
 - **Per series hop, or before anything is published**: tier 6 as well.
+
+## What tracking `main` costs today, measured
+
+`git merge-tree` computes the merge without touching a working tree, so the
+question can be answered before anyone commits to it. Merging this port's `main`
+with upstream's, on 2026-09-11:
+
+```
+337 files conflict
+  150  Source/ThirdParty      ANGLE rolled forward on trunk
+   99  Source/WebCore
+   30  Source/JavaScriptCore
+   16  Source/WebKit
+   15  Source/WTF
+```
+
+Of those 337, **143 are files this port changed**. The rest is the year of
+divergence between the 2.54 branch and trunk, which any base change would have
+to absorb once and then never again.
 
 ## The one thing standing between this and tracking `main`
 
