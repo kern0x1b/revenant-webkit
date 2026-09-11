@@ -4,9 +4,21 @@
 #   scripts/integrate.sh upstream/webkitglib/2.54     take the series' own picks
 #   scripts/integrate.sh upstream/main                the base change, when it is time
 #   scripts/integrate.sh --no-merge                   just run the gates on what is here
+#
+# Add --with-jsc32 to also build JavaScriptCore for 32-bit ARM and run its own
+# suites in a container. That tier is slow and needs docker, so it is opt-in.
 set -uo pipefail
 P=$(cd "$(dirname "$0")/.." && pwd)
 E=$P/webkit-254
+WITH_JSC32=0
+args=()
+for a in "$@"; do
+    case "$a" in
+        --with-jsc32) WITH_JSC32=1 ;;
+        *) args+=("$a") ;;
+    esac
+done
+set -- ${args[@]+"${args[@]}"}
 REF=${1:-}
 
 step() { printf '\n=== %s\n' "$1"; }
@@ -36,6 +48,11 @@ ninja -C "$P/build-254-lto" || die "build failed"
 
 step "symbols"
 bash "$P/scripts/symbol-check.sh" || die "the symbol surface moved - check each line against the device"
+
+if [ "$WITH_JSC32" = 1 ]; then
+    step "32-bit JavaScriptCore"
+    bash "$P/tests/jsc32/build-and-test.sh" stress || die "the 32-bit engine did not pass its own suites"
+fi
 
 step "host checks"
 out=$(bash "$P/tests/run-tests.sh" host 2>&1) || die "host checks failed"

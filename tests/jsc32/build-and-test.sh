@@ -32,10 +32,18 @@ echo 'print("jsc " + (40 + 2) + " " + typeof 1n + " " + [1,2,3].map(x=>x*2).join
 run /build/smoke.js
 
 if [ "$what" = stress ]; then
-  echo "=== a slice of JSTests/stress ==="
-  pass=0; fail=0
+  # A crash sweep, not a pass/fail run: many of these tests throw on purpose,
+  # and only JSC's own runner understands their //@ directives. What is being
+  # asked here is narrower and still worth asking - does the 32-bit engine take
+  # a signal on any of them.
+  echo "=== JSTests/stress, looking for crashes ==="
+  ran=0; crashed=0
   for t in $(cd "$P/webkit-254/JSTests/stress" && ls *.js | head -"${STRESS_COUNT:-150}"); do
-    if run "/src/JSTests/stress/$t" >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); echo "  FAIL $t"; fi
+    run "/src/JSTests/stress/$t" >/dev/null 2>&1
+    code=$?
+    ran=$((ran+1))
+    if [ $code -ge 128 ]; then crashed=$((crashed+1)); echo "  signal $((code-128)): $t"; fi
   done
-  echo "stress: $pass passed, $fail failed"
+  echo "stress: $ran ran, $crashed crashed"
+  [ $crashed -eq 0 ]
 fi
