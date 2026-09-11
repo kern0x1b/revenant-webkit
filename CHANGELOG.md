@@ -27,7 +27,11 @@ Dates are the day the change was measured on the device, not the day it compiled
   in WTF's locks, where upstream replaced hand-rolled spin counters with a
   `SpinBackoff` helper and this port's measured iOS 6 spin policy now sits beside
   it under the guard rather than instead of it. The five picks brought the
-  snapshot to `305413.1005@safari-7624.5.1.10-branch`. Two are use-after-free
+  snapshot to `305413.1005@safari-7624.5.1.10-branch`. The roll moved ANGLE,
+  which is where this port's GL backend lives, so WebGL was re-checked against
+  the Khronos suite on the device: 573 framebuffer-attachment checks still
+  pass, and the only failures are the two this port already attributes to the
+  GPU - face culling into an IOSurface-backed attachment, and NPOT cube maps. Two are use-after-free
   fixes on paths this port actually runs: `ShareDataReader` held a raw `this`
   in the blob loader's completion handler, so a share whose document went away
   finished into freed memory, and `Attr::setValue` passed an unprotected
