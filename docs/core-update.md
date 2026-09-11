@@ -1,9 +1,13 @@
 # Keeping the engine current
 
-The engine here is a graft: the port branch carries five commits of its own and
-no ancestry to upstream, so how far it has drifted cannot be read from the log.
-It can be read from the diff against the upstream branch the snapshot was cut
-from, and `scripts/port-delta.sh` prints exactly that. Today, against
+The engine is a real fork. `main` in this fork is upstream's history with this
+port's commits on top of `1b78c03f880e`, so upstream is an ancestor and a merge
+is a merge. It was a graft until 2026-09-11 - a snapshot with no shared
+ancestry, updated by applying other people's diffs - and
+[maintaining.md](maintaining.md) is what that fork is carried by now.
+
+How far the port has drifted is still a question about content rather than about
+the log, and `scripts/port-delta.sh` answers it. Today, against
 `origin/webkitglib/2.54`:
 
 ```
@@ -19,7 +23,7 @@ from, and `scripts/port-delta.sh` prints exactly that. Today, against
 ## How far behind the snapshot is
 
 `scripts/port-delta.sh --freshness` answers that from content rather than dates,
-because a graft has no dates to compare: for each commit on the upstream branch
+because content is what the question is really about: for each commit on the upstream branch
 it takes a line that commit added and looks for it in our tree, and the first
 one we already carry is where the snapshot sits. Today:
 
@@ -58,7 +62,7 @@ Two thirds of it is not port-specific logic:
 The part that has to be understood on every update is the rest: the changes that
 adapt current WebKit to a 2012 system.
 
-## Why a re-graft is realistic
+## Why changing base is realistic
 
 Of the 1309 files changed under `Source`, **375 carry the `WEBKIT_IOS6` guard**
 and announce themselves. Those hunks say
@@ -80,28 +84,27 @@ are the real work of an update.
 
 ## Two kinds of update
 
-They cost very different things, and only one of them is a graft.
+They cost very different things.
 
 **Inside the series** — `webkitglib/2.54` taking security and stability picks
-from Safari's branch. The port's own commits sit on top of a snapshot with no
-shared ancestry, so there is nothing to merge or rebase onto; what carries the
-picks across is their diff:
+from Safari's branch. With ancestry this is an ordinary merge:
 
 ```sh
-git -C webkit-254 fetch --deepen 200 origin webkitglib/2.54
-scripts/port-delta.sh --freshness                    # where the snapshot sits
-git -C webkit-254 diff <boundary>..origin/webkitglib/2.54 > /tmp/picks.patch
-git -C webkit-254 apply -3 /tmp/picks.patch          # three-way, so conflicts surface
+git -C webkit-254 fetch upstream 'refs/heads/webkitglib/2.54:refs/remotes/upstream/webkitglib/2.54'
+git -C webkit-254 merge upstream/webkitglib/2.54
 ```
 
 Conflicts land only where a pick touches a file this port also changed, which
-`scripts/port-delta.sh` lists. Build, then `tests/device/run.sh`. Done this way
-on 2026-09-10, taking the branch's five newest picks: none of them touched a
-port-changed file, the engine rebuilt whole because one of them changed a
-WebCore base class, and the suite stayed at 55 of 55.
+`scripts/port-delta.sh` lists, and `rerere.enabled` means a resolution is only
+made once. Then the carry check, the build, and `tests/device/run.sh`.
 
-**Changing series** — 2.54 to 2.56 or later. That is the graft below, and it is
-the one that also has to carry the ARMv7 JIT forward.
+The last update done the old way, on 2026-09-10, took the branch's five newest
+picks as a diff: none touched a port-changed file, the engine rebuilt whole
+because one of them changed a WebCore base class, and the suite stayed at 55 of
+55.
+
+**Changing series** — 2.54 to 2.56 or later, or to `main`. That is the work
+below, and it is the one that also has to carry the ARMv7 JIT forward.
 
 ## The procedure this argues for
 
@@ -131,7 +134,7 @@ the one that also has to carry the ARMv7 JIT forward.
 ## What makes this cheaper next time
 
 Every unguarded change that could carry a guard should get one. The guard is not
-decoration: it is what lets the next graft find the change without reading the
-file. That is worth doing incrementally, in the areas an update will have to
+decoration: it is what lets the next base change find the change without reading
+the file. That is worth doing incrementally, in the areas an update will have to
 read anyway - `Source/WebCore/platform/graphics`, `Source/WebCore/loader`, and
 the JIT's platform layer.
