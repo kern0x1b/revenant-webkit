@@ -88,10 +88,37 @@ used `JSSet::offsetOfStorage()` without including `JSSet.h`, which the device
 build never noticed because it bundles that file into a unified source that
 happens to include the header. Compiled on its own, it does not build.
 
-**Where this stands:** the build works and the binary is a real 32-bit ARM
-executable. Running it does not yet: under `qemu-arm-static` it aborts during
-startup, before printing anything, with a deliberate `CRASH()` rather than a
-fault - the last syscalls are clock reads and then `tgkill(SIGIOT)`. The suites
-therefore do not run yet, and finding that abort is the next piece of work here.
-A debug build with assertions left in should name it in one run.
+**Where this stands.** The build works, the binary is a real 32-bit ARM
+executable, and it does not run yet. Under emulation it aborts during
+`JSGlobalObject::init`, and the stack says exactly where:
 
+    #1 WTFCrashWithInfo () at wtf/Assertions.h:1057
+    #2 JSC::DisallowVMEntryImpl<JSC::VM>::~DisallowVMEntryImpl
+         at runtime/DisallowVMEntry.h:56
+    #3 std::_Optional_payload_base<...>::_M_destroy
+    ...
+    #6 JSC::setupAdaptiveWatchpoint (JSGlobalObject*, JSObject*, Identifier const&)
+    #7 JSC::JSGlobalObject::init (JSC::VM&)
+
+The failing line is `RELEASE_ASSERT(m_vm->disallowVMEntryCount)` in that
+destructor: the count is already zero when the scope ends. The object lives
+inside the `std::optional` a `PropertySlot` holds when it is constructed for a
+`VMInquiry`, which is what `setupAdaptiveWatchpoint` does while wiring the array
+iterator watchpoints.
+
+What is known: it is not the JIT (`--useJIT=0` aborts identically), and it is
+not 32-bit as such - the phone runs this same code every day. So it is something
+about this configuration, and the next step is a build with assertions enabled,
+which will name the imbalance rather than leave it to be inferred. Until then
+this tier is a compiler, not a test runner, and the README says so rather than
+implying coverage that does not exist.
+
+Two real defects came out of the compiler alone:
+
+- `DFGSpeculativeJIT32_64.cpp` used `JSSet::offsetOfStorage()` without including
+  `JSSet.h`. The device build hides it inside a unified source.
+- `Source/bmalloc/CMakeLists.txt` defined `PAS_BMALLOC=1` for every target,
+  while `BPlatform.h` enables libpas only on 64-bit. A 32-bit CMake build
+  compiled bmalloc with the two disagreeing. That one is not iOS 6 specific: any
+  CMake port built for 32-bit hits it, and the GLib ports still build for
+  32-bit ARM.
