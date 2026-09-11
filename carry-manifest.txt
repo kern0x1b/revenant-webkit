@@ -21,6 +21,10 @@ file  Source/JavaScriptCore/offlineasm/arm.rb
 grep  Source/JavaScriptCore/offlineasm/backends.rb ARMv7
 grep  Source/JavaScriptCore/CMakeLists.txt assembler/MacroAssemblerARMv7.h
 grep  Source/WTF/wtf/PlatformCPU.h CPU_ARM_THUMB2
+grep  Source/WTF/wtf/PlatformUse.h USE_JSVALUE32_64
+grep  Source/JavaScriptCore/llint/LowLevelInterpreter.asm include LowLevelInterpreter32_64
+grep  Source/JavaScriptCore/runtime/EncodedValueDescriptor.h asBits
+grep  Source/JavaScriptCore/runtime/JSCJSValue.h EmptyValueTag
 
 # ---- the disassembler upstream does not build for this architecture --------
 file  Source/JavaScriptCore/disassembler/ARMv7/ARMv7DOpcode.cpp
