@@ -6,6 +6,7 @@ CXXF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=c
 CF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_class_names.h -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
 rm -rf $B && mkdir -p $B
 cmake -S $S -B $B -G Ninja \
+  -DCMAKE_MAKE_PROGRAM=$(command -v ninja) \
   `# ccache: every source file this build touches gets recompiled from scratch` \
   `# whenever a CMake flag changes, because the configure scripts rm -rf the` \
   `# build directory first - and tonight alone that has happened four times for` \
@@ -21,6 +22,7 @@ cmake -S $S -B $B -G Ninja \
   -DUSE_WEBP=ON -DWebP_INCLUDE_DIR=$WP/include -DWebP_LIBRARY=$WP/lib/libwebp.a -DWebP_DEMUX_LIBRARY=$WP/lib/libwebpdemux.a \
   -DSWIFT_REQUIRED=OFF -DWEBKIT_IOS6_COMPAT_LIB=$P/compat/libios6compat.a -DWEBKIT_IOS6_EXPORTS=$S/Source/WebKitLegacy/WebKitLegacy-iOS.exp -DWEBKIT_IOS6_LIBCXX_DIR=$L -DWEBKIT_NO_AVAILABILITY_OVERLAY=ON \
   -DENABLE_WEBKIT_LEGACY=ON -DENABLE_WEBKIT=OFF \
+  -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
   `# This is a touch device and these sites are written for a finger.` \
   `# ENABLE_TOUCH_EVENTS and ENABLE_IOS_TOUCH_EVENTS both default to OFF, so` \
   `# touch support was compiled out entirely: measured directly, a synthetic tap` \
