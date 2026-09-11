@@ -7,7 +7,7 @@
 #
 # The compiler runs natively and targets armhf; only the resulting binary is
 # emulated, so the build costs what a normal build costs.
-FROM debian:bookworm
+FROM debian:trixie
 
 RUN dpkg --add-architecture armhf && apt-get update && apt-get install -y --no-install-recommends \
         crossbuild-essential-armhf libicu-dev:armhf zlib1g-dev:armhf \

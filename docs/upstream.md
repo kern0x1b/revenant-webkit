@@ -24,6 +24,20 @@ If yes, it is upstream's.
   same gate the header uses.
 - **Carried here as:** `e59f29120a11` on this fork's `main`.
 
+### libpas is compiled for 32-bit targets, and cannot be
+
+- **Where:** `Source/bmalloc/CMakeLists.txt` lists every `libpas/src/libpas/*.c`
+  unconditionally.
+- **What is wrong:** libpas is 64-bit only - `pas_utils.h` uses `__uint128_t`,
+  which a 32-bit compiler does not have - and `BPlatform.h` says as much by
+  gating `BENABLE(LIBPAS)` on `BCPU(ADDRESS64)`. The source list does not.
+- **Symptom:** `error: unknown type name '__uint128_t'` in `pas_mte.c`, before
+  anything else is built. `USE_SYSTEM_MALLOC=ON` does not avoid it: the sources
+  are compiled either way.
+- **Fix:** wrap the `libpas` entries in `if (CMAKE_SIZEOF_VOID_P EQUAL 8)`, the
+  same gate the header uses. Same family as the `PAS_BMALLOC` item above and
+  probably the same patch.
+
 ## Not upstream's, though it looks like it
 
 ### `DFGSpeculativeJIT32_64.cpp` missing `#include "JSSet.h"`
