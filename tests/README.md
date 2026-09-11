@@ -88,3 +88,10 @@ used `JSSet::offsetOfStorage()` without including `JSSet.h`, which the device
 build never noticed because it bundles that file into a unified source that
 happens to include the header. Compiled on its own, it does not build.
 
+**Where this stands:** the build works and the binary is a real 32-bit ARM
+executable. Running it does not yet: under `qemu-arm-static` it aborts during
+startup, before printing anything, with a deliberate `CRASH()` rather than a
+fault - the last syscalls are clock reads and then `tgkill(SIGIOT)`. The suites
+therefore do not run yet, and finding that abort is the next piece of work here.
+A debug build with assertions left in should name it in one run.
+

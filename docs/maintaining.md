@@ -84,7 +84,7 @@ merge quietly take away from us".
 | 1. Carry manifest | nothing | seconds | our code deleted, a flag flipped, a guard reverted |
 | 2. Host checks | Mac | seconds | ICU data damage, the CA bundle's pin, generated encoding lists |
 | 3. armv7 build, then the symbol check | Mac | minutes | every API change upstream made to code we touch, and any new dependency on API iOS 6 may not have |
-| 4. 32-bit JSC suites | Mac + container | tens of minutes | our own 32-bit JSValue and JIT carry, against upstream's own test262 and stress suites |
+| 4. 32-bit JSC build, then its suites | Mac + container | tens of minutes | our own 32-bit JSValue and JIT carry. The build is live; running the binary under emulation aborts at startup and is not solved yet - see tests/README.md |
 | 5. Device suite | the iPhone | minutes | UIKit, CoreText, CoreGraphics, the GPU, and whether pages actually paint |
 | 6. Device long runs | the iPhone | tens of minutes | WebGL conformance, memory bands over cold launches, a crash sweep |
 

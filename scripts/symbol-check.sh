@@ -30,7 +30,8 @@ if [ "${1:-}" = --pin ]; then
     exit 0
 fi
 
-now=$(mktemp); collect > "$now"
+now=$(mktemp)
+collect > "$now" || { echo "FAIL  no usable build to check - build first"; exit 2; }
 grep -v '^#' "$PIN" | sort -u > "$now.pin"
 
 new=$(comm -23 <(grep '^undefined ' "$now") <(grep '^undefined ' "$now.pin"))

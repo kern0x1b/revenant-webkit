@@ -64,6 +64,32 @@ uint64_t mach_continuous_approximate_time(void) { return mach_absolute_time(); }
 #include <unistd.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <pthread.h>
+
+static unsigned long ios6_crc32Table[256];
+static pthread_once_t ios6_crc32TableOnce = PTHREAD_ONCE_INIT;
+
+static void ios6_buildCrc32Table(void)
+{
+    for (unsigned n = 0; n < 256; n++) {
+        unsigned long c = n;
+        for (int k = 0; k < 8; k++)
+            c = (c & 1) ? (0xedb88320UL ^ (c >> 1)) : (c >> 1);
+        ios6_crc32Table[n] = c;
+    }
+}
+
+unsigned long crc32_z(unsigned long crc, const unsigned char *buffer, size_t length)
+{
+    if (!buffer)
+        return 0;
+    pthread_once(&ios6_crc32TableOnce, ios6_buildCrc32Table);
+    crc = crc ^ 0xffffffffUL;
+    while (length--)
+        crc = ios6_crc32Table[(crc ^ *buffer++) & 0xff] ^ (crc >> 8);
+    return crc ^ 0xffffffffUL;
+}
+
 #include <dirent.h>
 #include <sys/param.h>
 
