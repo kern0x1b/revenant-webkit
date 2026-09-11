@@ -261,6 +261,7 @@ webkit-254/     The engine, a git submodule on the ios6-armv7 branch
 | [tests/device/README.md](tests/device/README.md) | What the on-device suite measures, and the limitations it records |
 | [tests/README.md](tests/README.md) | The ICU and JavaScript batteries, and the benchmarks meant for a browser |
 | [docs/tools.md](docs/tools.md) | The probes in `tools/`, and the question each one answers on the device |
+| [docs/upstream.md](docs/upstream.md) | Fixes this port carries that are WebKit's bugs, not iOS 6's, waiting to go back |
 | [docs/maintaining.md](docs/maintaining.md) | How this port is carried against a moving engine: the carry manifest, the test pyramid, and what an update runs |
 | [docs/core-update.md](docs/core-update.md) | Moving the port onto a newer engine branch |
 
