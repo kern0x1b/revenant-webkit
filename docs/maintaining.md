@@ -41,9 +41,14 @@ loud:
 
 For (2) the answer is a declarative manifest, checked before anything is built:
 
-```
+```sh
 scripts/carry-check.sh        # reads carry-manifest.txt, exits non-zero with a list
 ```
+
+It found its first real problem on the day it was written - an assertion that
+named the wrong header for `-[WAKWindow _windowRef]`, the accessor UIKit uses to
+get its window and the last thing that had to be restored before the engine
+would load at all.
 
 What it asserts about a merged tree:
 
@@ -56,10 +61,12 @@ What it asserts about a merged tree:
 - **Build facts that must hold**: `ENABLE_JIT` on and `ENABLE_C_LOOP` off for
   armv7, `USE(JSVALUE32_64)` reached by the armv7 configuration, the CMake
   entries that name the files above.
-- **Symbols that must stay exported**: the 147 imports the system's own
-  libraries take from WebKit, WebCore and JavaScriptCore, pinned as a file and
-  compared with `nm` against the built frameworks. UIKit needs 80 of them, and a
-  missing one is a launch-time death with no crash log.
+- **Symbols that must stay exported** — not implemented yet, and the next thing
+  to add: the 147 imports the system's own libraries take from WebKit, WebCore
+  and JavaScriptCore, pinned as a file and compared with `nm` against the built
+  frameworks. UIKit needs 80 of them, and a missing one is a launch-time death
+  with no crash log. It needs a build to check, so it belongs to tier 3 rather
+  than to this one.
 - **The guard census**: how many files carry `WEBKIT_IOS6`, by area. A merge that
   reverts one of our hunks usually shows up here first — the count drops in one
   directory.

@@ -1,0 +1,53 @@
+# What this port carries, and what must still be true of the engine tree after
+# an upstream merge. scripts/carry-check.sh reads this file and nothing else.
+#
+#   file  <path>                 the path must exist
+#   grep  <path> <text>          the file must contain that text
+#   guard <dir> <minimum>        at least N files under dir carry WEBKIT_IOS6
+#   set   <path> <text>          a build setting the port cannot run without
+#
+# A line here exists because losing it silently is worse than failing loudly.
+
+# ---- the 32-bit ARM world upstream deleted on 2026-08-01 -------------------
+file  Source/JavaScriptCore/assembler/ARMv7Assembler.h
+file  Source/JavaScriptCore/assembler/ARMv7Registers.h
+file  Source/JavaScriptCore/assembler/MacroAssemblerARMv7.h
+file  Source/JavaScriptCore/assembler/MacroAssemblerARMv7.cpp
+file  Source/JavaScriptCore/llint/LowLevelInterpreter32_64.asm
+file  Source/JavaScriptCore/dfg/DFGSpeculativeJIT32_64.cpp
+file  Source/JavaScriptCore/jit/JITOpcodes32_64.cpp
+file  Source/JavaScriptCore/jit/CallFrameShuffler32_64.cpp
+file  Source/JavaScriptCore/offlineasm/arm.rb
+grep  Source/JavaScriptCore/offlineasm/backends.rb ARMv7
+grep  Source/JavaScriptCore/CMakeLists.txt assembler/MacroAssemblerARMv7.h
+grep  Source/WTF/wtf/PlatformCPU.h CPU_ARM_THUMB2
+
+# ---- the disassembler upstream does not build for this architecture --------
+file  Source/JavaScriptCore/disassembler/ARMv7/ARMv7DOpcode.cpp
+file  Source/JavaScriptCore/disassembler/ARMv7/ARMv7DOpcode.h
+
+# ---- the GPU backend this port wrote --------------------------------------
+file  Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/eagl/DisplayEAGL.mm
+file  Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/eagl/IOSurfaceSurfaceEAGL.mm
+file  Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/eagl/PbufferSurfaceEAGL.cpp
+file  Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/eagl/DeviceEAGL.cpp
+
+# ---- the WebKit1 API UIKit links by name ----------------------------------
+file  Source/WebKitLegacy/mac/WebView/WebView.mm
+file  Source/WebKitLegacy/ios/WebCoreSupport/WebChromeClientIOS.mm
+grep  Source/WebCore/platform/ios/wak/WAKWindow.h _windowRef
+
+# ---- the build settings the device depends on -----------------------------
+set   scripts/configure-engine.sh -DENABLE_JIT=ON
+set   scripts/configure-engine.sh -DENABLE_C_LOOP=OFF
+set   scripts/configure-engine.sh -DENABLE_DFG_JIT=ON
+
+# ---- the port's own notes -------------------------------------------------
+file  PORTING-IOS6.md
+
+# ---- how much of the port announces itself --------------------------------
+# Floors, not exact counts: a merge that reverts port hunks shows up here first.
+guard Source/WebCore        250
+guard Source/JavaScriptCore  60
+guard Source/WTF             35
+guard Source/WebKitLegacy    15
