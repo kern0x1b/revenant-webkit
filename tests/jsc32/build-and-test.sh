@@ -16,10 +16,10 @@ docker run --rm -v "$P/webkit-254:/src:ro" -v "$BUILD:/build" -w /build "$IMAGE"
   if [ ! -f build.ninja ]; then
     cmake -S /src -B /build -G Ninja \
       -DCMAKE_TOOLCHAIN_FILE=/armhf.cmake \
-      -DPORT=JSCOnly -DCMAKE_BUILD_TYPE=Release \
+      -DPORT=JSCOnly -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DENABLE_JIT=ON -DENABLE_C_LOOP=OFF -DENABLE_DFG_JIT=ON -DENABLE_FTL_JIT=OFF \
       -DENABLE_STATIC_JSC=ON -DUSE_THIN_ARCHIVES=OFF \
-      -DENABLE_API_TESTS=OFF -DENABLE_TOOLS=OFF -DENABLE_WEBASSEMBLY=OFF
+      -DENABLE_API_TESTS=OFF -DENABLE_TOOLS=OFF
   fi
   ninja jsc
 '

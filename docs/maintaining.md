@@ -152,6 +152,21 @@ allowed to be red for as long as it takes — that is what it is for.
   the device.
 - **Per series hop, or before anything is published**: tier 6 as well.
 
+### Running it on a schedule
+
+Nothing here needs a service. One crontab line takes the series' own picks every
+Monday morning and leaves a log to read:
+
+```
+0 9 * * 1  cd ~/path/to/port && scripts/integrate.sh upstream/webkitglib/2.54 >> ~/port-integration.log 2>&1
+```
+
+It stops at the first gate that fails, and a run that cannot reach the phone
+exits 3 rather than reporting success - so an unattended run either produces a
+green log or a reason. What it must never do is push: a merge that nobody has
+read is not a release, and the only thing that makes a run shippable is a person
+looking at the device.
+
 ## What tracking `main` costs today, measured
 
 `git merge-tree` computes the merge without touching a working tree, so the
