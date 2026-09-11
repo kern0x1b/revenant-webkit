@@ -4,13 +4,32 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ENGINE=$ROOT/webkit-254
 MODE=size
-if [ "${1:-}" = "--freshness" ]; then MODE=freshness; shift; fi
-BASE=${1:-origin/webkitglib/2.54}
+AREA=Source
+case "${1:-}" in
+    --freshness) MODE=freshness; shift ;;
+    --unguarded) MODE=unguarded; shift; if [ $# -gt 0 ]; then AREA=$1; shift; fi ;;
+esac
+DEFAULT_BASE=upstream/webkitglib/2.54
+git -C "$ENGINE" rev-parse --verify -q "$DEFAULT_BASE" >/dev/null || DEFAULT_BASE=origin/webkitglib/2.54
+BASE=${1:-$DEFAULT_BASE}
 
 git -C "$ENGINE" rev-parse --verify -q "$BASE" >/dev/null || {
     echo "no such ref: $BASE (fetch it first)" >&2
     exit 1
 }
+
+if [ "$MODE" = unguarded ]; then
+    echo "changed files under $AREA that carry no WEBKIT_IOS6 guard, largest first"
+    echo "  these are the ones a conflict here has to be read by hand"
+    git -C "$ENGINE" grep -l WEBKIT_IOS6 -- "$AREA" 2>/dev/null | sort > /tmp/port-delta-guarded.$$
+    git -C "$ENGINE" diff --numstat "$BASE" HEAD -- "$AREA" \
+        | awk '{print $1 + $2 "\t" $3}' | sort -k2 > /tmp/port-delta-changed.$$
+    join -t"$(printf '\t')" -j 2 -v 1 -o 1.1,1.2 \
+        /tmp/port-delta-changed.$$ /tmp/port-delta-guarded.$$ 2>/dev/null \
+        | sort -rn | head -"${LIMIT:-40}"
+    rm -f /tmp/port-delta-guarded.$$ /tmp/port-delta-changed.$$
+    exit 0
+fi
 
 if [ "$MODE" = freshness ]; then
     echo "how fresh the snapshot is, against $BASE"

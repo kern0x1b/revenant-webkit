@@ -131,10 +131,29 @@ below, and it is the one that also has to carry the ARMv7 JIT forward.
 6. Anything the suite does not cover that the update touches gets a check added
    to it first, not after.
 
-## What makes this cheaper next time
+## What the guard is for now
 
-Every unguarded change that could carry a guard should get one. The guard is not
-decoration: it is what lets the next base change find the change without reading
-the file. That is worth doing incrementally, in the areas an update will have to
-read anyway - `Source/WebCore/platform/graphics`, `Source/WebCore/loader`, and
-the JIT's platform layer.
+Of the 1309 files changed under `Source`, 375 carry the `WEBKIT_IOS6` guard and
+920 do not. That number used to matter a great deal: with a graft, the guard was
+the only way a future re-graft could find this port's changes without reading
+every file.
+
+Ancestry changed that. A merge finds the changes by history, so the guard's
+remaining job is narrower and still worth something: it tells a person reading a
+conflict which side is the port and why it is there. That is a reason to guard a
+subtle hunk in code upstream is actively changing - the graphics platform layer,
+the loader, JavaScriptCore's platform code - and not a reason to wrap 460 files
+mechanically, which would change meaning in some of them for no benefit.
+
+For triage during a merge:
+
+```sh
+scripts/port-delta.sh --unguarded Source/WebCore/platform
+```
+
+lists the changed files in an area that carry no guard, largest diff first -
+that is the read-by-hand set if a conflict lands there.
+
+Of the 920, 81 are files that exist only in this port, 26 are build and
+generator files, and 460 are source files outside the wholesale reinstatements
+of WebKitLegacy and bmalloc. Their median diff is ten lines.
