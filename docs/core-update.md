@@ -192,6 +192,24 @@ against 156 MB, WebGL presents at 28-30 fps in both, and the conformance subsets
 that are red are red identically on both, for driver reasons documented in
 [webgl.md](webgl.md).
 
+What the port weighs against trunk, which is the after picture the procedure
+below asks for:
+
+```
+port delta against upstream/main
+ 1640 files changed, 95944 insertions(+), 21215 deletions(-)
+
+  Source/WebCore          596 files  +23884  -3548
+  Source/JavaScriptCore   490 files  +55639  -16898
+  Source/WebKitLegacy     390 files  +6336   -318
+  Source/WTF               63 files  +2114   -298
+  Source/bmalloc           56 files  +5504   -87
+```
+
+JavaScriptCore dominates it now because trunk deleted the 32-bit engine and this
+branch carries it: the ARMv7 assembler and disassembler, the 32-bit tiers, the
+32-bit LLInt and the build entries that name them.
+
 The audit that found the lost adaptations is now a script:
 
 ```sh
