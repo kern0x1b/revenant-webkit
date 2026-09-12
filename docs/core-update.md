@@ -149,6 +149,60 @@ The branch is `trunk-integration` in the engine fork, and `git rerere` recorded
 183 resolutions along the way, so redoing the merge replays them instead of
 asking again.
 
+## The trunk branch runs, 2026-09-12
+
+`trunk-integration` is no longer a measurement. Built for armv7 against
+`upstream/main` it loads in Mobile Safari, renders, runs JavaScript through the
+LLInt, the baseline JIT and the DFG, and passes the device suite 55 of 55. The
+32-bit engine world was carried, not replaced: the JSValue representation work
+described in [armv7-jit.md](armv7-jit.md) turned out not to be a precondition.
+
+What actually had to be fixed after the merge compiled, in the order the phone
+found them:
+
+- **The LLInt's tier-up path popped one register.** `macro prologue` kept only
+  the x86 spelling, `pop cfr`. ARMv7 pushes `lr` and `cfr` separately, so every
+  frame the interpreter handed to compiled code sat four bytes low and the
+  CodeBlock was read out of the wrong half of its slot. Everything above the
+  interpreter crashed until both pops were restored.
+- **A duplicated lock deadlocked the first property store.** The carry left a
+  `GCSafeConcurrentJSLocker` around upstream's own `ConcurrentJSLocker` on the
+  same CodeBlock lock in `slow_path_put_by_id`. `o.a = 1` parked the main thread
+  forever. A trace of `WTF::Lock::lockSlow` printing the lock address found it in
+  one run: it fired exactly once, at `CodeBlock+0xc`.
+- **Linear sRGB stopped being distinguishable from sRGB.** Trunk renamed
+  `DestinationColorSpace` to `ColorSpace` and dropped the port's linear flag. iOS
+  6 has no linear color space, so the port maps it onto device RGB and
+  `CGColorSpaceEqualToColorSpace` then calls the two spaces equal, which silently
+  removed both filter conversions.
+- **WebGL required a framebuffer blit the driver does not have.** Upstream now
+  demands `GL_NV_framebuffer_blit` at context creation; the 4S exposes neither it
+  nor `GL_ANGLE_framebuffer_blit`, so every `getContext("webgl")` returned null.
+  The requirement is soft again, surface copies fall back to reading the pixels
+  back, and `preserveDrawingBuffer` copies with `CopyTexSubImage2D`.
+- **Three port adaptations came back from files taken wholesale from trunk.**
+  Touches stopped producing pointer events, which is exactly the bug that once
+  made media controls untappable; the layout viewport override and the
+  fixed-position rect were no longer refreshed at layout; and the inspector-only
+  quad collection ran on every layout again.
+
+Measured against the shipping fork on the same pages, the trunk engine is not a
+regression: Safari's dirty memory is 17.9 MB against 19.5 MB and resident 143 MB
+against 156 MB, WebGL presents at 28-30 fps in both, and the conformance subsets
+that are red are red identically on both, for driver reasons documented in
+[webgl.md](webgl.md).
+
+The audit that found the lost adaptations is now a script:
+
+```sh
+scripts/carry-audit.sh main Source/WebCore/page
+```
+
+It compares, per file, how many port markers a file carries here against the
+same file on a reference branch. A file that thinned out is either an upstream
+refactor or a carry that was dropped when the file was taken from trunk, and
+every one of them is worth reading before a release.
+
 ## The procedure this argues for
 
 1. Run `scripts/port-delta.sh` against the current base and keep the output. It

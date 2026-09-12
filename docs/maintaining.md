@@ -186,13 +186,15 @@ Of those 337, **143 are files this port changed**. The rest is the year of
 divergence between the 2.54 branch and trunk, which any base change would have
 to absorb once and then never again.
 
-## The one thing standing between this and tracking `main`
+## What tracking `main` turned out to need
 
-`main` has no 32-bit JSValue at all, so basing on it requires carrying a 64-bit
-NaN-boxed JSValue on ARMv7 — designed in [armv7-jit.md](armv7-jit.md), not
-written. Until that exists, the integration branch against `main` is a
-measurement, not a candidate, and shipping happens from the newest live series
-of the GLib ports, which still carries the 32-bit world.
+`main` has no 32-bit JSValue, and the plan here used to be that basing on it
+required a 64-bit NaN-boxed JSValue on ARMv7 first. That proved wrong in
+practice: the 32-bit world is a set of files and build entries, and carrying them
+onto trunk is mechanical enough that the branch now runs on the phone. What the
+merge really costs is written up in
+[core-update.md](core-update.md#the-trunk-branch-runs-2026-09-12), together with
+the five bugs that only the device found.
 
 That is not a dependency on someone's goodwill: with a real merge base, the
 choice of upstream ref is a one-line change, and every piece of the port,
