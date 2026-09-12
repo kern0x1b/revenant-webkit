@@ -234,6 +234,24 @@ JavaScriptCore dominates it now because trunk deleted the 32-bit engine and this
 branch carries it: the ARMv7 assembler and disassembler, the 32-bit tiers, the
 32-bit LLInt and the build entries that name them.
 
+## What is still not on trunk, and why
+
+277 files under `Source/JavaScriptCore` and `Source/WTF` are still byte-for-byte
+the 2023 base: the port never touched them, and the merge never moved them
+forward either. They are found by comparing each file against the fork's base
+commit rather than against the fork tip, because a file the port restored to its
+old content looks untouched to any other test.
+
+Taking upstream's version of all 277 was tried and reverted the same day. The
+files do not move independently: upstream's `AirOpcode.opcodes` needs upstream's
+`opcode_generator.rb` (the old one has no `x86` architecture prefix any more),
+upstream's Yarr interpreter needs upstream's whole Yarr family down to
+`ByteTerm`, and several of the newer files drop the ARMv7 case this port lives
+on - `MaxFrameExtentForSlowPathCall.h` has no `CPU(ARM_THUMB2)` value in trunk at
+all. What that pass actually needs is one directory at a time with a build and
+the device suite after each, not a single sweep; the sweep is what this note
+exists to prevent someone repeating.
+
 The audit that found the lost adaptations is now a script:
 
 ```sh
