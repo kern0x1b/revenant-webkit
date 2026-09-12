@@ -156,6 +156,16 @@ Two more sat in the injected dylib and reported invented numbers:
 - `_smartDeleteRangeForProposedRange:` returns its input, so there is no smart
   delete. Real `Editor` backing exists, but this touches the live field editor
   in the address bar, where a wrong range over-deletes.
+- **Subnormal doubles are flushed to zero.** `0 < Number.MIN_VALUE` answers
+  false here, and `5e-324 * 2` is 0: the VFP unit runs with FPSCR.FZ set, so
+  every denormal result becomes zero. This is the platform's default and not
+  something the engine chose - the shipping fork answers the same - and it is a
+  real deviation from the language, which has no flush-to-zero. Clearing FZ per
+  thread would fix the semantics and hand every denormal operation to the
+  support code path instead of the hardware, so it is a trade to measure before
+  it is made rather than an oversight. Found by JSC's own
+  `JSTests/stress/big-int-less-than-general.js`, which compares `0n` against
+  `Number.MIN_VALUE`.
 
 ## Soft-linked constants
 
