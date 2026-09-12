@@ -234,6 +234,27 @@ JavaScriptCore dominates it now because trunk deleted the 32-bit engine and this
 branch carries it: the ARMv7 assembler and disassembler, the 32-bit tiers, the
 32-bit LLInt and the build entries that name them.
 
+## Open on trunk, found by the suite and not yet chased
+
+`JSTests/stress` run from the phone leaves a short list that is not explained
+yet, and it is written down here rather than carried in someone's head:
+
+- `const-tdz.js` and `const-semantics.js` report **"Suspected memory corruption:
+  invalid handle"** from the collector, five times per run, and exit on a trap.
+  That is the GC finding a dangling cell - a missing write barrier, an
+  incomplete `visitChildren`, or an unrooted object - and it is the most serious
+  of these because it is the class of bug that takes a browser down at random.
+- `class-syntax-double-constructor.js`, `codeblock-should-clear-watchpoints-on-destruction.js`,
+  `compiler-thread-should-not-ref-identifiers.js`, `create-promise.js`,
+  `derived-promise-constructor-inlined.js`, `date-get-utc-seconds-jit.js`,
+  `data-view-byte-length-oob-exit.js`, `compare-bigint-with-string.js` and
+  `constant-folding-phase-insert-check-handle-varargs.js` take a signal as well.
+  None of them is triaged yet; the first question for each is whether the
+  shipping fork does the same, because the answer decides whether it is this
+  merge or an older 32-bit hole.
+- Tests marked `memoryHog!` and the OOM tests are killed by jetsam here, which
+  is the phone being a phone rather than a finding.
+
 ## What is still not on trunk, and why
 
 277 files under `Source/JavaScriptCore` and `Source/WTF` are still byte-for-byte
