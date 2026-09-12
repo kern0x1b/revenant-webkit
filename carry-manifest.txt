@@ -26,6 +26,15 @@ grep  Source/JavaScriptCore/llint/LowLevelInterpreter.asm include LowLevelInterp
 grep  Source/JavaScriptCore/runtime/EncodedValueDescriptor.h asBits
 grep  Source/JavaScriptCore/runtime/JSCJSValue.h EmptyValueTag
 
+grep  Source/JavaScriptCore/llint/LowLevelInterpreter.asm elsif ARMv7
+grep  Source/JavaScriptCore/llint/LowLevelInterpreter.asm storep PB, -4[cfr]
+
+# ---- adaptations the device catches only after a long run -----------------
+grep  Source/WebCore/page/EventHandler.cpp PLATFORM(WPE) || PLATFORM(GTK) || defined(WEBKIT_IOS6)
+grep  Source/WebCore/platform/graphics/ColorSpace.h isLinearSRGB
+grep  Source/WebCore/page/LocalFrameViewLayoutContext.cpp setFixedPositionRectAtLastLayout
+grep  Source/WebCore/platform/graphics/cocoa/GraphicsContextGLCocoa.mm supportsFlipBlit
+
 # ---- the disassembler upstream does not build for this architecture --------
 file  Source/JavaScriptCore/disassembler/ARMv7/ARMv7DOpcode.cpp
 file  Source/JavaScriptCore/disassembler/ARMv7/ARMv7DOpcode.h
