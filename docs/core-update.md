@@ -194,6 +194,16 @@ found them:
   with SIGILL, SIGSEGV or SIGBUS about two runs in five. `JSC_useConcurrentGC=false`
   made it deterministic, which is what made it findable at all.
 
+- **Zeroing a butterfly range does not empty it on 32-bit.** Upstream's fast
+  path for shrinking `length` and for `splice` clears contiguous slots with
+  `gcSafeZeroMemory`, which is only the empty value where a JSValue is 64 bits
+  wide. Here the tag word has to say empty, so `a[2] = "x"; a.length = 1` left
+  `2 in a` answering true. The whole class is findable with `grep
+  gcSafeZeroMemory`: wherever the fork has a `.clear()` loop and this tree has a
+  memset, it is the same bug. `JSTests/es6` catches it in one run - 595 of 605
+  pass now, and the ten that do not are the ten `es6.yaml` itself marks as
+  expected failures.
+
 Running JSC's own `JSTests/stress` on the phone is what caught that one: 760
 files, 16 of them crashing, all in the same feature. The suite is not wired into
 a runner here - `for f in *.js; do jsc $f; echo $?; done` with
