@@ -2,14 +2,41 @@
 # Lists files whose port adaptations thinned out against a reference branch.
 #
 #   scripts/carry-audit.sh [ref] [path ...]
+#   scripts/carry-audit.sh --stale [base] [path ...]
 #
 # The count of port markers per file is compared with the same file on the
-# reference branch; a file that carries fewer markers than the reference is
+# reference branch; --stale instead lists the files that still carry the content
+# of the graft base, which are the ones an update left behind entirely.
+#
+# The marker comparison a file that carries fewer markers than the reference is
 # either an upstream refactor or a carry that was dropped when the file was
 # taken from trunk, and every one of them is worth reading before a release.
 set -uo pipefail
 P=$(cd "$(dirname "$0")/.." && pwd)
 E=$P/webkit-254
+
+if [ "${1:-}" = --stale ]; then
+    shift
+    BASE=${1:-1b78c03f880e}
+    shift || true
+    paths=("$@")
+    [ ${#paths[@]} -eq 0 ] && paths=(Source/JavaScriptCore Source/WTF Source/WebCore Source/WebKitLegacy)
+    cd "$E" || exit 2
+    stale=0
+    while read -r f; do
+        [ -f "$f" ] || continue
+        ours=$(git rev-parse "HEAD:$f" 2>/dev/null) || continue
+        base=$(git rev-parse "$BASE:$f" 2>/dev/null) || continue
+        up=$(git rev-parse "upstream/main:$f" 2>/dev/null) || continue
+        if [ "$ours" = "$base" ] && [ "$ours" != "$up" ]; then
+            echo "$f"
+            stale=$((stale+1))
+        fi
+    done < <(git ls-files "${paths[@]}")
+    echo "$stale files the port never touched and the merge never moved"
+    exit 0
+fi
+
 REF=${1:-main}
 shift || true
 paths=("$@")
