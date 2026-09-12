@@ -19,6 +19,9 @@ build-icu-host/
 build-jit/
 build-jsc/
 build-jsc32/
+build-jsc32base/
+build-jsc32c/
+build-jsc32pure/
 build-libcxx/
 build-trunk/
 

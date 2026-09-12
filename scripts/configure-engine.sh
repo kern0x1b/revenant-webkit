@@ -23,6 +23,8 @@ cmake -S $S -B $B -G Ninja \
   -DSWIFT_REQUIRED=OFF -DWEBKIT_IOS6_COMPAT_LIB=$P/compat/libios6compat.a -DWEBKIT_IOS6_EXPORTS=$S/Source/WebKitLegacy/WebKitLegacy-iOS.exp -DWEBKIT_IOS6_LIBCXX_DIR=$L -DWEBKIT_NO_AVAILABILITY_OVERLAY=ON \
   -DENABLE_WEBKIT_LEGACY=ON -DENABLE_WEBKIT=OFF \
   -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=6.0 \
+  -DENABLE_MEDIA_RECORDER=OFF \
   `# This is a touch device and these sites are written for a finger.` \
   `# ENABLE_TOUCH_EVENTS and ENABLE_IOS_TOUCH_EVENTS both default to OFF, so` \
   `# touch support was compiled out entirely: measured directly, a synthetic tap` \
