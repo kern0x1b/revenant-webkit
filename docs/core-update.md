@@ -186,6 +186,20 @@ found them:
   fixed-position rect were no longer refreshed at layout; and the inspector-only
   quad collection ran on every layout again.
 
+- **A dropped node child made `for await` crash once it tiered up.** The merge
+  lost the third child of `EnqueueAsyncGeneratorDriver`, so the DFG read the
+  resume value from an operand whose edge did not exist. On 32-bit that
+  operand's register pair is left uninitialized by the constructor's early
+  return, so the call marshalled two random registers: a `for await` loop died
+  with SIGILL, SIGSEGV or SIGBUS about two runs in five. `JSC_useConcurrentGC=false`
+  made it deterministic, which is what made it findable at all.
+
+Running JSC's own `JSTests/stress` on the phone is what caught that one: 760
+files, 16 of them crashing, all in the same feature. The suite is not wired into
+a runner here - `for f in *.js; do jsc $f; echo $?; done` with
+`JSC_useDollarVM=true` is enough, because what is being asked is whether the
+engine takes a signal, not whether each test's assertions hold.
+
 Measured against the shipping fork on the same pages, the trunk engine is not a
 regression: Safari's dirty memory is 17.9 MB against 19.5 MB and resident 143 MB
 against 156 MB, WebGL presents at 28-30 fps in both, and the conformance subsets
