@@ -20,9 +20,11 @@ if grep -q "Address already in use" "$LOG"; then
 fi
 
 pages=(text-and-emoji gradients-and-blends image-draw-cost svg-image-filters web-platform)
+device_run 20 "killall MobileSafari 2>/dev/null" >/dev/null 2>&1
+sleep 12
+device_run 20 "uiopen 'http://$HOST:$PORT/warmup.html?run=$RANDOM'" >/dev/null 2>&1
+sleep 6
 for page in "${pages[@]}"; do
-    device_run 20 "killall MobileSafari 2>/dev/null" >/dev/null 2>&1
-    sleep 12
     device_run 20 "uiopen 'http://$HOST:$PORT/$page.html?run=$RANDOM'" >/dev/null 2>&1
     for _ in $(seq 1 22); do
         sleep 2
