@@ -277,6 +277,25 @@ yet, and it is written down here rather than carried in someone's head:
 - Tests marked `memoryHog!` and the OOM tests are killed by jetsam here, which
   is the phone being a phone rather than a finding.
 
+## The 32-bit engine can now be built with assertions
+
+Upstream has no 32-bit bots any more, so the invariants JavaScriptCore checks
+in an assertion build have not been run against a 32-bit engine in years. Three
+ARMv7 facts had to be stated before such a build would start, and they are in
+`867f5bc0f811`: the opcode id that sits ahead of an LLInt label must be read
+from the untagged address, since a Thumb code pointer carries its low bit set;
+unaligned halfword loads are allowed on ARMv7, so the pointer-alignment
+assertion that guards older ARM does not apply here; and the LLInt's own
+assertions do not fit in the ARMv7 register budget, so offlineasm keeps them
+off. The same commit carries a fix that assertion build found immediately: the
+32-bit DFG compiled `CheckPrivateBrand` with a `JSValueOperand` on an edge the
+fixup phase now fixes to `CellUse`, where the 64-bit path and the 32-bit
+`SetPrivateBrand` both use a `SpeculateCellOperand`.
+
+Configure it by cloning the shipping build's cache with `ENABLE_ASSERTS=ON` and
+`-DENABLE_LLINT_EMBEDDED_OPCODE_ID=0`; the second flag is still needed because
+reading the embedded id back out of a Thumb label does not work yet.
+
 ## What is still not on trunk, and why
 
 277 files under `Source/JavaScriptCore` and `Source/WTF` are still byte-for-byte
