@@ -272,14 +272,21 @@ yet, and it is written down here rather than carried in someone's head:
   failure - `promise.__proto__` comes back as `Number.prototype`, because the
   value really is a double by then.
 
-  What is known: it needs the concurrent compiler (`useConcurrentJIT=false` is
-  clean at the same loop counts, and that is not the loop-count clamp, since
-  this repro counts for itself); it survives turning OSR entry off; every
-  `DirectConstruct` in the compiled graph is predicted `AnyIntAsDouble`, so the
-  DFG inserts a `Check:Number` on the construct's result and that check passes,
-  which is only possible if the tag half already holds a pointer; and the
-  32-bit store protocol is not involved, since forcing the plain
-  store in `storeAndFence32` changes nothing.
+  What it needs is **varargs inlining**: `JSC_maximumVarargsForInlining=0` is
+  clean, and so is `maximumInliningDepth=1`. It is not about constructors -
+  `f(...args)` returns a bad value the same way - and not about the implicit
+  constructor, which only looked special because a derived class that declares
+  none gets `super(...args)`. It is not the 32-bit store protocol either:
+  forcing the plain store in `storeAndFence32` changes nothing, and the
+  protocol with the concurrent compiler off is clean. `operationLoadVarargs`
+  receives its arguments correctly, so the marshalling into it is not where it
+  goes wrong. The DFG's own assertions and graph validation stay quiet.
+
+  `JSC_maximumVarargsForInlining` is 0 by default on 32-bit as of
+  `899f706c81bf`, so a spread call is no longer inlined here. That is not a
+  fix; it turns a wrong value into a missed optimization, and setting the
+  option back to 100 brings the repro straight back for whoever chases the
+  miscompilation.
 
 ## The collector crash was the interpreter's registers, 2026-09-13
 
@@ -407,7 +414,7 @@ same file on a reference branch. A file that thinned out is either an upstream
 refactor or a carry that was dropped when the file was taken from trunk, and
 every one of them is worth reading before a release.
 
-## The suite was measuring Safari's first page
+## The suite was measuring a Safari without the tweak
 
 The device suite killed Safari before every page. On a freshly launched
 Safari the tweak's window-object hook is not in place for the first page it
@@ -416,10 +423,13 @@ finds it on every load after that - which made whichever page happened to be
 first decide whether the run reported the bridge missing. A healthy engine
 reported two web-platform failures this way three runs in a row.
 
-The suite now kills Safari once, waits twelve seconds, and loads a warm-up
-page, so no measured page is ever the first one. The gap itself is worth
-closing on the tweak's side: the bridge should be installed for a window
-object that already exists when the hook goes in, not only for the next one.
+It is worse than the first page: Safari gets restarted during a run - this
+iPad drops it under memory pressure on the heavier pages - and it does not
+always come back injected at all. The warm-up page now reports whether the
+bridge is there and the suite loads it before every measured page, restarting
+Safari and trying again when it is not. The gap is still worth closing on the
+tweak's side: the bridge should be installed for a window object that already
+exists when the hook goes in, not only for the next one.
 
 ## The procedure this argues for
 
