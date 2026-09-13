@@ -384,6 +384,18 @@ work actually is:
   on 32-bit. Whether `decodeConcurrent()` has since made the lock unnecessary
   is the question to answer before taking that directory, not after.
 
+Of that clean half, 55 are in and 222 files remain: B3, Air and the FTL move
+as one, since nothing in them is compiled into what this port runs. What is
+left needs work per family rather than per file:
+
+- `jit` and `dfg` are held by their own families. Trunk's
+  `ScratchRegisterAllocator` and `SnippetParams` speak `SnippetReg` where this
+  port's inline-cache compiler passes `JSValueRegs`, and the arithmetic
+  snippet headers do not match the `.cpp` files beside them. `JITCode.h` is
+  not takeable at all until someone writes the 32-bit half: trunk packs a
+  pointer and a type tag into one 64-bit word with `bit_cast<uint64_t>(void*)`.
+- `AirOpcode.opcodes` needs trunk's `opcode_generator.rb`, as before.
+
 The audit that found the lost adaptations is now a script:
 
 ```sh
@@ -394,6 +406,20 @@ It compares, per file, how many port markers a file carries here against the
 same file on a reference branch. A file that thinned out is either an upstream
 refactor or a carry that was dropped when the file was taken from trunk, and
 every one of them is worth reading before a release.
+
+## The suite was measuring Safari's first page
+
+The device suite killed Safari before every page. On a freshly launched
+Safari the tweak's window-object hook is not in place for the first page it
+loads, so a page that checks `window.WebAssembly` there finds nothing and
+finds it on every load after that - which made whichever page happened to be
+first decide whether the run reported the bridge missing. A healthy engine
+reported two web-platform failures this way three runs in a row.
+
+The suite now kills Safari once, waits twelve seconds, and loads a warm-up
+page, so no measured page is ever the first one. The gap itself is worth
+closing on the tweak's side: the bridge should be installed for a window
+object that already exists when the hook goes in, not only for the next one.
 
 ## The procedure this argues for
 
