@@ -366,6 +366,24 @@ all. What that pass actually needs is one directory at a time with a build and
 the device suite after each, not a single sweep; the sweep is what this note
 exists to prevent someone repeating.
 
+Sorting the 277 by whether their diff against trunk mentions 32-bit at all
+splits them almost in half: 134 read as pure upstream evolution and 143 touch
+`USE(JSVALUE32_64)`, `CPU(ARM_THUMB2)` or the port's own marker. The clean half
+is not automatically takeable either, and the first three attempts say what the
+work actually is:
+
+- `StackBounds.h` and `WasmValueLocation.h` moved with nothing else and are in.
+- The Yarr family moves as a unit - taking `YarrInterpreter.h` alone leaves
+  `YarrInterpreter.cpp` reaching for `ByteTerm::Type` members trunk renamed -
+  and the unit carries real port work: ARMv7 register assignments in
+  `YarrJITRegisters.h` and this port's `WEBKIT_IOS6_YARR_JIT_LOG`. It needs a
+  pass that re-applies those onto trunk's files.
+- `bytecode` runs into an API change that is 64-bit reasoning: trunk drops the
+  `ConcurrentJSLocker` from `ValueProfile` and `ArrayProfile` updates, and this
+  port holds that lock precisely because reading a JSValue pair is not atomic
+  on 32-bit. Whether `decodeConcurrent()` has since made the lock unnecessary
+  is the question to answer before taking that directory, not after.
+
 The audit that found the lost adaptations is now a script:
 
 ```sh
