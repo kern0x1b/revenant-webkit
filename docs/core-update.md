@@ -240,10 +240,32 @@ branch carries it: the ARMv7 assembler and disassembler, the 32-bit tiers, the
 yet, and it is written down here rather than carried in someone's head:
 
 - `const-tdz.js` and `const-semantics.js` report **"Suspected memory corruption:
-  invalid handle"** from the collector, five times per run, and exit on a trap.
-  That is the GC finding a dangling cell - a missing write barrier, an
-  incomplete `visitChildren`, or an unrooted object - and it is the most serious
-  of these because it is the class of bug that takes a browser down at random.
+  invalid handle"** from the collector and exit on a trap. What is known about it
+  so far, all of it measured:
+  - It is a **trunk regression**: the same test on the shipping fork's engine is
+    clean. The cheap way to run that comparison is to stage the other engine's
+    `JavaScriptCore.framework` into a directory of its own and point
+    `DYLD_FRAMEWORK_PATH` at it - `scripts/layout-sys-frameworks.sh <dir>` writes
+    exactly what the device needs, and the live engine is never touched.
+  - The dangling pointer is a **`JSCallee::m_scope` pointing at a cell that is
+    already on a free list**. The first eight bytes of that cell always read
+    `0x10fefc70fefd9184`, which is what a free cell's scrambled next pointer
+    looks like when the next pointer is null.
+  - It does not need the JIT (`useJIT=false` reproduces), does not need
+    concurrent, generational or parallel collection (all off still reproduces),
+    and does not need the port's block reservation pool (bypassing it still
+    reproduces). Taking the heap allocator files from the fork -
+    `MarkedBlock`, `BlockDirectory`, `LocalAllocator`, `FreeList`, `SlotVisitor`
+    and friends - also still reproduces, so the collector's block machinery is
+    not where the bug lives.
+  - It needs heap churn to appear: the first fifteen blocks of `const-tdz.js`
+    are clean, and the sixteenth - `switch` statements with `const` bindings in
+    their cases, closures over them, and a thousand TDZ throws - is what tips it
+    over. That block on its own, repeated, does not reproduce.
+  - The reproduction is `JSTests/stress/const-tdz.js` cut to its first sixteen
+    blocks; keeping the freed pages mapped (the pool's `decommit` skipped) turns
+    the random SIGSEGV/SIGBUS into the collector's own diagnostic, which is what
+    made any of this readable.
 - `class-syntax-double-constructor.js`, `codeblock-should-clear-watchpoints-on-destruction.js`,
   `compiler-thread-should-not-ref-identifiers.js`, `create-promise.js`,
   `derived-promise-constructor-inlined.js`, `date-get-utc-seconds-jit.js`,
