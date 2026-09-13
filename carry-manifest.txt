@@ -45,6 +45,20 @@ file  Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/eagl/IOSurfaceSurfaceEAGL
 file  Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/eagl/PbufferSurfaceEAGL.cpp
 file  Source/ThirdParty/ANGLE/src/libANGLE/renderer/gl/eagl/DeviceEAGL.cpp
 
+# ---- what a file being "still at the 2023 base" is hiding ------------------
+# These are not files the merge forgot; each holds 32-bit code trunk deleted,
+# and taking trunk's version breaks this port. The greps are what would be lost.
+grep  Source/WTF/wtf/FunctionTraits.h computeCCallSlots
+grep  Source/WTF/wtf/CodePtr.h CPU(ARM_THUMB2) && ENABLE(JIT)
+grep  Source/JavaScriptCore/jit/JITCode.h m_encodedPointer
+grep  Source/JavaScriptCore/yarr/YarrJITRegisters.h CPU(ARM_THUMB2)
+grep  Source/JavaScriptCore/yarr/YarrJIT.cpp WEBKIT_IOS6_YARR_JIT_LOG
+grep  Source/JavaScriptCore/bytecode/ValueProfile.h ConcurrentJSLocker
+grep  Source/JavaScriptCore/bytecode/CodeBlock.cpp updateAllLazyValueProfilePredictions
+
+# ---- what the 32-bit DFG cannot do yet ------------------------------------
+grep  Source/JavaScriptCore/runtime/Options.cpp maximumVarargsForInlining
+
 # ---- the WebKit1 API UIKit links by name ----------------------------------
 file  Source/WebKitLegacy/mac/WebView/WebView.mm
 file  Source/WebKitLegacy/ios/WebCoreSupport/WebChromeClientIOS.mm
