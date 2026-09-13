@@ -20,11 +20,28 @@ if grep -q "Address already in use" "$LOG"; then
 fi
 
 pages=(text-and-emoji gradients-and-blends image-draw-cost svg-image-filters web-platform)
+token=0
+ensure_bridge() {
+    for attempt in 1 2 3; do
+        token=$((token + 1))
+        device_run 20 "uiopen 'http://$HOST:$PORT/warmup.html?token=$token'" >/dev/null 2>&1
+        for _ in $(seq 1 8); do
+            sleep 2
+            grep -q "GET /warm-up-state?bridge=yes&token=$token" "$LOG" && return 0
+        done
+        echo "the tweak is not in this Safari; restarting it (attempt $attempt)" >&2
+        device_run 20 "killall MobileSafari 2>/dev/null" >/dev/null 2>&1
+        sleep 12
+    done
+    echo "giving up on the tweak; the bridges it installs will read as missing" >&2
+    return 1
+}
+
 device_run 20 "killall MobileSafari 2>/dev/null" >/dev/null 2>&1
 sleep 12
-device_run 20 "uiopen 'http://$HOST:$PORT/warmup.html?run=$RANDOM'" >/dev/null 2>&1
-sleep 6
+
 for page in "${pages[@]}"; do
+    ensure_bridge
     device_run 20 "uiopen 'http://$HOST:$PORT/$page.html?run=$RANDOM'" >/dev/null 2>&1
     for _ in $(seq 1 22); do
         sleep 2
