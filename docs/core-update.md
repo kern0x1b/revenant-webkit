@@ -384,7 +384,7 @@ work actually is:
   on 32-bit. Whether `decodeConcurrent()` has since made the lock unnecessary
   is the question to answer before taking that directory, not after.
 
-Of that clean half, 55 are in and 222 files remain: B3, Air and the FTL move
+Of that clean half, 57 are in and 220 files remain: B3, Air and the FTL move
 as one, since nothing in them is compiled into what this port runs. What is
 left needs work per family rather than per file:
 
