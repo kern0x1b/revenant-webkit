@@ -239,34 +239,7 @@ branch carries it: the ARMv7 assembler and disassembler, the 32-bit tiers, the
 `JSTests/stress` run from the phone leaves a short list that is not explained
 yet, and it is written down here rather than carried in someone's head:
 
-- `const-tdz.js` and `const-semantics.js` report **"Suspected memory corruption:
-  invalid handle"** from the collector and exit on a trap. What is known about it
-  so far, all of it measured:
-  - It is a **trunk regression**: the same test on the shipping fork's engine is
-    clean. The cheap way to run that comparison is to stage the other engine's
-    `JavaScriptCore.framework` into a directory of its own and point
-    `DYLD_FRAMEWORK_PATH` at it - `scripts/layout-sys-frameworks.sh <dir>` writes
-    exactly what the device needs, and the live engine is never touched.
-  - The dangling pointer is a **`JSCallee::m_scope` pointing at a cell that is
-    already on a free list**. The first eight bytes of that cell always read
-    `0x10fefc70fefd9184`, which is what a free cell's scrambled next pointer
-    looks like when the next pointer is null.
-  - It does not need the JIT (`useJIT=false` reproduces), does not need
-    concurrent, generational or parallel collection (all off still reproduces),
-    and does not need the port's block reservation pool (bypassing it still
-    reproduces). Taking the heap allocator files from the fork -
-    `MarkedBlock`, `BlockDirectory`, `LocalAllocator`, `FreeList`, `SlotVisitor`
-    and friends - also still reproduces, so the collector's block machinery is
-    not where the bug lives.
-  - It needs heap churn to appear: the first fifteen blocks of `const-tdz.js`
-    are clean, and the sixteenth - `switch` statements with `const` bindings in
-    their cases, closures over them, and a thousand TDZ throws - is what tips it
-    over. That block on its own, repeated, does not reproduce.
-  - The reproduction is `JSTests/stress/const-tdz.js` cut to its first sixteen
-    blocks; keeping the freed pages mapped (the pool's `decommit` skipped) turns
-    the random SIGSEGV/SIGBUS into the collector's own diagnostic, which is what
-    made any of this readable.
-- `class-syntax-double-constructor.js`, `codeblock-should-clear-watchpoints-on-destruction.js`,
+- `class-syntax-double-constructor.js`,
   `compiler-thread-should-not-ref-identifiers.js`, `create-promise.js`,
   `derived-promise-constructor-inlined.js`, `date-get-utc-seconds-jit.js`,
   `data-view-byte-length-oob-exit.js`, `compare-bigint-with-string.js` and
@@ -276,6 +249,85 @@ yet, and it is written down here rather than carried in someone's head:
   merge or an older 32-bit hole.
 - Tests marked `memoryHog!` and the OOM tests are killed by jetsam here, which
   is the phone being a phone rather than a finding.
+- `create-promise.js` fails with a wrong value rather than a signal, and it is
+  **not** a graft regression: the shipping fork's engine fails the same test in
+  the same way. Twenty lines reproduce it:
+
+  ```js
+  class Base { constructor(cb) { this.y = 2; cb(); } }
+  class Derived extends Base { }
+  for (var i = 0; i < 20000; ++i) var b = new Base(function(){});
+  for (var i = 0; i < 20000; ++i) var d = new Derived(function(){});
+  for (var i = 0; i < 20000; ++i) var b2 = new Base(function(){});
+  for (var i = 0; i < 20000; ++i) {
+      var d2 = new Derived(function(){});
+      if (typeof d2 !== "object") print("BAD " + describe(d2));
+  }
+  ```
+
+  The last loop prints six bad values and then recovers. What lands in `d2` is
+  the constructed object with its two halves exchanged: `describe` reads it as
+  the double `0x04A07C60FFFFFFFB`, whose low word is `CellTag` and whose high
+  word is the cell pointer. That also explains the shape of the original
+  failure - `promise.__proto__` comes back as `Number.prototype`, because the
+  value really is a double by then.
+
+  What is known: it needs the concurrent compiler (`useConcurrentJIT=false` is
+  clean at the same loop counts, and that is not the loop-count clamp, since
+  this repro counts for itself); it survives turning OSR entry off; every
+  `DirectConstruct` in the compiled graph is predicted `AnyIntAsDouble`, so the
+  DFG inserts a `Check:Number` on the construct's result and that check passes,
+  which is only possible if the tag half already holds a pointer; and the
+  32-bit store protocol is not involved, since forcing the plain
+  store in `storeAndFence32` changes nothing.
+
+## The collector crash was the interpreter's registers, 2026-09-13
+
+`const-tdz.js`, `const-semantics.js` and
+`codeblock-should-clear-watchpoints-on-destruction.js` failed on every run
+since the graft, always as a collector complaint about a `JSCallee::m_scope`
+pointing at a cell that was already on a free list. None of the obvious
+suspects held up under measurement: not the JIT, not any collection mode, not
+the port's block pool, not the heap allocator files.
+
+The cause was two macros in `LowLevelInterpreter.asm`,
+`copyCalleeSavesToBuffer` and `restoreCalleeSavesFromBuffer`, which had lost
+their ARMv7 arms and so stored and restored nothing here. That buffer is the
+one an entry frame keeps for the registers the JIT ABI treats as callee-saved
+while the interpreter keeps them live across a frame: on ARMv7 r10 holds the
+metadata table and r11 the bytecode pointer. Unwinding an exception out of
+JavaScript therefore handed both back to C++ still holding interpreter state.
+`Interpreter::executeEval` keeps its `JSCallee` in exactly such a register
+across the VM entry, and assigning to a `const` inside `eval` throws, so the
+`callee->setScope(vm, nullptr)` that follows the entry wrote a zero four bytes
+into whatever r11 happened to point at. The same gap kept those registers out
+of the buffer the collector scans conservatively, which is the other half of
+why live cells were being collected.
+
+The technique that found it generalises to any "something writes here and we
+do not know who". Give the victim its own pages and take write permission
+away: an `InstructionStreamBufferMalloc` that mmaps page-granular blocks, and
+an `mprotect(PROT_READ)` right after `UnlinkedCodeBlockGenerator::finalize`.
+Install a SIGBUS/SIGSEGV handler that prints pc, lr and the interesting
+registers with `write(2)` - not `dataLog`, which is not safe in a handler -
+and resolves them with `dladdr`. Stage that engine **unstripped**, or `dladdr`
+names the wrong symbol. Then read the faulting instruction out of the local
+binary with `otool -tv`: here it was `str.w r2, [r11, #0x10]`, and `0x10` is
+where `JSCallee::m_scope` sits.
+
+One thing that does not work, and cost an hour: reading r10 and r11 from C++
+with inline asm on either side of the call. The compiler is free to keep its
+own values there, so "before differs from after" proves nothing. Only the
+fault is evidence.
+
+Five more ARMv7 arms were missing in the same file and are restored with it:
+the checkpoint OSR exit and the array-sort comparator return call C functions
+whose second argument is an `EncodedJSValue`, which this ABI passes in an
+even-aligned register pair rather than the next register; the tier-up call in
+the prologue happens before sp is set from the CodeBlock and needs the stack
+realigned around it; the stack-alignment assertion cannot use sp as the source
+of a logical operation; and `probe` has two callee-save registers here, not
+ten.
 
 ## The 32-bit engine can now be built with assertions
 
