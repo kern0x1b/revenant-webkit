@@ -447,6 +447,35 @@ Safari and trying again when it is not. The gap is still worth closing on the
 tweak's side: the bridge should be installed for a window object that already
 exists when the hook goes in, not only for the next one.
 
+## The iPad was two deploys behind, 2026-09-14
+
+Bringing the iPad onto the fixed engine turned up two ways a deploy can look
+like it worked and not be the thing under test.
+
+`scripts/layout-sys-frameworks.sh` took its build directory from
+`ENGINE_BUILD` and defaulted to `build-254-lto`, the fork build kept for
+comparison. `scripts/deploy-engine.sh` does not set it, so every deploy that
+did not set it by hand staged and installed the fork. The default is now the
+trunk build, the one being shipped. The size of the installed
+`JavaScriptCore` is the cheap check: the staged file and the file on the
+device have to match.
+
+With the right engine on it the iPad still reported `window.WebAssembly`
+missing, and the warm-up page reported the bridge absent on all three
+attempts before every measured page - so the suite was right and the tweak
+really was not installing it. `/usr/lib/rev-safari-compat.dylib` on the iPad
+was the September 10 01:34 build, 215456 bytes; the phone carries the 03:50
+one, 468464 bytes, which is the first that installs the bridge from the
+engine's window-object-cleared callback. The compat library is a separate
+artifact from the three frameworks and `scripts/deploy-engine.sh` does not
+carry it, so a device can sit arbitrarily far behind on it while its engine is
+current.
+
+The iPad gate is 52 of 55 after both. The three that remain are the emoji
+sequence checks: this iPad still has the 2013 `AppleColorEmoji.ttf`, and its
+system partition has 133MB free against a modern 1x font of 63MB, so
+installing one there is not the same cheap operation it was on the phone.
+
 ## The procedure this argues for
 
 1. Run `scripts/port-delta.sh` against the current base and keep the output. It
