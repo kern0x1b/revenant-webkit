@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -eu
 P=$(cd "$(dirname "$0")/.." && pwd)
-B=${ENGINE_BUILD:-$P/build-254-lto}
+B=${ENGINE_BUILD:-$P/build-254-trunk}
 OUT=${1:-$P/dist/rev-sys-fw}
 
 SYS_WK=/System/Library/PrivateFrameworks/WebKit.framework/WebKit
