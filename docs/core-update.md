@@ -514,43 +514,83 @@ The thirteen that remain are the device and the runner, not the engine:
 So the honest reading of the second run is that nothing in `JSTests/stress`
 fails on this engine for a reason that belongs to the engine.
 
-## Yarr cannot be taken from trunk any more, 2026-09-14
+## Yarr came from trunk after all, 2026-09-15
 
-The adoption was attempted in full: trunk's twelve Yarr files, the ARMv7
-register assignments put back into `YarrJITRegisters.h`, the four ARMv7 arms
-put back into `YarrJIT.cpp` - the generator's callee-save list, the `#if` in
-`generateEnter()` and `generateReturn()`, and the load of the fifth argument
-off the stack through `POKE_ARGUMENT_OFFSET`, which is how a
-`MatchingContextHolder*` reaches a function on a CPU with four argument
-registers. The port's own carries went on cleanly: the JIT log, the latin1
-table de-duplication, the early exit in `linearSearchRanges`.
-
-It still does not build, and the reason is not a missing carry.
-
-Trunk's `YarrJIT.cpp` has **no feature guards left**: the 41
+The first attempt at this directory concluded it could not be taken, on the
+grounds that trunk's `YarrJIT.cpp` has no feature guards left - the 41
 `ENABLE(YARR_JIT_UNICODE_EXPRESSIONS)` and 12
-`ENABLE(YARR_JIT_ALL_PARENS_EXPRESSIONS)` guards the 2023 file had are gone.
-`PlatformEnable.h` still defines the first only for `CPU(ARM64) || CPU(X86_64)
-|| CPU(RISCV64)`, so on ARMv7 the macro is off while the code that needs it is
-now unconditional. It reaches for seven registers the ARMv7 arm does not
-have - `regUnicodeInputAndTrail`, `unicodeAndSubpatternIdTemp`,
-`endOfStringAddress`, `matchingContext`, `freelistRegister`,
-`remainingMatchCount`, `firstCharacterAdditionalReadSize` - and there is
-nowhere to get them: of r0 to r12, Yarr already uses r0 to r5, r8 and r10,
-r6 belongs to MacroAssemblerARMv7, r7 is the frame pointer and r9 is the
-static base.
+`ENABLE(YARR_JIT_ALL_PARENS_EXPRESSIONS)` the 2023 file had are gone - and that
+reinstating 53 of them in a 7800-line file upstream keeps rewriting was not
+worth it.
 
-So the choice is reinstating 53 guards in a 7800-line file that upstream will
-keep rewriting, or writing a register allocation for a CPU that has no spare
-registers. Neither is worth it for what adoption buys here, and the family
-does move as a unit: keeping the port's `YarrJIT.cpp` against trunk's
-`Yarr.h` fails on its own, because `JITFailureReason` lost the members the old
-file names.
+That reading was wrong, and it is worth saying why, because the same mistake is
+easy to repeat. The guards were not the whole of what the old file had. It also
+carried **32-bit implementations**, and upstream deleted those together with the
+branch that selected them. Two of them are on the path of every regular
+expression, not in some unicode corner:
 
-The family stays where it is, and this is the reason, written down so the next
-pass does not spend the afternoon rediscovering it. Yarr is also the one
-directory where staleness costs least: its JIT covers 98 percent of what this
-port executes, and that code is the port's.
+- `matchCharacterClassByBitTest` does its bit test with `lshift64` and
+  `branchTest64`; the 32-bit arm does the same work with `lshift32` and
+  `branchTest32`.
+- `clearSubpattern` clears a capture with a single 64-bit store; the 32-bit arm
+  writes the start and the end separately.
+
+Put those back and the picture changes: what remains is a handful of guards
+around code that genuinely needs registers this CPU does not have, not 53
+guards around everything.
+
+**What went back in.** `YarrJITDefaultRegisters` has its `CPU(ARM_THUMB2)` arm
+again, with the seven members ARMv7 has no register for - `matchingContext`,
+`freelistRegister`, `remainingMatchCount`, `regUnicodeInputAndTrail`,
+`unicodeAndSubpatternIdTemp`, `firstCharacterAdditionalReadSize`,
+`endOfStringAddress` - spelled `InvalidGPRReg`, which is how RISCV64 already
+spells the ones it lacks. The generator has its four arms again: the
+callee-save list, the `#if` in `generateEnter()` and `generateReturn()`, and the
+load of the fifth argument off the stack through `POKE_ARGUMENT_OFFSET`.
+
+Guards went back around exactly three things: the two surrogate-pair readers
+and their thunk, and the backreference matcher with its canonical-equivalence
+thunk. `JITFailureReason` got `DecodeSurrogatePair`, `BackReference` and
+`ParenthesizedSubpattern` back, and `compile()` refuses those patterns up
+front - so the JIT declines them and the interpreter takes them, which is what
+the deleted guards used to arrange.
+
+One line widens instead of returning: `storeToFrame` for a `TrustedImmPtr` was
+shut off for ARMv7 in the old file and in trunk, although `storePtr` of an
+immediate pointer exists on 32-bit. It is on now.
+
+**What it bought.** All 299 regexp and yarr tests on the phone, same harness as
+before: tests that threw fell from **29 to 6**, and nothing new broke. The
+twenty-three are not scattered edge cases but whole features this port did not
+have:
+
+- all four `regexp-v-flag-*` - the `v` flag's class set operations;
+- all four `regexp-interpreter-lookbehind-*` and all four
+  `regexp-lookbehind-jit-*` - lookbehind over non-BMP characters, surrogate
+  halves and backreferences;
+- `regexp-unicode-property-escape-ignore-case`, `regexp-recompile`, both
+  `regexp-once-through-advance-*`,
+  `regexp-negative-assertion-with-bol-is-not-dropped`,
+  `regexp-sticky-dot-star-wrapped-expression`,
+  `regexp-backreference-greedy-non-bmp-capture-restore-pos`.
+
+The six that still throw are the same six as before. The iPad agrees: sixteen
+non-zero results, every one of them already in the old list.
+
+**What was let go.** The port's hoisting micro-optimisations in
+`YarrInterpreter.cpp` - lifting `quantityMaxCount` and `inputPosition` out of
+the match loops. Upstream restructured those same loops itself, templating them
+on direction and factoring out `matchGreedy`, which is the same hoisting done
+structurally. The early exit in `linearSearchRanges`, the port's one semantic
+change there, is kept, as are the JIT log and the latin1 table de-duplication.
+
+**The rule this establishes.** When trunk's version of a file only deletes the
+32-bit arm and adds nothing, ours is already the superset and there is nothing
+to take - that is `ValueRecovery`, `DataFormat.h`, `ArithProfile`,
+`MethodOfGettingAValueProfile`, `InlineAccess.h`. When trunk's version carries
+real work **and** deletes the 32-bit arm, the answer is to take trunk's file and
+put the arm back, not to keep ours. Yarr is the second kind, and so is most of
+what is left.
 
 ## The procedure this argues for
 
