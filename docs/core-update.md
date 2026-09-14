@@ -514,6 +514,44 @@ The thirteen that remain are the device and the runner, not the engine:
 So the honest reading of the second run is that nothing in `JSTests/stress`
 fails on this engine for a reason that belongs to the engine.
 
+## Yarr cannot be taken from trunk any more, 2026-09-14
+
+The adoption was attempted in full: trunk's twelve Yarr files, the ARMv7
+register assignments put back into `YarrJITRegisters.h`, the four ARMv7 arms
+put back into `YarrJIT.cpp` - the generator's callee-save list, the `#if` in
+`generateEnter()` and `generateReturn()`, and the load of the fifth argument
+off the stack through `POKE_ARGUMENT_OFFSET`, which is how a
+`MatchingContextHolder*` reaches a function on a CPU with four argument
+registers. The port's own carries went on cleanly: the JIT log, the latin1
+table de-duplication, the early exit in `linearSearchRanges`.
+
+It still does not build, and the reason is not a missing carry.
+
+Trunk's `YarrJIT.cpp` has **no feature guards left**: the 41
+`ENABLE(YARR_JIT_UNICODE_EXPRESSIONS)` and 12
+`ENABLE(YARR_JIT_ALL_PARENS_EXPRESSIONS)` guards the 2023 file had are gone.
+`PlatformEnable.h` still defines the first only for `CPU(ARM64) || CPU(X86_64)
+|| CPU(RISCV64)`, so on ARMv7 the macro is off while the code that needs it is
+now unconditional. It reaches for seven registers the ARMv7 arm does not
+have - `regUnicodeInputAndTrail`, `unicodeAndSubpatternIdTemp`,
+`endOfStringAddress`, `matchingContext`, `freelistRegister`,
+`remainingMatchCount`, `firstCharacterAdditionalReadSize` - and there is
+nowhere to get them: of r0 to r12, Yarr already uses r0 to r5, r8 and r10,
+r6 belongs to MacroAssemblerARMv7, r7 is the frame pointer and r9 is the
+static base.
+
+So the choice is reinstating 53 guards in a 7800-line file that upstream will
+keep rewriting, or writing a register allocation for a CPU that has no spare
+registers. Neither is worth it for what adoption buys here, and the family
+does move as a unit: keeping the port's `YarrJIT.cpp` against trunk's
+`Yarr.h` fails on its own, because `JITFailureReason` lost the members the old
+file names.
+
+The family stays where it is, and this is the reason, written down so the next
+pass does not spend the afternoon rediscovering it. Yarr is also the one
+directory where staleness costs least: its JIT covers 98 percent of what this
+port executes, and that code is the port's.
+
 ## The procedure this argues for
 
 1. Run `scripts/port-delta.sh` against the current base and keep the output. It
