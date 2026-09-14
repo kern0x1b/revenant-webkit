@@ -476,6 +476,42 @@ sequence checks: this iPad still has the 2013 `AppleColorEmoji.ttf`, and its
 system partition has 133MB free against a modern 1x font of 63MB, so
 installing one there is not the same cheap operation it was on the phone.
 
+## All 5725 of JSTests/stress, twice, 2026-09-14
+
+The whole directory was run on the phone before the map iteration fix and
+again after it, same harness both times: each test gets four seconds and is
+then killed, so `EXIT=137` means the test outlived its slot and `EXIT=3`
+means it wants harness options this runner does not pass. What is left after
+those two is the list worth reading.
+
+Before: 30 tests. After: 13. The seventeen that went away are the ones the map
+iteration fix took with it - `allow-math-ic-b3-code-duplication`, both
+`ftl-get-by-id-*-interesting-live-state`, `instanceof-prototype-change-during-compilation`,
+`compare-bigint-with-number` and `-with-string`, `elidable-new-object-roflcopter-then-exit`,
+`redefine-property-set` and `-writable`, `string-equality-word-compare-thorough`,
+`get-by-val-with-symbol`, `block-scoped-function-declarations`,
+`stack-overflow-in-syntax-checker`, three `regexp-*`, and the two
+`map-/set-for-each-mutation-during-iteration` that started it. `math-hypot`
+passes now too.
+
+The thirteen that remain are the device and the runner, not the engine:
+
+- Eight ask for more memory than a 512MB phone has, and say so:
+  `mmap(size=80003072) failed (error code=12)`. They are
+  `array-buffer-view-watchpoint-can-be-fired-in-really-add-in-dfg`,
+  `bigint-can-throw-oom`, `exhaust-gigacage-and-allocate-vm`,
+  `out-of-memory-while-constructing-BytecodeGenerator`,
+  `scoped-arguments-table-should-be-tolerant-for-oom`, `test-out-of-memory`,
+  `typed-array-subarray-can-throw-oom-error` and
+  `unlinked-code-block-destructor`.
+- `ensure-crash` crashes on purpose.
+- `shadow-realm-import-value` needs a module loader the shell runner does not
+  give it, and the three `type-profiler-with-double-quote-in-*` need the type
+  profiler turned on.
+
+So the honest reading of the second run is that nothing in `JSTests/stress`
+fails on this engine for a reason that belongs to the engine.
+
 ## The procedure this argues for
 
 1. Run `scripts/port-delta.sh` against the current base and keep the output. It
