@@ -282,11 +282,27 @@ yet, and it is written down here rather than carried in someone's head:
   receives its arguments correctly, so the marshalling into it is not where it
   goes wrong. The DFG's own assertions and graph validation stay quiet.
 
+  Narrowed further, with the option forced back on: the callee has to **call
+  its own argument** (`function callee(cb) { cb(); return {y: 2}; }` fails, the
+  same callee without `cb()` does not, and calling a named global function
+  instead of the argument does not), the result has to be a **cell** (returning
+  a number is clean), and the function that makes the spread call has to be
+  **DFG-compiled** - `noDFG(spreadCall)` is clean while `noInline(spreadCall)`
+  is not, so it is that function's own code that is wrong, not its caller's.
+  `f.apply(null, args)` fails the same way. Its `Return` looks right in the
+  disassembly: the object is in r0 from its allocation and the return writes
+  `mvn r1, #4`, which is CellTag, so what reaches the caller should be a cell -
+  and what the caller reads is CellTag in r0 and the pointer in r1, the two
+  exchanged.
+
   `JSC_maximumVarargsForInlining` is 0 by default on 32-bit as of
   `899f706c81bf`, so a spread call is no longer inlined here. That is not a
   fix; it turns a wrong value into a missed optimization, and setting the
   option back to 100 brings the repro straight back for whoever chases the
-  miscompilation.
+  miscompilation. It costs nothing measurable: a spread call in a loop of
+  300000 takes 301 ms with the inlining off, and with it forced on the same
+  benchmark does not finish in two minutes, because the speculation on that
+  wrong value fails over and over.
 
 ## The collector crash was the interpreter's registers, 2026-09-13
 
