@@ -236,8 +236,10 @@ branch carries it: the ARMv7 assembler and disassembler, the 32-bit tiers, the
 
 ## Open on trunk, found by the suite and not yet chased
 
-`JSTests/stress` run from the phone leaves a short list that is not explained
-yet, and it is written down here rather than carried in someone's head:
+`JSTests/stress` run from the phone left a short list that was not explained
+yet, written down here rather than carried in someone's head. All of it except
+the varargs miscompilation is closed - see "All 5725 of JSTests/stress, twice"
+below - and the list is kept because how it was read is the part worth reusing:
 
 - `class-syntax-double-constructor.js`,
   `compiler-thread-should-not-ref-identifiers.js`, `create-promise.js`,
