@@ -121,9 +121,9 @@ rather than screenshots.
 ## How an update actually runs
 
 ```sh
-scripts/integrate.sh upstream/webkitglib/2.54   # the series' own picks
-scripts/integrate.sh upstream/main              # the base change, when it is time
-scripts/integrate.sh --no-merge                 # just run the gates on what is here
+scripts/integrate.py upstream/webkitglib/2.54   # the series' own picks
+scripts/integrate.py upstream/main              # the base change, when it is time
+scripts/integrate.py --no-merge                 # just run the gates on what is here
 ```
 
 In order, stopping at the first failure that matters:
@@ -158,7 +158,7 @@ Nothing here needs a service. One crontab line takes the series' own picks every
 Monday morning and leaves a log to read:
 
 ```
-0 9 * * 1  cd ~/path/to/port && scripts/integrate.sh upstream/webkitglib/2.54 >> ~/port-integration.log 2>&1
+0 9 * * 1  cd ~/path/to/port && scripts/integrate.py upstream/webkitglib/2.54 >> ~/port-integration.log 2>&1
 ```
 
 It stops at the first gate that fails, and a run that cannot reach the phone

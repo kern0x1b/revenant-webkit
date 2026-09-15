@@ -19,7 +19,7 @@ export IOS_SDK="$HOME/theos/sdks/iPhoneOS13.7.sdk"
 ## 1. The engine source
 
 ```sh
-./fetch-source.sh
+./fetch-source.py
 ```
 
 `webkit-254` is a git submodule tracking the `ios6-armv7` branch of a WebKit fork,
@@ -82,7 +82,7 @@ engine now links both packages directly.
 [compatibility.md](compatibility.md) - is this port's own code, built by the
 engine's recipe from `compat/CMakeLists.txt` before the engine itself.
 
-`scripts/check-cacert.sh` builds nothing: it verifies the trust store the
+`scripts/check-cacert.py` builds nothing: it verifies the trust store the
 standalone application carries against the hash this project reviewed, and with
 `--upstream` says whether curl serves the same extract today.
 
@@ -133,7 +133,7 @@ exactly that. `tools/ios6-imports-check.py` compares every non-weak import of th
 laid-out frameworks with what the phone's own shared cache exports:
 
 ```sh
-bash -c '. tools/device.sh && device_fetch /System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7 build/'
+tools/device.py fetch /System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7 build/
 python3 tools/ios6-imports-check.py --cache build/dyld_shared_cache_armv7 --dist dist/rev-sys-fw
 ```
 
@@ -177,7 +177,7 @@ Copy `device.env.example` to `device.env` and fill in the address and password;
 neither is in the repository.
 
 ```sh
-scripts/deploy-engine.sh    # engine only: stage, back up, push to /usr/lib/rev-fw, respring
+scripts/deploy-engine.py    # engine only: stage, back up, push to /usr/lib/rev-fw, respring
 ```
 
 For everything else, install the package the way any tweak is installed:
@@ -202,7 +202,7 @@ this engine, because it drives its view through the *system* WebCore's
 
 ```sh
 scripts/build-app-rev.sh
-scripts/run-app-rev.sh 20
+scripts/run-app-rev.py 20
 ```
 
 The runner installs `dist/RevWebViewHost.app`, opens it through its
@@ -285,7 +285,7 @@ The user agent is the test: a page that echoes it — or the engine's own log at
 `/tmp/rev-safari-stderr.log` — should report `AppleWebKit/605`, not `536`.
 
 Then run the numeric suite, which reads pixels and glyph widths rather than
-screenshots: [`tests/device/run.sh`](../tests/device/README.md).
+screenshots: [`tests/device/run.py`](../tests/device/README.md).
 
 ## The toolchain this port needs, and how little of it is Apple's
 

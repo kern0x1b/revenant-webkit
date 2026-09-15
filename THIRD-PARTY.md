@@ -67,7 +67,7 @@ so the roots travel with the application. The Safari substitution does not use
 this file at all - there the chain is handed back as a `SecTrustRef` and the
 system evaluates it against its own store.
 
-`scripts/check-cacert.sh` verifies the file against the SHA-256 this project
+`scripts/check-cacert.py` verifies the file against the SHA-256 this project
 reviewed - `f66dff1b…480bc9` - and with `--upstream` compares it against what
 <https://curl.se/ca/cacert.pem> serves today, printing what to do if they differ
 rather than replacing anything.
@@ -78,7 +78,7 @@ rather than replacing anything.
   business. Moving a current emoji font onto a 2013 device is a separate thing
   and lives in its own project; four checks on `tests/device/text-and-emoji.html`
   simply measure what the device can draw, and say so.
-- **No test corpus of other people's pages.** `tests/device/sweep.sh` ships with
+- **No test corpus of other people's pages.** `tests/device/sweep.py` ships with
   no site list: it loads only what the operator names on the command line or in
   a gitignored file of their own. Driving a browser at somebody's site from an
   automated run is a matter between that operator and that site's terms, and it
@@ -86,7 +86,7 @@ rather than replacing anything.
   automated suite loads is served from `tests/device/` on the operator's own
   machine.
 - **No conformance suite.** Khronos' WebGL conformance tests are cloned by the
-  operator when they want to run them; `tests/device/conformance.sh` says how.
+  operator when they want to run them; `tests/device/conformance.py` says how.
   They are not vendored and not modified.
 - **No device credentials.** `device.env` is gitignored; `device.env.example`
   shows its shape.
