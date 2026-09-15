@@ -37,6 +37,55 @@ index d67ec7016c..53ef3a7782 100644
  
  RequestStorageAccessThrowsExceptionUntilReload:
    type: bool
+diff --git a/Source/WTF/wtf/ASCIICType.h b/Source/WTF/wtf/ASCIICType.h
+index 828e17ab0b..21da82cc11 100644
+--- a/Source/WTF/wtf/ASCIICType.h
++++ b/Source/WTF/wtf/ASCIICType.h
+@@ -92,7 +92,7 @@ template<Character CharacterType> constexpr bool isASCII(CharacterType character
+ 
+ template<Character CharacterType> constexpr bool isASCIILower(CharacterType character)
+ {
+-    return character >= 'a' && character <= 'z';
++    return static_cast<unsigned>(character - 'a') <= ('z' - 'a');
+ }
+ 
+ template<Character CharacterType> constexpr CharacterType toASCIILowerUnchecked(CharacterType character)
+@@ -112,7 +112,7 @@ template<Character CharacterType> constexpr bool isASCIIAlpha(CharacterType char
+ 
+ template<Character CharacterType> constexpr bool isASCIIDigit(CharacterType character)
+ {
+-    return character >= '0' && character <= '9';
++    return static_cast<unsigned>(character - '0') <= ('9' - '0');
+ }
+ 
+ template<Character CharacterType> constexpr bool isASCIIAlphanumeric(CharacterType character)
+@@ -122,7 +122,7 @@ template<Character CharacterType> constexpr bool isASCIIAlphanumeric(CharacterTy
+ 
+ template<Character CharacterType> constexpr bool isASCIIHexDigit(CharacterType character)
+ {
+-    return isASCIIDigit(character) || (toASCIILowerUnchecked(character) >= 'a' && toASCIILowerUnchecked(character) <= 'f');
++    return isASCIIDigit(character) || static_cast<unsigned>(toASCIILowerUnchecked(character) - 'a') <= ('f' - 'a');
+ }
+ 
+ template<Character CharacterType> constexpr bool isASCIIBinaryDigit(CharacterType character)
+@@ -132,7 +132,7 @@ template<Character CharacterType> constexpr bool isASCIIBinaryDigit(CharacterTyp
+ 
+ template<Character CharacterType> constexpr bool isASCIIOctalDigit(CharacterType character)
+ {
+-    return character >= '0' && character <= '7';
++    return static_cast<unsigned>(character - '0') <= ('7' - '0');
+ }
+ 
+ template<Character CharacterType> constexpr bool isASCIIPrintable(CharacterType character)
+@@ -178,7 +178,7 @@ template<Character CharacterType> constexpr bool isUnicodeCompatibleASCIIWhitesp
+ 
+ template<Character CharacterType> constexpr bool isASCIIUpper(CharacterType character)
+ {
+-    return character >= 'A' && character <= 'Z';
++    return static_cast<unsigned>(character - 'A') <= ('Z' - 'A');
+ }
+ 
+ template<Character CharacterType> constexpr bool isNotASCIIWhitespace(CharacterType character)
 diff --git a/Source/WTF/wtf/Assertions.cpp b/Source/WTF/wtf/Assertions.cpp
 index 688bafa332..715219d345 100644
 --- a/Source/WTF/wtf/Assertions.cpp
@@ -715,6 +764,43 @@ index d211ae00be..ded2995225 100644
  
  ForbidMallocUseForCurrentThreadScope::ForbidMallocUseForCurrentThreadScope()
  {
+diff --git a/Source/WTF/wtf/MathExtras.h b/Source/WTF/wtf/MathExtras.h
+index 54d004b538..8a987ee9b7 100644
+--- a/Source/WTF/wtf/MathExtras.h
++++ b/Source/WTF/wtf/MathExtras.h
+@@ -645,6 +645,12 @@ inline uint32_t reverseBits32(uint32_t value)
+         : "=r"(result)
+         : "r"(value));
+     return result;
++#elif CPU(ARM_THUMB2) || CPU(ARM_TRADITIONAL)
++    uint32_t result;
++    __asm__("rbit %0, %1"
++        : "=r"(result)
++        : "r"(value));
++    return result;
+ #else
+     value = ((value & 0xaaaaaaaa) >> 1) | ((value & 0x55555555) << 1);
+     value = ((value & 0xcccccccc) >> 2) | ((value & 0x33333333) << 2);
+@@ -1042,13 +1048,15 @@ SUPPRESS_NODELETE ALWAYS_INLINE std::optional<int32_t> NODELETE tryConvertToStri
+         return result;
+     return std::nullopt;
+ #else
+-    if (std::isinf(value) || std::isnan(value))
++    if (value < static_cast<double>(INT32_MIN) || value > static_cast<double>(INT32_MAX)) [[unlikely]]
+         return std::nullopt;
+ 
+-    // Note that -0.0 is not StrictInt32.
+-    const int32_t asInt32 = truncateDoubleToInt32(value);
+-    if (!(asInt32 != value || (!asInt32 && std::signbit(value))))
++    const int32_t asInt32 = static_cast<int32_t>(value);
++    if (asInt32 == value) [[likely]] {
++        if (!asInt32 && std::signbit(value)) [[unlikely]]
++            return std::nullopt;
+         return asInt32;
++    }
+ 
+     return std::nullopt;
+ #endif
 diff --git a/Source/WTF/wtf/MemoryPressureHandler.cpp b/Source/WTF/wtf/MemoryPressureHandler.cpp
 index 71256410f9..bedd550b7f 100644
 --- a/Source/WTF/wtf/MemoryPressureHandler.cpp
@@ -1396,6 +1482,33 @@ index 6c82548160..e62f67b3b7 100644
      T* oldBuffer = begin();
      T* oldEnd = end();
  
+diff --git a/Source/WTF/wtf/VectorTraits.h b/Source/WTF/wtf/VectorTraits.h
+index ab163e5fcc..4559097c80 100644
+--- a/Source/WTF/wtf/VectorTraits.h
++++ b/Source/WTF/wtf/VectorTraits.h
+@@ -55,10 +55,19 @@ namespace WTF {
+         static constexpr bool canCompareWithMemcmp = true;
+     };
+ 
+-    // Requiring std::has_unique_object_representations_v<T> to make sure the type doesn't have padding and can
+-    // be used with memcmp().
+     template<typename T>
+-    struct VectorTraits : VectorTraitsBase<std::is_standard_layout_v<T> && std::is_trivially_copyable_v<T> && std::is_trivially_default_constructible_v<T> && std::has_unique_object_representations_v<T>, T> { };
++    struct VectorTraits
++    {
++        static constexpr bool isTriviallyCopyable = std::is_trivially_copyable_v<T>;
++        static constexpr bool isTriviallyDefaultConstructible = std::is_trivially_default_constructible_v<T>;
++
++        static constexpr bool needsInitialization = !isTriviallyDefaultConstructible;
++        static constexpr bool canInitializeWithMemset = isTriviallyDefaultConstructible;
++        static constexpr bool canMoveWithMemcpy = isTriviallyCopyable;
++        static constexpr bool canCopyWithMemcpy = isTriviallyCopyable;
++        static constexpr bool canFillWithMemset = sizeof(T) == sizeof(char) && std::is_integral<T>::value;
++        static constexpr bool canCompareWithMemcmp = isTriviallyCopyable && std::has_unique_object_representations_v<T>;
++    };
+ 
+     struct SimpleClassVectorTraits : VectorTraitsBase<false, void>
+     {
 diff --git a/Source/WTF/wtf/cf/RunLoopCF.cpp b/Source/WTF/wtf/cf/RunLoopCF.cpp
 index c4488bac66..68433c05bf 100644
 --- a/Source/WTF/wtf/cf/RunLoopCF.cpp
@@ -1812,6 +1925,160 @@ index ca44751e7d..70b4dceddc 100644
  #else // OS(DARWIN)
  #define MAP_EXECUTABLE_FOR_JIT 0
  #define MAP_EXECUTABLE_FOR_JIT_WITH_JIT_CAGE 0
+diff --git a/Source/WTF/wtf/text/IntegerToStringConversion.h b/Source/WTF/wtf/text/IntegerToStringConversion.h
+index d7df6c431e..6df30762c0 100644
+--- a/Source/WTF/wtf/text/IntegerToStringConversion.h
++++ b/Source/WTF/wtf/text/IntegerToStringConversion.h
+@@ -36,15 +36,103 @@ enum PositiveOrNegativeNumber { PositiveNumber, NegativeNumber };
+ 
+ template<typename> struct IntegerToStringConversionTrait;
+ 
++// thresholds[k] is 10^k - 1, so "value > thresholds[k]" is "value has more than k digits".
++// The last entry is saturated to the widest representable value, which makes the comparison
++// always false and removes the bounds test on the one index that cannot need a correction.
++inline constexpr uint32_t decimalDigitThresholds32[11] = {
++    0, 9, 99, 999, 9999, 99999, 999999, 9999999, 99999999, 999999999, UINT32_MAX
++};
++
++inline constexpr uint64_t decimalDigitThresholds64[20] = {
++    0, 9, 99, 999, 9999, 99999, 999999, 9999999, 99999999, 999999999,
++    9999999999ULL, 99999999999ULL, 999999999999ULL, 9999999999999ULL, 99999999999999ULL,
++    999999999999999ULL, 9999999999999999ULL, 99999999999999999ULL, 999999999999999999ULL,
++    9999999999999999999ULL
++};
++
++// One count-leading-zeros plus one table compare, instead of one division per digit.
++// 1233/4096 underestimates log10(2) by less than 5e-6, so over the 64 bit positions the
++// estimate is never more than one digit short and the single compare below fixes it.
++template<typename UnsignedIntegerType>
++constexpr unsigned decimalDigitCount(UnsignedIntegerType number)
++{
++    if constexpr (sizeof(UnsignedIntegerType) <= sizeof(uint32_t)) {
++        uint32_t value = static_cast<uint32_t>(number);
++        unsigned significantBits = 32 - clz(static_cast<uint32_t>(value | 1));
++        unsigned estimate = ((significantBits - 1) * 1233) >> 12;
++        return estimate + 1 + (value > decimalDigitThresholds32[estimate + 1]);
++    } else {
++        uint64_t value = static_cast<uint64_t>(number);
++        unsigned significantBits = 64 - clz(static_cast<uint64_t>(value | 1));
++        unsigned estimate = ((significantBits - 1) * 1233) >> 12;
++        return estimate + 1 + (value > decimalDigitThresholds64[estimate + 1]);
++    }
++}
++
++inline constexpr Latin1Character decimalDigitPairs[200] = {
++    '0','0','0','1','0','2','0','3','0','4','0','5','0','6','0','7','0','8','0','9',
++    '1','0','1','1','1','2','1','3','1','4','1','5','1','6','1','7','1','8','1','9',
++    '2','0','2','1','2','2','2','3','2','4','2','5','2','6','2','7','2','8','2','9',
++    '3','0','3','1','3','2','3','3','3','4','3','5','3','6','3','7','3','8','3','9',
++    '4','0','4','1','4','2','4','3','4','4','4','5','4','6','4','7','4','8','4','9',
++    '5','0','5','1','5','2','5','3','5','4','5','5','5','6','5','7','5','8','5','9',
++    '6','0','6','1','6','2','6','3','6','4','6','5','6','6','6','7','6','8','6','9',
++    '7','0','7','1','7','2','7','3','7','4','7','5','7','6','7','7','7','8','7','9',
++    '8','0','8','1','8','2','8','3','8','4','8','5','8','6','8','7','8','8','8','9',
++    '9','0','9','1','9','2','9','3','9','4','9','5','9','6','9','7','9','8','9','9'
++};
++
++// Two digits per division by 100 instead of one per division by 10. A Cortex-A9 has no
++// integer divide, so each of these is a multiply-high plus shift emitted by the compiler.
++template<typename CharacterType>
++constexpr size_t writeDecimalDigitsBackward32(uint32_t number, std::span<CharacterType> destination, size_t index)
++{
++    while (number >= 100) {
++        unsigned pair = (number % 100) * 2;
++        number /= 100;
++        destination[--index] = static_cast<CharacterType>(decimalDigitPairs[pair + 1]);
++        destination[--index] = static_cast<CharacterType>(decimalDigitPairs[pair]);
++    }
++    if (number >= 10) {
++        unsigned pair = number * 2;
++        destination[--index] = static_cast<CharacterType>(decimalDigitPairs[pair + 1]);
++        destination[--index] = static_cast<CharacterType>(decimalDigitPairs[pair]);
++        return index;
++    }
++    destination[--index] = static_cast<CharacterType>('0' + number);
++    return index;
++}
++
++template<typename CharacterType>
++constexpr size_t writeEightDecimalDigitsBackward(uint32_t number, std::span<CharacterType> destination, size_t index)
++{
++    for (unsigned i = 0; i < 4; ++i) {
++        unsigned pair = (number % 100) * 2;
++        number /= 100;
++        destination[--index] = static_cast<CharacterType>(decimalDigitPairs[pair + 1]);
++        destination[--index] = static_cast<CharacterType>(decimalDigitPairs[pair]);
++    }
++    return index;
++}
++
++template<typename CharacterType, typename UnsignedIntegerType>
++constexpr size_t writeDecimalDigitsBackward(UnsignedIntegerType number, std::span<CharacterType> destination, size_t index)
++{
++    if constexpr (sizeof(UnsignedIntegerType) > sizeof(uint32_t)) {
++        // At most two of these run: (2^64 - 1) / 10^16 is 1844, which fits in 32 bits.
++        while (number > static_cast<UnsignedIntegerType>(UINT32_MAX)) {
++            index = writeEightDecimalDigitsBackward(static_cast<uint32_t>(number % 100000000ULL), destination, index);
++            number /= 100000000ULL;
++        }
++    }
++    return writeDecimalDigitsBackward32(static_cast<uint32_t>(number), destination, index);
++}
++
+ template<typename T, typename UnsignedIntegerType, PositiveOrNegativeNumber NumberType, typename AdditionalArgumentType>
+ static typename IntegerToStringConversionTrait<T>::ReturnType numberToStringImpl(UnsignedIntegerType number, AdditionalArgumentType additionalArgument)
+ {
+     std::array<Latin1Character, sizeof(UnsignedIntegerType) * 3 + 1> buffer;
+-    auto index = buffer.size();
+-    do {
+-        buffer[--index] = static_cast<Latin1Character>((number % 10) + '0');
+-        number /= 10;
+-    } while (number);
++    auto index = writeDecimalDigitsBackward(number, std::span<Latin1Character> { buffer }, buffer.size());
+ 
+     if (NumberType == NegativeNumber)
+         buffer[--index] = '-';
+@@ -70,18 +158,16 @@ template<typename CharacterType, typename UnsignedIntegerType, PositiveOrNegativ
+ static void writeIntegerToBufferImpl(UnsignedIntegerType number, std::span<CharacterType> destination)
+ {
+     static_assert(!std::is_same_v<bool, std::remove_cv_t<UnsignedIntegerType>>, "'bool' not supported");
+-    std::array<Latin1Character, sizeof(UnsignedIntegerType) * 3 + 1> buffer;
+-    auto index = buffer.size();
+-    do {
+-        buffer[--index] = static_cast<Latin1Character>((number % 10) + '0');
+-        number /= 10;
+-    } while (number);
++    // The digit count is exact, so the digits can be filled in place from the back and the
++    // scratch buffer plus its copy-out loop disappear.
++    size_t index = decimalDigitCount(number);
++    if (NumberType == NegativeNumber)
++        ++index;
++
++    index = writeDecimalDigitsBackward(number, destination, index);
+ 
+     if (NumberType == NegativeNumber)
+-        buffer[--index] = '-';
+-    
+-    for (size_t i = 0; i < buffer.size() - index; ++i)
+-        destination[i] = static_cast<CharacterType>(buffer[index + i]);
++        destination[--index] = '-';
+ }
+ 
+ template<typename CharacterType, typename IntegerType>
+@@ -101,12 +187,7 @@ inline void writeIntegerToBuffer(IntegerType integer, std::span<CharacterType> d
+ template<typename UnsignedIntegerType, PositiveOrNegativeNumber NumberType>
+ constexpr unsigned lengthOfIntegerAsStringImpl(UnsignedIntegerType number)
+ {
+-    unsigned length = 0;
+-
+-    do {
+-        ++length;
+-        number /= 10;
+-    } while (number);
++    unsigned length = decimalDigitCount(number);
+ 
+     if (NumberType == NegativeNumber)
+         ++length;
 diff --git a/Source/WTF/wtf/text/RapidHash.h b/Source/WTF/wtf/text/RapidHash.h
 index 91c125aeb1..b9ec6d5384 100644
 --- a/Source/WTF/wtf/text/RapidHash.h
@@ -1959,6 +2226,28 @@ index 91c125aeb1..b9ec6d5384 100644
      ALWAYS_INLINE static constexpr std::pair<uint64_t, uint64_t> rapidMul128(uint64_t A, uint64_t B)
      {
          UInt128 r = static_cast<UInt128>(A) * B;
+diff --git a/Source/WTF/wtf/text/StringBuilder.cpp b/Source/WTF/wtf/text/StringBuilder.cpp
+index e43c6a7b75..e3a568d064 100644
+--- a/Source/WTF/wtf/text/StringBuilder.cpp
++++ b/Source/WTF/wtf/text/StringBuilder.cpp
+@@ -158,6 +158,17 @@ void StringBuilder::append(std::span<const char16_t> characters)
+         return;
+     }
+     RELEASE_ASSERT(characters.size() < std::numeric_limits<uint32_t>::max());
++#if defined(WEBKIT_IOS6)
++    // Widening costs a fresh buffer of twice the capacity, an upconverting copy of
++    // everything already accumulated, two bytes per character for every later append,
++    // and a 16-bit result String. Most text arriving as UTF-16 is entirely Latin-1 and
++    // needs none of that; the scan below bails on the first character that does.
++    if (is8Bit() && charactersAreAllLatin1(characters)) {
++        if (auto destination = extendBufferForAppending<Latin1Character>(saturatingSum<uint32_t>(m_length, static_cast<uint32_t>(characters.size()))); destination.data())
++            StringImpl::copyCharacters(destination, characters);
++        return;
++    }
++#endif
+     if (auto destination = extendBufferForAppendingWithUpconvert(saturatingSum<uint32_t>(m_length, static_cast<uint32_t>(characters.size()))); destination.data())
+         StringImpl::copyCharacters(destination, characters);
+ }
 diff --git a/Source/WTF/wtf/text/StringCommon.h b/Source/WTF/wtf/text/StringCommon.h
 index ae0e299643..9b09ed8582 100644
 --- a/Source/WTF/wtf/text/StringCommon.h
@@ -2245,8 +2534,56 @@ index 35732c8b2d..1d8aa42f94 100644
  }
  
  template<typename CharacterType>
+diff --git a/Source/WTF/wtf/text/StringToIntegerConversion.h b/Source/WTF/wtf/text/StringToIntegerConversion.h
+index 3ca6e78fe8..49a3e77d9b 100644
+--- a/Source/WTF/wtf/text/StringToIntegerConversion.h
++++ b/Source/WTF/wtf/text/StringToIntegerConversion.h
+@@ -60,25 +60,37 @@ template<typename IntegralType, typename CharacterType> std::optional<IntegralTy
+     else
+         skipExactly(data, '+');
+ 
+-    auto isCharacterAllowedInBase = [] (auto character, auto base) {
++    // Base 10 is overwhelmingly the common case, and everything about the digit test that
++    // depends only on the base is loop invariant. Hoisting both out of the loop leaves a
++    // single unsigned range check per character there, and turns the accumulating multiply
++    // into a multiply by a literal that the compiler can strength-reduce.
++    const bool isBase10 = base == 10;
++    const unsigned letterLimitInBase = base > 10 ? static_cast<unsigned>('a') + std::min<unsigned>(base - 10u, 26u) : 0;
++    auto isCharacterAllowedInBase = [&] (auto character) {
++        if (isBase10)
++            return isASCIIDigit(character);
+         if (isASCIIDigit(character))
+             return character - '0' < base;
+-        return toASCIILowerUnchecked(character) >= 'a' && toASCIILowerUnchecked(character) < 'a' + std::min(base - 10, 26);
++        auto lowered = toASCIILowerUnchecked(character);
++        return lowered >= 'a' && static_cast<unsigned>(lowered) < letterLimitInBase;
+     };
+ 
+-    if (!(!data.empty() && isCharacterAllowedInBase(data.front(), base)))
++    if (!(!data.empty() && isCharacterAllowedInBase(data.front())))
+         return std::nullopt;
+ 
+     Checked<IntegralType, RecordOverflow> value;
+     do {
+         auto c = consume(data);
+-        IntegralType digitValue = isASCIIDigit(c) ? c - '0' : toASCIILowerUnchecked(c) - 'a' + 10;
+-        value *= static_cast<IntegralType>(base);
++        IntegralType digitValue = (isBase10 || isASCIIDigit(c)) ? c - '0' : toASCIILowerUnchecked(c) - 'a' + 10;
++        if (isBase10)
++            value *= static_cast<IntegralType>(10);
++        else
++            value *= static_cast<IntegralType>(base);
+         if (isNegative)
+             value -= digitValue;
+         else
+             value += digitValue;
+-    } while (!data.empty() && isCharacterAllowedInBase(data.front(), base));
++    } while (!data.empty() && isCharacterAllowedInBase(data.front()));
+ 
+     if (value.hasOverflowed()) [[unlikely]]
+         return std::nullopt;
 diff --git a/Source/WTF/wtf/text/StringView.h b/Source/WTF/wtf/text/StringView.h
-index e518948c3f..151f3848e1 100644
+index e518948c3f..ccd51ae5ad 100644
 --- a/Source/WTF/wtf/text/StringView.h
 +++ b/Source/WTF/wtf/text/StringView.h
 @@ -466,16 +466,17 @@ inline StringView::StringView(const StringImpl* string LIFETIME_BOUND)
@@ -2272,6 +2609,49 @@ index e518948c3f..151f3848e1 100644
  }
  
  inline StringView::StringView(const AtomString& atomString LIFETIME_BOUND)
+@@ -813,13 +814,10 @@ ALWAYS_INLINE bool equal(StringView a, StringView b)
+ 
+ inline bool equal(StringView a, std::span<const Latin1Character> b)
+ {
+-    if (!b.data())
+-        return !a.isEmpty();
+-    if (a.isEmpty())
+-        return !b.data();
+-
+-    if (a.length() != b.size())
++    if (a.length() != b.size()) [[likely]]
+         return false;
++    if (!b.size())
++        return true;
+ 
+     if (a.is8Bit())
+         return equal(a.span8().data(), b);
+diff --git a/Source/WTF/wtf/text/WTFString.cpp b/Source/WTF/wtf/text/WTFString.cpp
+index 1854faacae..2aedebd2c9 100644
+--- a/Source/WTF/wtf/text/WTFString.cpp
++++ b/Source/WTF/wtf/text/WTFString.cpp
+@@ -77,7 +77,21 @@ char32_t String::codePointAt(unsigned i) const
+ 
+ String makeStringByJoining(std::span<const String> strings, const String& separator)
+ {
++    if (strings.empty())
++        return emptyString();
++    if (strings.size() == 1)
++        return strings.front();
++
++    Checked<unsigned> totalLength = 0;
++    for (const auto& string : strings)
++        totalLength += string.length();
++    totalLength += Checked<unsigned>(strings.size() - 1) * separator.length();
++
++    if (totalLength.hasOverflowed())
++        return String();
++
+     StringBuilder builder;
++    builder.reserveCapacity(totalLength.value());
+     for (const auto& string : strings) {
+         if (builder.isEmpty())
+             builder.append(string);
 diff --git a/Source/WTF/wtf/text/WTFString.h b/Source/WTF/wtf/text/WTFString.h
 index ccd5126dda..5c49d37ba3 100644
 --- a/Source/WTF/wtf/text/WTFString.h

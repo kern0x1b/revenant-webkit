@@ -1300,6 +1300,40 @@ index 371b92a723..a9b37b7b32 100755
  }
  
  sub output() {
+diff --git a/Source/JavaScriptCore/dfg/DFGBasicBlock.cpp b/Source/JavaScriptCore/dfg/DFGBasicBlock.cpp
+index 60ba7a3d40..0d6267c74e 100644
+--- a/Source/JavaScriptCore/dfg/DFGBasicBlock.cpp
++++ b/Source/JavaScriptCore/dfg/DFGBasicBlock.cpp
+@@ -59,7 +59,9 @@ BasicBlock::BasicBlock(BytecodeIndex bytecodeBegin, unsigned numArguments, unsig
+     , variablesAtTail(numArguments, numLocals, numTmps)
+     , valuesAtHead(numArguments, numLocals, numTmps)
+     , valuesAtTail(numArguments, numLocals, numTmps)
++#if !defined(WEBKIT_IOS6)
+     , intersectionOfPastValuesAtHead(numArguments, numLocals, numTmps, AbstractValue::fullTop())
++#endif
+     , executionCount(executionCount)
+ {
+ }
+@@ -72,7 +74,9 @@ void BasicBlock::ensureLocals(unsigned newNumLocals)
+     variablesAtTail.ensureLocals(newNumLocals);
+     valuesAtHead.ensureLocals(newNumLocals);
+     valuesAtTail.ensureLocals(newNumLocals);
++#if !defined(WEBKIT_IOS6)
+     intersectionOfPastValuesAtHead.ensureLocals(newNumLocals, AbstractValue::fullTop());
++#endif
+ }
+ 
+ void BasicBlock::ensureTmps(unsigned newNumTmps)
+@@ -81,7 +85,9 @@ void BasicBlock::ensureTmps(unsigned newNumTmps)
+     variablesAtTail.ensureTmps(newNumTmps);
+     valuesAtHead.ensureTmps(newNumTmps);
+     valuesAtTail.ensureTmps(newNumTmps);
++#if !defined(WEBKIT_IOS6)
+     intersectionOfPastValuesAtHead.ensureTmps(newNumTmps, AbstractValue::fullTop());
++#endif
+ }
+ 
+ void BasicBlock::replaceTerminal(Graph& graph, Node* node)
 diff --git a/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp b/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp
 index 2430b94c98..0f82d1392f 100644
 --- a/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp
@@ -1322,6 +1356,54 @@ index 2430b94c98..0f82d1392f 100644
              // FIXME: Checking for a BadConstantValue causes us to always use the Generic variant if we switched from IndexedMode -> IndexedMode + OwnStructureMode even though that might be fine.
              PutByStatus putByStatus = PutByStatus::computeFor(m_inlineStackTop->m_profiledBlock, m_inlineStackTop->m_baselineMap, m_icContextStack, currentCodeOrigin());
              if (putByStatus.isMegamorphic()) {
+diff --git a/Source/JavaScriptCore/dfg/DFGCFAPhase.cpp b/Source/JavaScriptCore/dfg/DFGCFAPhase.cpp
+index 15d9613421..01562451dd 100644
+--- a/Source/JavaScriptCore/dfg/DFGCFAPhase.cpp
++++ b/Source/JavaScriptCore/dfg/DFGCFAPhase.cpp
+@@ -138,6 +138,14 @@ public:
+                     continue;
+                 
+                 block->intersectionOfCFAHasVisited &= block->cfaHasVisited;
++#if defined(WEBKIT_IOS6)
++                if (!block->isOSRTarget)
++                    continue;
++                if (block->intersectionOfPastValuesAtHead.size() != block->valuesAtHead.size()) {
++                    block->intersectionOfPastValuesAtHead = Operands<AbstractValue>(
++                        OperandsLike, block->valuesAtHead, AbstractValue::fullTop());
++                }
++#endif
+                 for (unsigned i = block->intersectionOfPastValuesAtHead.size(); i--;) {
+                     AbstractValue value = block->valuesAtHead[i];
+                     // We need to guarantee that when we do an OSR entry, we validate the incoming
+diff --git a/Source/JavaScriptCore/dfg/DFGCommon.h b/Source/JavaScriptCore/dfg/DFGCommon.h
+index e640d54cb0..afe0d55ab5 100644
+--- a/Source/JavaScriptCore/dfg/DFGCommon.h
++++ b/Source/JavaScriptCore/dfg/DFGCommon.h
+@@ -85,14 +85,22 @@ inline bool logCompilationChanges(JITCompilationMode mode = JITCompilationMode::
+ 
+ inline bool shouldDumpGraphAtEachPhase(Graph&);
+ 
++#if ASSERT_ENABLED
+ inline bool validationEnabled()
+ {
+-#if ASSERT_ENABLED
+     return true;
++}
++#elif defined(WEBKIT_IOS6)
++constexpr bool validationEnabled()
++{
++    return false;
++}
+ #else
++inline bool validationEnabled()
++{
+     return Options::validateGraph() || Options::validateGraphAtEachPhase();
+-#endif
+ }
++#endif
+ 
+ inline bool constexpr enableInt52()
+ {
 diff --git a/Source/JavaScriptCore/dfg/DFGJITCode.h b/Source/JavaScriptCore/dfg/DFGJITCode.h
 index 52e7a5d4fb..d72b7bcae1 100644
 --- a/Source/JavaScriptCore/dfg/DFGJITCode.h
@@ -3285,6 +3367,216 @@ index 1fcacbf8fa..c268a23ad8 100644
          return m_identifiers.last();
      }
      
+diff --git a/Source/JavaScriptCore/parser/SourceProvider.h b/Source/JavaScriptCore/parser/SourceProvider.h
+index fff58ccd92..ffcca8f6b9 100644
+--- a/Source/JavaScriptCore/parser/SourceProvider.h
++++ b/Source/JavaScriptCore/parser/SourceProvider.h
+@@ -71,6 +71,9 @@ public:
+     virtual StringView source() const = 0;
+     virtual RefPtr<CachedBytecode> cachedBytecode() const { return nullptr; }
+     virtual void cacheBytecode(const BytecodeCacheGenerator&) const { }
++    // cacheBytecode() runs its generator only if the provider actually keeps a blob,
++    // so a caller that wants to know before doing the work has to ask separately.
++    virtual bool wantsBytecodeCache() const { return false; }
+     virtual void updateCache(const UnlinkedFunctionExecutable*, const SourceCode&, CodeSpecializationKind, const UnlinkedFunctionCodeBlock*) const { }
+     virtual void commitCachedBytecode() const { }
+ 
+diff --git a/Source/JavaScriptCore/runtime/ArrayConventions.h b/Source/JavaScriptCore/runtime/ArrayConventions.h
+index 45c2667b79..3d48e899c2 100644
+--- a/Source/JavaScriptCore/runtime/ArrayConventions.h
++++ b/Source/JavaScriptCore/runtime/ArrayConventions.h
+@@ -23,6 +23,7 @@
+ #include <JavaScriptCore/IndexingHeader.h>
+ #include <JavaScriptCore/PureNaN.h>
+ #include <JavaScriptCore/WriteBarrier.h>
++#include <string.h>
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
+@@ -131,9 +132,17 @@ ALWAYS_INLINE void clearArray(WriteBarrier<Unknown>* base, unsigned count)
+         clearArrayMemset(base, count);
+         return;
+     }
++#elif OS(DARWIN)
++    const unsigned minCountForMemset = 12;
++    if (count >= minCountForMemset) {
++        WriteBarrier<Unknown> hole;
++        static_assert(sizeof(WriteBarrier<Unknown>) == sizeof(uint64_t));
++        memset_pattern8(static_cast<void*>(base), &hole, sizeof(WriteBarrier<Unknown>) * static_cast<size_t>(count));
++        return;
++    }
+ #endif
+-    
+-    for (unsigned i = count; i--;)
++
++    for (unsigned i = 0; i < count; ++i)
+         base[i].clear();
+ }
+ 
+@@ -145,12 +154,56 @@ ALWAYS_INLINE void clearArray(double* base, unsigned count)
+         clearArrayMemset(base, count);
+         return;
+     }
++#elif OS(DARWIN)
++    const unsigned minCountForMemset = 12;
++    if (count >= minCountForMemset) {
++        constexpr double pattern = PNaN;
++        memset_pattern8(static_cast<void*>(base), &pattern, sizeof(double) * static_cast<size_t>(count));
++        return;
++    }
+ #endif
+-    
+-    for (unsigned i = count; i--;)
++
++    for (unsigned i = 0; i < count; ++i)
+         base[i] = PNaN;
+ }
+ 
++ALWAYS_INLINE void fillArrayWithUndefined(WriteBarrier<Unknown>* base, unsigned count)
++{
++#if OS(DARWIN)
++    const unsigned minCountForMemset = 12;
++    if (count >= minCountForMemset) {
++        WriteBarrier<Unknown> undefinedValue;
++        undefinedValue.setUndefined();
++        static_assert(sizeof(WriteBarrier<Unknown>) == sizeof(uint64_t));
++        memset_pattern8(static_cast<void*>(base), &undefinedValue, sizeof(WriteBarrier<Unknown>) * static_cast<size_t>(count));
++        return;
++    }
++#endif
++
++    for (unsigned i = 0; i < count; ++i)
++        base[i].setUndefined();
++}
++
++// Read an indexed element from a butterfly the mutator owns.
++//
++// WriteBarrierBase<Unknown>::get() routes through JSValue::decodeConcurrent(),
++// which on USE(JSVALUE32_64) with ENABLE(CONCURRENT_JS) is a tag/payload/tag
++// retry loop with a WTF::loadLoadFence() on either side of the payload read.
++// On armv7 each of those fences is a `dmb ish`, so a plain element read costs
++// two full barriers - paid per element in every indexOf / includes / spread /
++// flatten / sort loop below. Those barriers exist for a reader on another
++// thread racing WriteBarrierBase<Unknown>::set()'s InvalidTag publish protocol.
++// A mutator reading elements it wrote itself is ordered by program order and
++// needs neither, which is why the surrounding code already reads the very same
++// slots through WTF::find64() and gcSafeMemcpy() without the protocol.
++//
++// Only for butterfly indexed storage read on the mutator. Out-of-line property
++// slots are read concurrently by compiler threads and must keep using get().
++ALWAYS_INLINE JSValue loadElementUnordered(const WriteBarrier<Unknown>& element)
++{
++    return *element.slot();
++}
++
+ } // namespace JSC
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+diff --git a/Source/JavaScriptCore/runtime/ArrayPrototype.cpp b/Source/JavaScriptCore/runtime/ArrayPrototype.cpp
+index 0adcea2f35..61312d7d5f 100644
+--- a/Source/JavaScriptCore/runtime/ArrayPrototype.cpp
++++ b/Source/JavaScriptCore/runtime/ArrayPrototype.cpp
+@@ -583,7 +583,22 @@ JSC_DEFINE_HOST_FUNCTION(arrayProtoFuncPush, (JSGlobalObject* globalObject, Call
+         array->pushInline(globalObject, callFrame->uncheckedArgument(0));
+         return JSValue::encode(jsNumber(array->length()));
+     }
+-    
++
++#if defined(WEBKIT_IOS6)
++    if (isJSArray(thisValue) && callFrame->argumentCount() > 1) {
++        JSArray* array = asArray(thisValue);
++        unsigned argCount = callFrame->argumentCount();
++        if (!hasAnyArrayStorage(array->indexingType()) && !array->mayInterceptIndexedAccesses()
++            && static_cast<uint64_t>(array->length()) + argCount <= MAX_ARRAY_INDEX) {
++            for (unsigned n = 0; n < argCount; ++n) {
++                array->pushInline(globalObject, callFrame->uncheckedArgument(n));
++                RETURN_IF_EXCEPTION(scope, { });
++            }
++            return JSValue::encode(jsNumber(array->length()));
++        }
++    }
++#endif
++
+     JSObject* thisObj = thisValue.toObject(globalObject);
+     EXCEPTION_ASSERT(!!scope.exception() == !thisObj);
+     if (!thisObj) [[unlikely]]
+@@ -828,7 +843,7 @@ static ALWAYS_INLINE std::tuple<uint64_t, IndexingType, std::span<EncodedJSValue
+             unsigned count = 0;
+             compactedRoot.fill(vm, butterflyLength, [&](JSValue* buffer) {
+                 for (unsigned i = 0; i < butterflyLength; ++i) {
+-                    if (JSValue value = data[i].get(); value) [[likely]]
++                    if (JSValue value = loadElementUnordered(data[i]); value) [[likely]]
+                         buffer[count++] = value;
+                 }
+             });
+@@ -845,7 +860,7 @@ static ALWAYS_INLINE std::tuple<uint64_t, IndexingType, std::span<EncodedJSValue
+             unsigned count = 0;
+             compactedRoot.fill(vm, butterflyLength, [&](JSValue* buffer) {
+                 for (unsigned i = 0; i < butterflyLength; ++i) {
+-                    if (JSValue value = data[i].get(); value) [[likely]] {
++                    if (JSValue value = loadElementUnordered(data[i]); value) [[likely]] {
+                         if (!value.isUndefined()) [[likely]]
+                             buffer[count++] = value;
+                         else
+@@ -1267,8 +1282,10 @@ ALWAYS_INLINE JSValue fastIndexOf(JSGlobalObject* globalObject, VM& vm, JSArray*
+         auto& butterfly = *array->butterfly();
+         auto data = butterfly.contiguous().data();
+ 
++        bool searchElementComparesByBits = !searchElement.isNumber() && !searchElement.isString() && !searchElement.isBigInt();
++
+         if constexpr (direction == IndexOfDirection::Forward) {
+-            if (searchElement.isObject()) {
++            if (searchElementComparesByBits) {
+                 auto* result = std::bit_cast<const WriteBarrier<Unknown>*>(WTF::find64(std::bit_cast<const uint64_t*>(data + index), JSValue::encode(searchElement), length - index));
+                 if (result)
+                     return jsNumber(result - data);
+@@ -1276,7 +1293,7 @@ ALWAYS_INLINE JSValue fastIndexOf(JSGlobalObject* globalObject, VM& vm, JSArray*
+             }
+ 
+             for (; index < length; ++index) {
+-                JSValue value = data[index].get();
++                JSValue value = loadElementUnordered(data[index]);
+                 if (!value)
+                     continue;
+                 bool isEqual = JSValue::strictEqual(globalObject, searchElement, value);
+@@ -1285,7 +1302,7 @@ ALWAYS_INLINE JSValue fastIndexOf(JSGlobalObject* globalObject, VM& vm, JSArray*
+                     return jsNumber(index);
+             }
+         } else {
+-            if (searchElement.isObject()) {
++            if (searchElementComparesByBits) {
+                 auto* result = std::bit_cast<const WriteBarrier<Unknown>*>(WTF::reverseFind64(std::bit_cast<const uint64_t*>(data), JSValue::encode(searchElement), static_cast<uint64_t>(index) + 1));
+                 if (result)
+                     return jsNumber(result - data);
+@@ -1294,7 +1311,7 @@ ALWAYS_INLINE JSValue fastIndexOf(JSGlobalObject* globalObject, VM& vm, JSArray*
+ 
+             do {
+                 ASSERT(index < length);
+-                JSValue value = data[index].get();
++                JSValue value = loadElementUnordered(data[index]);
+                 if (!value)
+                     continue;
+                 bool isEqual = JSValue::strictEqual(globalObject, searchElement, value);
+@@ -1351,8 +1368,8 @@ JSC_DEFINE_HOST_FUNCTION(arrayProtoFuncIndexOf, (JSGlobalObject* globalObject, C
+ 
+     if (isJSArray(thisObject)) [[likely]] {
+         JSArray* array = asArray(thisObject);
+-        Butterfly* butterfly = array->butterfly();
+-        if (isCopyOnWrite(array->indexingMode()) && JSCellButterfly::isOnlyAtomStringsStructure(vm, butterfly) && searchElement.isString()) {
++        if (isCopyOnWrite(array->indexingMode()) && searchElement.isString() && JSCellButterfly::isOnlyAtomStringsStructure(vm, array->butterfly())) {
++            Butterfly* butterfly = array->butterfly();
+             auto search = asString(searchElement)->toAtomString(globalObject);
+             RETURN_IF_EXCEPTION(scope, { });
+ 
+@@ -1361,7 +1378,7 @@ JSC_DEFINE_HOST_FUNCTION(arrayProtoFuncIndexOf, (JSGlobalObject* globalObject, C
+             if (mayContainSearch) {
+                 auto data = butterfly->contiguous().data();
+                 for (unsigned i = index; i < length; ++i) {
+-                    JSValue value = data[i].get();
++                    JSValue value = loadElementUnordered(data[i]);
+                     if (asString(value)->getValueImpl() == search.data) {
+                         result = jsNumber(i);
+                         break;
 diff --git a/Source/JavaScriptCore/runtime/CallData.cpp b/Source/JavaScriptCore/runtime/CallData.cpp
 index ecec37eb02..6ada189fbb 100644
 --- a/Source/JavaScriptCore/runtime/CallData.cpp
@@ -3335,6 +3627,581 @@ index ecec37eb02..6ada189fbb 100644
  }
  
  } // namespace JSC
+diff --git a/Source/JavaScriptCore/runtime/CodeCache.cpp b/Source/JavaScriptCore/runtime/CodeCache.cpp
+index 160323ca1d..b32892e074 100644
+--- a/Source/JavaScriptCore/runtime/CodeCache.cpp
++++ b/Source/JavaScriptCore/runtime/CodeCache.cpp
+@@ -34,6 +34,16 @@
+ #include "VariableEnvironmentInlines.h"
+ #include <wtf/TZoneMallocInlines.h>
+ 
++#if defined(WEBKIT_IOS6)
++#include "VM.h"
++#include <wtf/Condition.h>
++#include <wtf/Deque.h>
++#include <wtf/Lock.h>
++#include <wtf/NeverDestroyed.h>
++#include <wtf/RunLoop.h>
++#include <wtf/Threading.h>
++#endif
++
+ namespace JSC {
+ 
+ WTF_MAKE_TZONE_ALLOCATED_IMPL(CodeCache);
+@@ -157,6 +167,201 @@ UnlinkedModuleProgramCodeBlock* recursivelyGenerateUnlinkedCodeBlockForModulePro
+     return recursivelyGenerateUnlinkedCodeBlock<UnlinkedModuleProgramCodeBlock>(vm, source, lexicallyScopedFeatures, scriptMode, codeGenerationMode, error, evalContextType);
+ }
+ 
++#if defined(WEBKIT_IOS6)
++
++// A third of the web thread's launch is JavaScriptCore turning the site's functions
++// into bytecode, one at a time, at the moment each is first called. That bytecode is a
++// pure function of the source text and the code generation mode, so it can be made
++// somewhere else - but not in this VM. CommonVM.cpp calls apiLock().makeWebThreadAware(),
++// which makes JSLock::lock() take the web lock as well, and the web thread holds the web
++// lock for whole runloop turns; a second thread reaching into the page's VM would queue
++// behind the page instead of running beside it, and _WebThreadLock() calls CRASH()
++// outright when the caller is neither the main nor the web thread. So the pass shares
++// nothing with the page: its own thread, its own VM, its own heap, its own atom string
++// table, its own copy of the source text. The only thing that crosses back is a
++// serialized blob, handed to the provider's bytecode cache on the thread that runs the
++// page, where CodeCacheMap::fetchFromDisk picks it up the next time this program is
++// compiled - under the same SourceCodeKey, which decodeCodeBlock re-checks before it
++// hands anything back.
++
++namespace {
++
++struct AheadOfTimeBytecodeJob {
++    RefPtr<SourceProvider> provider;
++    RefPtr<WTF::RunLoop> runLoop;
++    String source;
++    String sourceURL;
++    URL sourceOriginURL;
++    TextPosition startPosition;
++    int startOffset { 0 };
++    int endOffset { 0 };
++    int firstLine { 1 };
++    int startColumn { 1 };
++    unsigned sourceHash { 0 };
++    SourceTaintedOrigin taintedness { SourceTaintedOrigin::Untainted };
++    LexicallyScopedFeatures lexicallyScopedFeatures { NoLexicallyScopedFeatures };
++    JSParserScriptMode scriptMode { JSParserScriptMode::Classic };
++    OptionSet<CodeGenerationMode> codeGenerationMode;
++};
++
++class AheadOfTimeBytecodeThread {
++    WTF_MAKE_NONCOPYABLE(AheadOfTimeBytecodeThread);
++public:
++    AheadOfTimeBytecodeThread() = default;
++
++    bool enqueue(AheadOfTimeBytecodeJob&&);
++
++private:
++    void run();
++
++    static constexpr unsigned maximumRememberedPrograms = 256;
++
++    Lock m_lock;
++    Condition m_jobAvailable;
++    Deque<AheadOfTimeBytecodeJob> m_queue WTF_GUARDED_BY_LOCK(m_lock);
++    UncheckedKeyHashSet<unsigned> m_alreadyQueued WTF_GUARDED_BY_LOCK(m_lock);
++    RefPtr<Thread> m_thread WTF_GUARDED_BY_LOCK(m_lock);
++};
++
++bool AheadOfTimeBytecodeThread::enqueue(AheadOfTimeBytecodeJob&& job)
++{
++    // Zero is the hash set's empty value, so a provider that hashes to it cannot be
++    // remembered and is refused rather than queued over and over.
++    if (!job.sourceHash)
++        return false;
++
++    Locker locker { m_lock };
++
++    if (m_queue.size() >= Options::aheadOfTimeBytecodeQueueLength())
++        return false;
++
++    if (m_alreadyQueued.size() >= maximumRememberedPrograms)
++        m_alreadyQueued.clear();
++    if (!m_alreadyQueued.add(job.sourceHash).isNewEntry)
++        return false;
++
++    if (!m_thread)
++        m_thread = Thread::create("JSC AOT Bytecode"_s, [this] { run(); }, ThreadType::Compiler, Thread::QOS::Utility);
++
++    m_queue.append(WTF::move(job));
++    m_jobAvailable.notifyOne();
++    return true;
++}
++
++void AheadOfTimeBytecodeThread::run()
++{
++    Ref<VM> vm = VM::create();
++
++    for (;;) {
++        AheadOfTimeBytecodeJob job;
++        {
++            Locker locker { m_lock };
++            while (m_queue.isEmpty())
++                m_jobAvailable.wait(m_lock);
++            job = m_queue.takeFirst();
++        }
++
++        RefPtr<CachedBytecode> bytecode;
++        {
++            JSLockHolder locker(vm.get());
++
++            SourceCode source(
++                RefPtr<SourceProvider> { StringSourceProvider::create(job.source, SourceOrigin { job.sourceOriginURL }, String { job.sourceURL }, job.taintedness, job.startPosition) },
++                job.startOffset, job.endOffset, job.firstLine, job.startColumn);
++
++            ParserError error;
++            UnlinkedProgramCodeBlock* unlinkedCodeBlock = recursivelyGenerateUnlinkedCodeBlockForProgram(vm.get(), source, job.lexicallyScopedFeatures, job.scriptMode, job.codeGenerationMode, error, EvalContextType::None);
++
++            // error also reports any nested function that failed to generate, and that
++            // is not a reason to throw the program away. A function with no bytecode in
++            // the blob decodes into an executable whose code block slot is empty, and
++            // UnlinkedFunctionExecutable::unlinkedCodeBlockFor falls straight through to
++            // generating it, so the page sees exactly the error it would have seen. Only
++            // a null program is fatal here.
++            if (unlinkedCodeBlock) {
++                SourceCodeKey key(
++                    source, String(), SourceCodeType::ProgramType, job.lexicallyScopedFeatures, job.scriptMode,
++                    DerivedContextType::None, EvalContextType::None, false, job.codeGenerationMode,
++                    std::nullopt);
++                bytecode = encodeCodeBlock(vm.get(), key, unlinkedCodeBlock);
++            }
++        }
++
++        {
++            // sourceProviderCacheMap keys on RefPtr<SourceProvider>, so without this the
++            // private VM would hold every source it has ever been given for the life of
++            // the process.
++            JSLockHolder locker(vm.get());
++            vm->clearSourceProviderCaches();
++            vm->codeCache()->clear();
++            vm->heap.collectNow(Sync, CollectionScope::Full);
++        }
++        job.source = String();
++
++        // Dispatched whether or not there is a blob: the job may hold the last reference
++        // to the provider, and ~CachedScriptSourceProvider talks to WebCore, so the final
++        // deref has to happen back on the thread that runs the page.
++        RefPtr<WTF::RunLoop> runLoop = WTF::move(job.runLoop);
++        runLoop->dispatch([provider = WTF::move(job.provider), bytecode = WTF::move(bytecode)] {
++            if (!bytecode)
++                return;
++            provider->cacheBytecode([&] { return bytecode; });
++        });
++    }
++}
++
++} // anonymous namespace
++
++bool enqueueAheadOfTimeBytecodeGeneration(VM& vm, const SourceCode& source, LexicallyScopedFeatures lexicallyScopedFeatures, JSParserScriptMode scriptMode, OptionSet<CodeGenerationMode> codeGenerationMode)
++{
++    if (!Options::useAheadOfTimeBytecode())
++        return false;
++
++    SourceProvider* provider = source.provider();
++    if (!provider || provider->sourceType() != SourceProviderSourceType::Program)
++        return false;
++
++    // cacheBytecode() silently drops the blob when the provider keeps no cache, and this
++    // pass is far too expensive to run on the chance that someone is listening.
++    if (!provider->wantsBytecodeCache())
++        return false;
++
++    // The pass rebuilds the program from its own copy of the text, so its SourceCodeKey
++    // only matches if the SourceCode covers the whole provider: the key's hash comes from
++    // the provider, not from the range. A script that is a slice of a larger document
++    // would need the whole document copied to hash the same, and those are not the ones
++    // that cost seconds.
++    StringView text = provider->source();
++    if (source.startOffset() || static_cast<unsigned>(source.endOffset()) != text.length())
++        return false;
++
++    unsigned length = text.length();
++    if (length < Options::aheadOfTimeBytecodeMinimumSourceLength() || length > Options::aheadOfTimeBytecodeMaximumSourceLength())
++        return false;
++
++    AheadOfTimeBytecodeJob job;
++    job.provider = provider;
++    job.runLoop = &vm.runLoop();
++    job.source = text.toString().isolatedCopy();
++    job.sourceURL = provider->sourceURL().isolatedCopy();
++    job.sourceOriginURL = provider->sourceOrigin().url().isolatedCopy();
++    job.startPosition = provider->startPosition();
++    job.startOffset = source.startOffset();
++    job.endOffset = source.endOffset();
++    job.firstLine = source.firstLine().oneBasedInt();
++    job.startColumn = source.startColumn().oneBasedInt();
++    job.sourceHash = provider->hash();
++    job.taintedness = provider->sourceTaintedOrigin();
++    job.lexicallyScopedFeatures = lexicallyScopedFeatures;
++    job.scriptMode = scriptMode;
++    job.codeGenerationMode = codeGenerationMode;
++
++    static NeverDestroyed<AheadOfTimeBytecodeThread> generator;
++    return generator->enqueue(WTF::move(job));
++}
++
++#endif // defined(WEBKIT_IOS6)
++
+ template <class UnlinkedCodeBlockType, class ExecutableType>
+ UnlinkedCodeBlockType* CodeCache::getUnlinkedGlobalCodeBlock(VM& vm, ExecutableType* executable, const SourceCode& source, JSParserScriptMode scriptMode, OptionSet<CodeGenerationMode> codeGenerationMode, ParserError& error, EvalContextType evalContextType)
+ {
+@@ -185,6 +390,25 @@ UnlinkedCodeBlockType* CodeCache::getUnlinkedGlobalCodeBlock(VM& vm, ExecutableT
+     if (unlinkedCodeBlock && Options::useCodeCache()) {
+         m_sourceCode.addCache(key, SourceCodeValue(vm, unlinkedCodeBlock, m_sourceCode.age()));
+ 
++#if defined(WEBKIT_IOS6)
++        // Reaching here means every cache said no and this thread just paid for a full
++        // parse of the program, so this is the moment we know the source is worth
++        // regenerating: it is real, it is big, and nobody has bytecode for it. What the
++        // web thread has in hand is the top level only - the functions are still
++        // uncompiled - so encoding it now would fill the provider's one blob slot with
++        // the emptiest possible version of the program. Hand the whole source to the
++        // background pass instead and let it produce the version with the functions in
++        // it. recursivelyGenerateUnlinkedCodeBlockForProgram assumes a plain global
++        // program, so anything with a derived context or an arrow function context stays
++        // on the ordinary path.
++        if constexpr (std::is_same_v<UnlinkedCodeBlockType, UnlinkedProgramCodeBlock>) {
++            if (derivedContextType == DerivedContextType::None && !isArrowFunctionContext && evalContextType == EvalContextType::None) {
++                if (enqueueAheadOfTimeBytecodeGeneration(vm, source, executable->lexicallyScopedFeatures(), scriptMode, codeGenerationMode))
++                    return unlinkedCodeBlock;
++            }
++        }
++#endif
++
+         key.source().provider().cacheBytecode([&] {
+             return encodeCodeBlock(vm, key, unlinkedCodeBlock);
+         });
+diff --git a/Source/JavaScriptCore/runtime/CodeCache.h b/Source/JavaScriptCore/runtime/CodeCache.h
+index ef16ac5631..e470c977a3 100644
+--- a/Source/JavaScriptCore/runtime/CodeCache.h
++++ b/Source/JavaScriptCore/runtime/CodeCache.h
+@@ -264,6 +264,15 @@ UnlinkedEvalCodeBlock* generateUnlinkedCodeBlockForDirectEval(VM&, DirectEvalExe
+ UnlinkedProgramCodeBlock* recursivelyGenerateUnlinkedCodeBlockForProgram(VM&, const SourceCode&, LexicallyScopedFeatures, JSParserScriptMode, OptionSet<CodeGenerationMode>, ParserError&, EvalContextType);
+ UnlinkedModuleProgramCodeBlock* recursivelyGenerateUnlinkedCodeBlockForModuleProgram(VM&, const SourceCode&, LexicallyScopedFeatures, JSParserScriptMode, OptionSet<CodeGenerationMode>, ParserError&, EvalContextType);
+ 
++#if defined(WEBKIT_IOS6)
++// Hands a program that was just compiled from source to a background thread which
++// regenerates it - and every function inside it - in a VM of its own, and gives the
++// serialized result to the source provider's bytecode cache. Returns true if the job
++// was accepted, in which case the caller must not encode the program itself: the
++// provider keeps only the first blob it is given.
++bool enqueueAheadOfTimeBytecodeGeneration(VM&, const SourceCode&, LexicallyScopedFeatures, JSParserScriptMode, OptionSet<CodeGenerationMode>);
++#endif
++
+ void writeCodeBlock(const SourceCodeKey&, const SourceCodeValue&);
+ RefPtr<CachedBytecode> serializeBytecode(VM&, UnlinkedCodeBlock*, const SourceCode&, SourceCodeType, LexicallyScopedFeatures, JSParserScriptMode, FileSystem::FileHandle&, BytecodeCacheError&, OptionSet<CodeGenerationMode>);
+ SourceCodeKey sourceCodeKeyForSerializedProgram(VM&, const SourceCode&);
+diff --git a/Source/JavaScriptCore/runtime/JSArray.cpp b/Source/JavaScriptCore/runtime/JSArray.cpp
+index 75295c453a..ba9d955aa4 100644
+--- a/Source/JavaScriptCore/runtime/JSArray.cpp
++++ b/Source/JavaScriptCore/runtime/JSArray.cpp
+@@ -81,14 +81,13 @@ static ALWAYS_INLINE bool tryGrowAndShiftButterflyRight(JSObject* object, VM& vm
+     if (startIndex)
+         memcpy(newData, oldData, startIndex * sizeof(ElementType));
+ 
+-    for (unsigned i = startIndex; i < startIndex + count; ++i)
+-        clearElement(newData[i]);
++    clearArray(newData + startIndex, count);
+ 
+     if (unsigned moveCount = oldLength - startIndex)
+         memcpy(newData + startIndex + count, oldData + startIndex, moveCount * sizeof(ElementType));
+ 
+-    for (unsigned i = oldLength + count; i < newVectorLength; ++i)
+-        clearElement(newData[i]);
++    if (newVectorLength > oldLength + count)
++        clearArray(newData + oldLength + count, newVectorLength - (oldLength + count));
+ 
+     newButterfly->setVectorLength(newVectorLength);
+     newButterfly->setPublicLength(newLength);
+@@ -126,13 +125,10 @@ JSArray* JSArray::tryCreateUninitializedRestricted(ObjectInitializationScope& sc
+         butterfly = Butterfly::fromBase(temp, 0, outOfLineStorage);
+         butterfly->setVectorLength(vectorLength);
+         butterfly->setPublicLength(initialLength);
+-        if (hasDouble(indexingType)) {
+-            for (unsigned i = initialLength; i < vectorLength; ++i)
+-                butterfly->contiguousDouble().atUnsafe(i) = PNaN;
+-        } else {
+-            for (unsigned i = initialLength; i < vectorLength; ++i)
+-                butterfly->contiguous().atUnsafe(i).clear();
+-        }
++        if (hasDouble(indexingType))
++            clearArray(butterfly->contiguousDouble().data() + initialLength, vectorLength - initialLength);
++        else
++            clearArray(butterfly->contiguous().data() + initialLength, vectorLength - initialLength);
+     } else {
+         ASSERT(
+             indexingType == ArrayWithSlowPutArrayStorage
+@@ -151,8 +147,7 @@ JSArray* JSArray::tryCreateUninitializedRestricted(ObjectInitializationScope& sc
+         storage->m_indexBias = indexBias;
+         storage->m_sparseMap.clear();
+         storage->m_numValuesInVector = initialLength;
+-        for (unsigned i = initialLength; i < vectorLength; ++i)
+-            storage->m_vector[i].clear();
++        clearArray(storage->m_vector + initialLength, vectorLength - initialLength);
+     }
+ 
+     JSArray* result = createWithButterfly(vm, deferralContext, structure, butterfly);
+@@ -174,17 +169,13 @@ void JSArray::eagerlyInitializeButterfly(ObjectInitializationScope& scope, JSArr
+     // ObjectInitializationScope::notifyInitialized() will verify that all elements are
+     // initialized.
+     if (!hasAnyArrayStorage(indexingType)) [[likely]] {
+-        if (hasDouble(indexingType)) {
+-            for (unsigned i = 0; i < initialLength; ++i)
+-                butterfly->contiguousDouble().atUnsafe(i) = PNaN;
+-        } else {
+-            for (unsigned i = 0; i < initialLength; ++i)
+-                butterfly->contiguous().atUnsafe(i).clear();
+-        }
++        if (hasDouble(indexingType))
++            clearArray(butterfly->contiguousDouble().data(), initialLength);
++        else
++            clearArray(butterfly->contiguous().data(), initialLength);
+     } else {
+         ArrayStorage* storage = butterfly->arrayStorage();
+-        for (unsigned i = 0; i < initialLength; ++i)
+-            storage->m_vector[i].clear();
++        clearArray(storage->m_vector, initialLength);
+     }
+     scope.notifyInitialized(array);
+ }
+@@ -577,10 +568,13 @@ bool JSArray::fastFill(VM& vm, unsigned startIndex, unsigned endIndex, JSValue v
+ #endif
+         vm.writeBarrier(this);
+     } else {
+-        // FIXME: https://bugs.webkit.org/show_bug.cgi?id=283786
+-        auto contiguousStorage = butterfly()->contiguous();
+-        for (unsigned i = startIndex; i < endIndex; ++i)
+-            contiguousStorage.at(this, i).setWithoutWriteBarrier(value);
++        auto* data = butterfly()->contiguous().data();
++        auto pattern = std::bit_cast<const WriteBarrier<Unknown>>(JSValue::encode(value));
++#if OS(DARWIN)
++        memset_pattern8(data + startIndex, &pattern, sizeof(JSValue) * (endIndex - startIndex));
++#else
++        std::fill(data + startIndex, data + endIndex, pattern);
++#endif
+         vm.writeBarrier(this);
+     }
+ 
+@@ -831,16 +825,16 @@ std::optional<bool> JSArray::fastIncludes(JSGlobalObject* globalObject, JSValue
+         auto& butterfly = *this->butterfly();
+         auto data = butterfly.contiguous().data();
+ 
+-        if (searchElement.isObject()) {
++        bool searchElementIsUndefined = searchElement.isUndefined();
++        if (!searchElementIsUndefined && !searchElement.isNumber() && !searchElement.isString() && !searchElement.isBigInt()) {
+             auto* result = std::bit_cast<const WriteBarrier<Unknown>*>(WTF::find64(std::bit_cast<const uint64_t*>(data + index), JSValue::encode(searchElement), length - index));
+             if (result)
+                 return true;
+             return false;
+         }
+ 
+-        bool searchElementIsUndefined = searchElement.isUndefined();
+         for (; index < length; ++index) {
+-            JSValue value = data[index].get();
++            JSValue value = loadElementUnordered(data[index]);
+             if (!value) {
+                 if (searchElementIsUndefined)
+                     return true;
+@@ -1146,13 +1140,10 @@ bool JSArray::appendMemcpy(JSGlobalObject* globalObject, VM& vm, unsigned startI
+ 
+     if (otherType == ArrayWithUndecided) [[unlikely]] {
+         auto* butterfly = this->butterfly();
+-        if (type == ArrayWithDouble) {
+-            for (unsigned i = startIndex; i < newLength; ++i)
+-                butterfly->contiguousDouble().at(this, i) = PNaN;
+-        } else {
+-            for (unsigned i = startIndex; i < newLength; ++i)
+-                butterfly->contiguousInt32().at(this, i).setWithoutWriteBarrier(JSValue());
+-        }
++        if (type == ArrayWithDouble)
++            clearArray(butterfly->contiguousDouble().data() + startIndex, newLength - startIndex);
++        else
++            clearArray(butterfly->contiguousInt32().data() + startIndex, newLength - startIndex);
+     } else if (type == ArrayWithDouble) {
+         auto data = butterfly()->contiguousDouble().data();
+         unsigned index = startIndex;
+@@ -1214,13 +1205,10 @@ bool JSArray::appendMemcpy(JSGlobalObject* globalObject, VM& vm, unsigned startI
+ 
+     if (otherType == ArrayWithUndecided) [[unlikely]] {
+         auto* butterfly = this->butterfly();
+-        if (type == ArrayWithDouble) {
+-            for (unsigned i = startIndex; i < newLength; ++i)
+-                butterfly->contiguousDouble().at(this, i) = PNaN;
+-        } else {
+-            for (unsigned i = startIndex; i < newLength; ++i)
+-                butterfly->contiguousInt32().at(this, i).setWithoutWriteBarrier(JSValue());
+-        }
++        if (type == ArrayWithDouble)
++            clearArray(butterfly->contiguousDouble().data() + startIndex, newLength - startIndex);
++        else
++            clearArray(butterfly->contiguousInt32().data() + startIndex, newLength - startIndex);
+     } else if (type == ArrayWithDouble) {
+         // Double array storage do not need to be safe against GC since they are not scanned.
+         memcpy(butterfly()->contiguousDouble().data() + startIndex, otherArray->butterfly()->contiguousDouble().data(), sizeof(double) * otherLength);
+@@ -1337,7 +1325,7 @@ JSValue JSArray::pop(JSGlobalObject* globalObject)
+             return jsUndefined();
+         
+         RELEASE_ASSERT(length < butterfly->vectorLength());
+-        JSValue value = butterfly->contiguous().at(this, length).get();
++        JSValue value = loadElementUnordered(butterfly->contiguous().at(this, length));
+         if (value) {
+             butterfly->contiguous().at(this, length).clear();
+             butterfly->setPublicLength(length);
+@@ -1375,9 +1363,8 @@ JSValue JSArray::pop(JSGlobalObject* globalObject)
+         unsigned index = length - 1;
+         if (index < storage->vectorLength()) {
+             WriteBarrier<Unknown>& valueSlot = storage->m_vector[index];
+-            if (valueSlot) {
++            if (JSValue element = loadElementUnordered(valueSlot)) {
+                 --storage->m_numValuesInVector;
+-                JSValue element = valueSlot.get();
+                 valueSlot.clear();
+             
+                 RELEASE_ASSERT(isLengthWritable());
+@@ -1434,7 +1421,7 @@ JSValue JSArray::fastShift(VM& vm)
+         if (length > shiftThreshold) [[unlikely]]
+             return { };
+ 
+-        JSValue result = butterfly->contiguous().at(this, 0).get();
++        JSValue result = loadElementUnordered(butterfly->contiguous().at(this, 0));
+         if (!result)
+             return { };
+ 
+@@ -1706,7 +1693,7 @@ bool JSArray::shiftCountWithAnyIndexingType(JSGlobalObject* globalObject, unsign
+         if (moveCount) {
+             if (holesMustForwardToPrototype()) [[unlikely]] {
+                 for (unsigned i = startIndex; i < end; ++i) {
+-                    JSValue v = butterfly->contiguous().at(this, i + count).get();
++                    JSValue v = loadElementUnordered(butterfly->contiguous().at(this, i + count));
+                     if (!v) [[unlikely]] {
+                         startIndex = i;
+                         return shiftCountWithArrayStorage(vm, startIndex, count, ensureArrayStorage(vm));
+@@ -2025,10 +2012,10 @@ void JSArray::fillArgList(JSGlobalObject* globalObject, MarkedArgumentBuffer& ar
+     }
+     
+     for (; i < vectorEnd; ++i) {
+-        WriteBarrier<Unknown>& v = vector[i];
++        JSValue v = loadElementUnordered(vector[i]);
+         if (!v)
+             break;
+-        args.append(v.get());
++        args.append(v);
+     }
+ 
+     // FIXME: What prevents this from being called with a RuntimeArray? The length function will always return 0 in that case.
+@@ -2097,10 +2084,10 @@ void JSArray::copyToArguments(JSGlobalObject* globalObject, JSValue* firstElemen
+     }
+     
+     for (; i < vectorEnd; ++i) {
+-        WriteBarrier<Unknown>& v = vector[i];
++        JSValue v = loadElementUnordered(vector[i]);
+         if (!v)
+             break;
+-        firstElementDest[i - offset] = v.get();
++        firstElementDest[i - offset] = v;
+     }
+     
+     for (; i < length; ++i) {
+@@ -2374,7 +2361,7 @@ static uint64_t calculateFlattenedLength(JSGlobalObject* globalObject, JSArray*
+     case ArrayWithInt32: {
+         auto* sourceBuffer = sourceArray->butterfly()->contiguous().data();
+         for (uint64_t i = 0; i < sourceLength; ++i) {
+-            JSValue element = sourceBuffer[i].get();
++            JSValue element = loadElementUnordered(sourceBuffer[i]);
+             if (!element) [[unlikely]]
+                 continue;
+             resultLength++;
+@@ -2388,7 +2375,7 @@ static uint64_t calculateFlattenedLength(JSGlobalObject* globalObject, JSArray*
+     case ArrayWithContiguous: {
+         auto* sourceBuffer = sourceArray->butterfly()->contiguous().data();
+         for (uint64_t i = 0; i < sourceLength; ++i) {
+-            JSValue element = sourceBuffer[i].get();
++            JSValue element = loadElementUnordered(sourceBuffer[i]);
+             if (!element) [[unlikely]]
+                 continue;
+             if (depth > 0 && isJSArray(element)) {
+@@ -2460,7 +2447,7 @@ static uint64_t fastFlatIntoBuffer(JSGlobalObject* globalObject, T* resultBuffer
+         for (uint64_t i = 0; i < sourceLength; ++i) {
+             if (resultIndex >= vectorLength) [[unlikely]]
+                 return std::numeric_limits<uint64_t>::max();
+-            JSValue element = sourceBuffer[i].get();
++            JSValue element = loadElementUnordered(sourceBuffer[i]);
+             if (!element) [[unlikely]]
+                 continue;
+             if constexpr (std::is_same_v<T, double>)
+@@ -2476,7 +2463,7 @@ static uint64_t fastFlatIntoBuffer(JSGlobalObject* globalObject, T* resultBuffer
+         for (uint64_t i = 0; i < sourceLength; ++i) {
+             if (resultIndex >= vectorLength) [[unlikely]]
+                 return std::numeric_limits<uint64_t>::max();
+-            JSValue element = sourceBuffer[i].get();
++            JSValue element = loadElementUnordered(sourceBuffer[i]);
+             if (!element) [[unlikely]]
+                 continue;
+             if (depth > 0 && isJSArray(element)) {
+diff --git a/Source/JavaScriptCore/runtime/JSArray.h b/Source/JavaScriptCore/runtime/JSArray.h
+index 911a5d0de5..daca7a894e 100644
+--- a/Source/JavaScriptCore/runtime/JSArray.h
++++ b/Source/JavaScriptCore/runtime/JSArray.h
+@@ -293,13 +293,10 @@ template<ArrayFillMode fillMode, NeedsGCSafeOps needsGCSafeOps, typename T, type
+ ALWAYS_INLINE void copyArrayElements(T* buffer, unsigned offset, U* source, unsigned sourceOffset, unsigned sourceSize, IndexingType sourceType)
+ {
+     if (sourceType == ArrayWithUndecided) {
+-        if constexpr (fillMode == ArrayFillMode::Empty) {
+-            for (unsigned i = 0; i < sourceSize; ++i)
+-                clearElement<T>(buffer[i + offset]);
+-        } else {
+-            for (unsigned i = 0; i < sourceSize; ++i)
+-                buffer[i + offset].setWithoutWriteBarrier(jsUndefined());
+-        }
++        if constexpr (fillMode == ArrayFillMode::Empty)
++            clearArray(buffer + offset, sourceSize);
++        else
++            fillArrayWithUndefined(buffer + offset, sourceSize);
+         return;
+     }
+ 
+@@ -314,7 +311,7 @@ ALWAYS_INLINE void copyArrayElements(T* buffer, unsigned offset, U* source, unsi
+             return;
+         } else {
+             for (unsigned i = 0; i < sourceSize; ++i) {
+-                JSValue value = source[i + sourceOffset].get();
++                JSValue value = loadElementUnordered(source[i + sourceOffset]);
+                 if (!value)
+                     value = jsUndefined();
+                 buffer[i + offset].setWithoutWriteBarrier(value);
+@@ -324,7 +321,7 @@ ALWAYS_INLINE void copyArrayElements(T* buffer, unsigned offset, U* source, unsi
+         ASSERT(sourceType == ArrayWithInt32);
+         static_assert(fillMode == ArrayFillMode::Empty);
+         for (unsigned i = 0; i < sourceSize; ++i) {
+-            JSValue value = source[i + sourceOffset].get();
++            JSValue value = loadElementUnordered(source[i + sourceOffset]);
+             if (value)
+                 buffer[i + offset] = value.asInt32();
+             else
+diff --git a/Source/JavaScriptCore/runtime/JSArrayInlines.h b/Source/JavaScriptCore/runtime/JSArrayInlines.h
+index 911db423d2..790f815359 100644
+--- a/Source/JavaScriptCore/runtime/JSArrayInlines.h
++++ b/Source/JavaScriptCore/runtime/JSArrayInlines.h
+@@ -63,7 +63,14 @@ inline JSArray* JSArray::tryCreate(VM& vm, Structure* structure, unsigned initia
+         butterfly = Butterfly::fromBase(temp, 0, outOfLineStorage);
+         butterfly->setVectorLength(vectorLength);
+         butterfly->setPublicLength(initialLength);
++#if USE(JSVALUE32_64)
++        if (hasDouble(indexingType))
++            clearArray(butterfly->contiguousDouble().data(), vectorLength);
++        else
++            clearArray(butterfly->contiguous().data(), vectorLength);
++#else
+         Butterfly::clearRange(indexingType, butterfly, 0, vectorLength);
++#endif
+     } else {
+         ASSERT(
+             indexingType == ArrayWithSlowPutArrayStorage
 diff --git a/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp b/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp
 index 26e825ace4..b457fd5238 100644
 --- a/Source/JavaScriptCore/runtime/JSCBytecodeCacheVersion.cpp
@@ -3477,7 +4344,7 @@ index d34d7e9c57..44818d4c63 100644
  
  }
 diff --git a/Source/JavaScriptCore/runtime/JSCJSValue.h b/Source/JavaScriptCore/runtime/JSCJSValue.h
-index a135398c5d..aaf76eff5e 100644
+index a135398c5d..6822fceb9a 100644
 --- a/Source/JavaScriptCore/runtime/JSCJSValue.h
 +++ b/Source/JavaScriptCore/runtime/JSCJSValue.h
 @@ -27,6 +27,8 @@
@@ -3489,7 +4356,31 @@ index a135398c5d..aaf76eff5e 100644
  #include <wtf/Forward.h>
  #include <wtf/HashFunctions.h>
  #include <wtf/HashTraits.h>
-@@ -1329,10 +1331,40 @@ ALWAYS_INLINE void clearEncodedJSValueConcurrent(EncodedJSValue& dest)
+@@ -799,7 +801,11 @@ inline bool JSValue::isNull() const
+ 
+ inline bool JSValue::isUndefinedOrNull() const
+ {
++#if USE(JSVALUE32_64)
++    return (tag() & ~1) == UndefinedTag;
++#else
+     return isUndefined() || isNull();
++#endif
+ }
+ 
+ inline bool JSValue::isCell() const
+@@ -875,7 +881,11 @@ inline JSValue::JSValue(int32_t tag, int32_t payload)
+ 
+ inline bool JSValue::isNumber() const
+ {
++#if USE(JSVALUE32_64)
++    return static_cast<uint32_t>(tag() - LowestTag) > static_cast<uint32_t>(BooleanTag - LowestTag);
++#else
+     return isInt32() || isDouble();
++#endif
+ }
+ 
+ inline bool JSValue::isBoolean() const
+@@ -1329,10 +1339,40 @@ ALWAYS_INLINE void clearEncodedJSValueConcurrent(EncodedJSValue& dest)
  
  inline JSValue JSValue::decodeConcurrent(const volatile EncodedJSValue *encodedJSValue)
  {
@@ -3533,6 +4424,68 @@ index a135398c5d..aaf76eff5e 100644
      }
  }
  
+diff --git a/Source/JavaScriptCore/runtime/JSCJSValueCell.h b/Source/JavaScriptCore/runtime/JSCJSValueCell.h
+index 6228d77c1d..2ba0cec572 100644
+--- a/Source/JavaScriptCore/runtime/JSCJSValueCell.h
++++ b/Source/JavaScriptCore/runtime/JSCJSValueCell.h
+@@ -109,7 +109,11 @@ inline bool JSValue::toBoolean(JSGlobalObject* globalObject) const
+     if (isBigInt32())
+         return !!bigInt32AsInt32();
+ #endif
++#if USE(JSVALUE32_64)
++    return payload();
++#else
+     return isTrue(); // false, null, and undefined all convert to false.
++#endif
+ }
+ 
+ inline JSObject* JSValue::toObject(JSGlobalObject* globalObject) const
+diff --git a/Source/JavaScriptCore/runtime/JSCJSValueInlines.h b/Source/JavaScriptCore/runtime/JSCJSValueInlines.h
+index fcf19957fe..b0c5eb6342 100644
+--- a/Source/JavaScriptCore/runtime/JSCJSValueInlines.h
++++ b/Source/JavaScriptCore/runtime/JSCJSValueInlines.h
+@@ -457,10 +457,14 @@ ALWAYS_INLINE bool sameValue(JSGlobalObject* globalObject, JSValue a, JSValue b)
+     if (a == b)
+         return true;
+ 
++    if (a.isInt32() && b.isInt32())
++        return false;
++
+     if (!a.isNumber())
+         return JSValue::strictEqual(globalObject, a, b);
+     if (!b.isNumber())
+         return false;
++
+     double x = a.asNumber();
+     double y = b.asNumber();
+     bool xIsNaN = std::isnan(x);
+@@ -475,21 +479,17 @@ ALWAYS_INLINE bool sameValueZero(JSGlobalObject* globalObject, JSValue a, JSValu
+     if (a == b)
+         return true;
+ 
++    if (a.isInt32() && b.isInt32())
++        return false;
++
+     if (!a.isNumber())
+         return JSValue::strictEqual(globalObject, a, b);
+     if (!b.isNumber())
+         return false;
++
+     double x = a.asNumber();
+     double y = b.asNumber();
+-    if (std::isnan(x))
+-        return std::isnan(y);
+-    if (std::isnan(y))
+-        return std::isnan(x);
+-    if (!x && y == -0)
+-        return true;
+-    if (x == -0 && !y)
+-        return true;
+-    return std::bit_cast<uint64_t>(x) == std::bit_cast<uint64_t>(y);
++    return (x == y) || (std::isnan(x) && std::isnan(y));
+ }
+ 
+ } // namespace JSC
 diff --git a/Source/JavaScriptCore/runtime/JSGlobalObject.cpp b/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
 index f7f90424b5..7ef9744899 100644
 --- a/Source/JavaScriptCore/runtime/JSGlobalObject.cpp
@@ -3583,6 +4536,441 @@ index f7f90424b5..7ef9744899 100644
      
      putDirectWithoutTransition(vm, vm.propertyNames->Object, objectConstructor, static_cast<unsigned>(PropertyAttribute::DontEnum));
      putDirectWithoutTransition(vm, vm.propertyNames->Function, functionConstructor, static_cast<unsigned>(PropertyAttribute::DontEnum));
+diff --git a/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp b/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp
+index 158fdc69fd..3d3712ba5b 100644
+--- a/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp
++++ b/Source/JavaScriptCore/runtime/JSGlobalObjectFunctions.cpp
+@@ -899,8 +899,8 @@ JSC_DEFINE_HOST_FUNCTION(globalFuncCopyDataProperties, (JSGlobalObject* globalOb
+     auto sourceStructure = source->structure();
+     if (canPerformFastPropertyEnumerationForCopyDataProperties(sourceStructure)) [[likely]] {
+         EnsureStillAliveScope sourceStructureScope(sourceStructure);
+-        Vector<UniquedStringImpl*, 8> properties; // sourceStructure ensures the lifetimes of these strings.
+-        MarkedArgumentBuffer values;
++        Vector<UniquedStringImpl*, 32> properties; // sourceStructure ensures the lifetimes of these strings.
++        MarkedArgumentBufferWithSize<32> values;
+ 
+         // FIXME: It doesn't seem like we should have to do this in two phases, but
+         // we're running into crashes where it appears that source is transitioning
+@@ -997,8 +997,8 @@ JSC_DEFINE_HOST_FUNCTION(globalFuncCloneObject, (JSGlobalObject* globalObject, C
+ 
+     if (canPerformFastPropertyEnumerationForCopyDataProperties(sourceStructure)) [[likely]] {
+         EnsureStillAliveScope sourceStructureScope(sourceStructure);
+-        Vector<UniquedStringImpl*, 8> properties; // sourceStructure ensures the lifetimes of these strings.
+-        MarkedArgumentBuffer values;
++        Vector<UniquedStringImpl*, 32> properties; // sourceStructure ensures the lifetimes of these strings.
++        MarkedArgumentBufferWithSize<32> values;
+ 
+         // FIXME: It doesn't seem like we should have to do this in two phases, but
+         // we're running into crashes where it appears that source is transitioning
+@@ -1007,7 +1007,7 @@ JSC_DEFINE_HOST_FUNCTION(globalFuncCloneObject, (JSGlobalObject* globalObject, C
+         // that ends up transitioning the structure underneath us.
+         // https://bugs.webkit.org/show_bug.cgi?id=187837
+ 
+-        source->structure()->forEachProperty(vm, [&](const PropertyTableEntry& entry) ALWAYS_INLINE_LAMBDA {
++        sourceStructure->forEachProperty(vm, [&](const PropertyTableEntry& entry) ALWAYS_INLINE_LAMBDA {
+             PropertyName propertyName(entry.key());
+             if (propertyName.isPrivateName())
+                 return true;
+diff --git a/Source/JavaScriptCore/runtime/JSONObject.cpp b/Source/JavaScriptCore/runtime/JSONObject.cpp
+index 3cbcf195c5..781b6c7d6b 100644
+--- a/Source/JavaScriptCore/runtime/JSONObject.cpp
++++ b/Source/JavaScriptCore/runtime/JSONObject.cpp
+@@ -1149,9 +1149,46 @@ ALWAYS_INLINE void FastStringifier<CharType, bufferMode>::appendInt32(int32_t nu
+     }
+ }
+ 
++#if defined(WEBKIT_IOS6)
++static ALWAYS_INLINE bool NODELETE latin1SpanNeedsJSONEscaping(std::span<const Latin1Character> span)
++{
++    constexpr uint32_t ones = 0x01010101U;
++    constexpr uint32_t highBits = 0x80808080U;
++    constexpr uint32_t quoteBytes = 0x22222222U;
++    constexpr uint32_t escapeBytes = 0x5C5C5C5CU;
++    constexpr uint32_t spaceBytes = 0x20202020U;
++    const auto* ptr = span.data();
++    const auto* end = ptr + span.size();
++    while (end - ptr >= 4) {
++        uint32_t word = WTF::unalignedLoad<uint32_t>(ptr);
++        uint32_t quotes = word ^ quoteBytes;
++        uint32_t escapes = word ^ escapeBytes;
++        uint32_t hits = (((quotes - ones) & ~quotes) | ((escapes - ones) & ~escapes) | ((word - spaceBytes) & ~word)) & highBits;
++        if (hits) [[unlikely]] {
++            for (unsigned i = 0; i < 4; ++i) {
++                if (WTF::escapedFormsForJSON[ptr[i]])
++                    return true;
++            }
++        }
++        ptr += 4;
++    }
++    for (; ptr < end; ++ptr) {
++        if (WTF::escapedFormsForJSON[*ptr]) [[unlikely]]
++            return true;
++    }
++    return false;
++}
++#endif
++
+ template<typename CharType>
+ static ALWAYS_INLINE bool stringCopySameType(std::span<const CharType> span, CharType* cursor)
+ {
++#if defined(WEBKIT_IOS6)
++    if constexpr (sizeof(CharType) == 1) {
++        memcpySpan(std::span<CharType> { cursor, span.size() }, span);
++        return latin1SpanNeedsJSONEscaping(span);
++    }
++#endif
+ #if (CPU(ARM64) || CPU(X86_64)) && COMPILER(CLANG)
+     constexpr size_t stride = SIMD::stride<CharType>;
+     if (span.size() >= stride) {
+@@ -1207,6 +1244,10 @@ static ALWAYS_INLINE bool stringCopySameType(std::span<const CharType> span, Cha
+ 
+ static ALWAYS_INLINE bool stringCopyUpconvert(std::span<const Latin1Character> span, char16_t* cursor)
+ {
++#if defined(WEBKIT_IOS6)
++    WTF::copyElements(std::span<char16_t> { cursor, span.size() }, span);
++    return latin1SpanNeedsJSONEscaping(span);
++#else
+ #if (CPU(ARM64) || CPU(X86_64)) && COMPILER(CLANG)
+     constexpr size_t stride = SIMD::stride<Latin1Character>;
+     if (span.size() >= stride) {
+@@ -1245,6 +1286,7 @@ static ALWAYS_INLINE bool stringCopyUpconvert(std::span<const Latin1Character> s
+         *cursor++ = character;
+     }
+     return false;
++#endif
+ }
+ 
+ template<typename CharType, BufferMode bufferMode>
+diff --git a/Source/JavaScriptCore/runtime/JSObject.cpp b/Source/JavaScriptCore/runtime/JSObject.cpp
+index 0bd55b856d..c456780800 100644
+--- a/Source/JavaScriptCore/runtime/JSObject.cpp
++++ b/Source/JavaScriptCore/runtime/JSObject.cpp
+@@ -606,7 +606,7 @@ bool JSObject::getOwnPropertySlotByIndex(JSObject* thisObject, JSGlobalObject* g
+         if (i >= butterfly->vectorLength())
+             return false;
+         
+-        JSValue value = butterfly->contiguous().at(thisObject, i).get();
++        JSValue value = loadElementUnordered(butterfly->contiguous().at(thisObject, i));
+         if (value) {
+             slot.setValue(thisObject, static_cast<unsigned>(PropertyAttribute::None), value);
+             return true;
+@@ -635,7 +635,7 @@ bool JSObject::getOwnPropertySlotByIndex(JSObject* thisObject, JSGlobalObject* g
+             return false;
+         
+         if (i < storage->vectorLength()) {
+-            JSValue value = storage->m_vector[i].get();
++            JSValue value = loadElementUnordered(storage->m_vector[i]);
+             if (value) {
+                 slot.setValue(thisObject, static_cast<unsigned>(PropertyAttribute::None), value);
+                 return true;
+@@ -1171,7 +1171,7 @@ ArrayStorage* JSObject::enterDictionaryIndexingModeWhenArrayStorageAlreadyExists
+ 
+     unsigned usedVectorLength = std::min(storage->length(), storage->vectorLength());
+     for (unsigned i = 0; i < usedVectorLength; ++i) {
+-        JSValue value = storage->m_vector[i].get();
++        JSValue value = loadElementUnordered(storage->m_vector[i]);
+         // This will always be a new entry in the map, so no need to check we can write,
+         // and attributes are default so no need to set them.
+         if (value)
+@@ -1286,8 +1286,7 @@ ContiguousJSValues JSObject::createInitialInt32(VM& vm, unsigned length)
+ {
+     DeferGC deferGC(vm);
+     Butterfly* newButterfly = createInitialIndexedStorage(vm, length);
+-    for (unsigned i = newButterfly->vectorLength(); i--;)
+-        newButterfly->contiguous().at(this, i).setWithoutWriteBarrier(JSValue());
++    clearArray(newButterfly->contiguous().data(), newButterfly->vectorLength());
+     StructureID oldStructureID = this->structureID();
+     Structure* oldStructure = oldStructureID.decode();
+     {
+@@ -1303,8 +1302,7 @@ ContiguousDoubles JSObject::createInitialDouble(VM& vm, unsigned length)
+ {
+     DeferGC deferGC(vm);
+     Butterfly* newButterfly = createInitialIndexedStorage(vm, length);
+-    for (unsigned i = newButterfly->vectorLength(); i--;)
+-        newButterfly->contiguousDouble().at(this, i) = PNaN;
++    clearArray(newButterfly->contiguousDouble().data(), newButterfly->vectorLength());
+     StructureID oldStructureID = this->structureID();
+     Structure* oldStructure = oldStructureID.decode();
+     {
+@@ -1320,8 +1318,7 @@ ContiguousJSValues JSObject::createInitialContiguous(VM& vm, unsigned length)
+ {
+     DeferGC deferGC(vm);
+     Butterfly* newButterfly = createInitialIndexedStorage(vm, length);
+-    for (unsigned i = newButterfly->vectorLength(); i--;)
+-        newButterfly->contiguous().at(this, i).setWithoutWriteBarrier(JSValue());
++    clearArray(newButterfly->contiguous().data(), newButterfly->vectorLength());
+     StructureID oldStructureID = this->structureID();
+     Structure* oldStructure = oldStructureID.decode();
+     {
+@@ -1349,8 +1346,7 @@ static Butterfly* createArrayStorageButterflyImpl(VM& vm, JSObject* intendedOwne
+     result->m_sparseMap.clear();
+     result->m_numValuesInVector = 0;
+     result->m_indexBias = 0;
+-    for (size_t i = vectorLength; i--;)
+-        result->m_vector[i].setWithoutWriteBarrier(JSValue());
++    clearArray(result->m_vector, vectorLength);
+ 
+     return newButterfly;
+ }
+@@ -1396,8 +1392,7 @@ ContiguousJSValues JSObject::convertUndecidedToInt32(VM& vm)
+     ASSERT(hasUndecided(indexingType()));
+ 
+     Butterfly* butterfly = this->butterfly();
+-    for (unsigned i = butterfly->vectorLength(); i--;)
+-        butterfly->contiguous().at(this, i).setWithoutWriteBarrier(JSValue());
++    clearArray(butterfly->contiguous().data(), butterfly->vectorLength());
+ 
+     {
+         Structure* oldStructure = structure();
+@@ -1413,9 +1408,8 @@ ContiguousDoubles JSObject::convertUndecidedToDouble(VM& vm)
+     ASSERT(hasUndecided(indexingType()));
+ 
+     auto* butterfly = this->butterfly();
+-    for (unsigned i = butterfly->vectorLength(); i--;)
+-        butterfly->contiguousDouble().at(this, i) = PNaN;
+-    
++    clearArray(butterfly->contiguousDouble().data(), butterfly->vectorLength());
++
+     {
+         Structure* oldStructure = structure();
+         DeferredStructureTransitionWatchpointFire deferred(vm, oldStructure);
+@@ -1429,8 +1423,7 @@ ContiguousJSValues JSObject::convertUndecidedToContiguous(VM& vm)
+     ASSERT(hasUndecided(indexingType()));
+ 
+     auto* butterfly = this->butterfly();
+-    for (unsigned i = butterfly->vectorLength(); i--;)
+-        butterfly->contiguous().at(this, i).setWithoutWriteBarrier(JSValue());
++    clearArray(butterfly->contiguous().data(), butterfly->vectorLength());
+ 
+     WTF::storeStoreFence();
+     {
+@@ -1472,10 +1465,9 @@ ArrayStorage* JSObject::convertUndecidedToArrayStorage(VM& vm, TransitionKind tr
+ 
+     unsigned vectorLength = this->butterfly()->vectorLength();
+     ArrayStorage* storage = constructConvertedArrayStorageWithoutCopyingElements(vm, vectorLength);
+-    
+-    for (unsigned i = vectorLength; i--;)
+-        storage->m_vector[i].setWithoutWriteBarrier(JSValue());
+-    
++
++    clearArray(storage->m_vector, vectorLength);
++
+     StructureID oldStructureID = this->structureID();
+     Structure* oldStructure = oldStructureID.decode();
+     {
+@@ -1501,7 +1493,7 @@ ContiguousDoubles JSObject::convertInt32ToDouble(VM& vm)
+     for (unsigned i = butterfly->vectorLength(); i--;) {
+         WriteBarrier<Unknown>* current = &butterfly->contiguous().atUnsafe(i);
+         double* currentAsDouble = std::bit_cast<double*>(current);
+-        JSValue v = current->get();
++        JSValue v = loadElementUnordered(*current);
+         // NOTE: Since this may be used during initialization, v could be garbage. If it's garbage,
+         // that means it will be overwritten later.
+         if (!v.isInt32()) {
+@@ -1540,7 +1532,7 @@ ArrayStorage* JSObject::convertInt32ToArrayStorage(VM& vm, TransitionKind transi
+     ArrayStorage* newStorage = constructConvertedArrayStorageWithoutCopyingElements(vm, vectorLength);
+     auto* butterfly = this->butterfly();
+     for (unsigned i = 0; i < vectorLength; i++) {
+-        JSValue v = butterfly->contiguous().at(this, i).get();
++        JSValue v = loadElementUnordered(butterfly->contiguous().at(this, i));
+         newStorage->m_vector[i].setWithoutWriteBarrier(v);
+         if (v)
+             newStorage->m_numValuesInVector++;
+@@ -1632,7 +1624,7 @@ ArrayStorage* JSObject::convertContiguousToArrayStorage(VM& vm, TransitionKind t
+     ArrayStorage* newStorage = constructConvertedArrayStorageWithoutCopyingElements(vm, vectorLength);
+     auto* butterfly = this->butterfly();
+     for (unsigned i = 0; i < vectorLength; i++) {
+-        JSValue v = butterfly->contiguous().at(this, i).get();
++        JSValue v = loadElementUnordered(butterfly->contiguous().at(this, i));
+         newStorage->m_vector[i].setWithoutWriteBarrier(v);
+         if (v)
+             newStorage->m_numValuesInVector++;
+@@ -2771,8 +2763,9 @@ void JSObject::getOwnIndexedPropertyNames(JSGlobalObject*, PropertyNameArrayBuil
+         case ALL_CONTIGUOUS_INDEXING_TYPES: {
+             Butterfly* butterfly = object->butterfly();
+             unsigned usedLength = butterfly->publicLength();
++            const WriteBarrier<Unknown>* data = butterfly->contiguous().data();
+             for (unsigned i = 0; i < usedLength; ++i) {
+-                if (!butterfly->contiguous().at(object, i))
++                if (!loadElementUnordered(data[i]))
+                     continue;
+                 propertyNames.add(i);
+             }
+@@ -2782,8 +2775,9 @@ void JSObject::getOwnIndexedPropertyNames(JSGlobalObject*, PropertyNameArrayBuil
+         case ALL_DOUBLE_INDEXING_TYPES: {
+             Butterfly* butterfly = object->butterfly();
+             unsigned usedLength = butterfly->publicLength();
++            const double* data = butterfly->contiguousDouble().data();
+             for (unsigned i = 0; i < usedLength; ++i) {
+-                double value = butterfly->contiguousDouble().at(object, i);
++                double value = data[i];
+                 if (value != value)
+                     continue;
+                 propertyNames.add(i);
+@@ -3731,25 +3725,31 @@ template<IndexingType indexingShape>
+ unsigned JSObject::countElements(Butterfly* butterfly)
+ {
+     unsigned numValues = 0;
+-    for (unsigned i = butterfly->publicLength(); i--;) {
+-        switch (indexingShape) {
+-        case Int32Shape:
+-        case ContiguousShape:
+-            if (butterfly->contiguous().at(this, i))
++    unsigned publicLength = butterfly->publicLength();
++    switch (indexingShape) {
++    case Int32Shape:
++    case ContiguousShape: {
++        const WriteBarrier<Unknown>* data = butterfly->contiguous().data();
++        for (unsigned i = 0; i < publicLength; ++i) {
++            if (loadElementUnordered(data[i]))
+                 numValues++;
+-            break;
+-            
+-        case DoubleShape: {
+-            ASSERT(Options::allowDoubleShape());
+-            double value = butterfly->contiguousDouble().at(this, i);
++        }
++        break;
++    }
++
++    case DoubleShape: {
++        ASSERT(Options::allowDoubleShape());
++        const double* data = butterfly->contiguousDouble().data();
++        for (unsigned i = 0; i < publicLength; ++i) {
++            double value = data[i];
+             if (value == value)
+                 numValues++;
+-            break;
+-        }
+-            
+-        default:
+-            CRASH();
+         }
++        break;
++    }
++
++    default:
++        CRASH();
+     }
+     return numValues;
+ }
+@@ -3785,8 +3785,7 @@ bool JSObject::increaseVectorLength(VM& vm, unsigned newLength)
+     unsigned availableVectorLength = storage->availableVectorLength(structure(), vectorLength); 
+     if (availableVectorLength >= newLength) {
+         // The cell was already big enough for the desired length!
+-        for (unsigned i = vectorLength; i < availableVectorLength; ++i)
+-            storage->m_vector[i].clear();
++        clearArray(storage->m_vector + vectorLength, availableVectorLength - vectorLength);
+         storage->setVectorLength(availableVectorLength);
+         return true;
+     }
+@@ -3813,8 +3812,7 @@ bool JSObject::increaseVectorLength(VM& vm, unsigned newLength)
+             ArrayStorage::sizeFor(vectorLength), ArrayStorage::sizeFor(newVectorLength));
+         if (!newButterfly)
+             return false;
+-        for (unsigned i = vectorLength; i < newVectorLength; ++i)
+-            newButterfly->arrayStorage()->m_vector[i].clear();
++        clearArray(newButterfly->arrayStorage()->m_vector + vectorLength, newVectorLength - vectorLength);
+         newButterfly->arrayStorage()->setVectorLength(newVectorLength);
+         setButterfly(vm, newButterfly);
+         return true;
+@@ -3829,8 +3827,7 @@ bool JSObject::increaseVectorLength(VM& vm, unsigned newLength)
+         newIndexBias, true, ArrayStorage::sizeFor(newVectorLength));
+     if (!newButterfly)
+         return false;
+-    for (unsigned i = vectorLength; i < newVectorLength; ++i)
+-        newButterfly->arrayStorage()->m_vector[i].clear();
++    clearArray(newButterfly->arrayStorage()->m_vector + vectorLength, newVectorLength - vectorLength);
+     newButterfly->arrayStorage()->setVectorLength(newVectorLength);
+     newButterfly->arrayStorage()->m_indexBias = newIndexBias;
+     setButterfly(vm, newButterfly);
+@@ -3879,13 +3876,10 @@ bool JSObject::ensureLengthSlow(VM& vm, unsigned length)
+         newButterfly = butterfly;
+     }
+ 
+-    if (hasDouble(indexingType())) {
+-        for (unsigned i = oldVectorLength; i < newVectorLength; ++i)
+-            butterfly->indexingPayload<double>()[i] = PNaN;
+-    } else {
+-        for (unsigned i = oldVectorLength; i < newVectorLength; ++i)
+-            butterfly->indexingPayload<WriteBarrier<Unknown>>()[i].clear();
+-    }
++    if (hasDouble(indexingType()))
++        clearArray(butterfly->indexingPayload<double>() + oldVectorLength, newVectorLength - oldVectorLength);
++    else
++        clearArray(butterfly->indexingPayload<WriteBarrier<Unknown>>() + oldVectorLength, newVectorLength - oldVectorLength);
+ 
+     if (newButterfly) {
+         butterfly->setVectorLength(newVectorLength);
+diff --git a/Source/JavaScriptCore/runtime/JSObjectInlines.h b/Source/JavaScriptCore/runtime/JSObjectInlines.h
+index 0841b02eca..13f8327e67 100644
+--- a/Source/JavaScriptCore/runtime/JSObjectInlines.h
++++ b/Source/JavaScriptCore/runtime/JSObjectInlines.h
+@@ -708,7 +708,7 @@ ALWAYS_INLINE void JSObject::setIndexQuicklyForArrayStorageIndexingType(VM& vm,
+ {
+     ArrayStorage* storage = this->butterfly()->arrayStorage();
+     WriteBarrier<Unknown>& x = storage->m_vector[i];
+-    JSValue old = x.get();
++    JSValue old = loadElementUnordered(x);
+     x.set(vm, this, v);
+     if (!old) {
+         ++storage->m_numValuesInVector;
+@@ -1065,10 +1065,10 @@ void JSObject::forEachOwnIndexedProperty(JSGlobalObject* globalObject, const Fun
+         ArrayStorage* storage = butterfly()->arrayStorage();
+         unsigned usedVectorLength = std::min(storage->length(), storage->vectorLength());
+         for (unsigned i = 0; i < usedVectorLength; ++i) {
+-            auto value = storage->m_vector[i];
++            JSValue value = loadElementUnordered(storage->m_vector[i]);
+             if (!value)
+                 continue;
+-            if (functor(i, value.get()) == IterationStatus::Done)
++            if (functor(i, value) == IterationStatus::Done)
+                 return;
+         }
+ 
+@@ -1357,13 +1357,13 @@ inline JSValue JSObject::getIndexQuickly(unsigned i) const
+     const Butterfly* butterfly = this->butterfly();
+     switch (indexingType()) {
+     case ALL_INT32_INDEXING_TYPES:
+-        return jsNumber(butterfly->contiguous().at(this, i).get().asInt32());
++        return jsNumber(loadElementUnordered(butterfly->contiguous().at(this, i)).asInt32());
+     case ALL_CONTIGUOUS_INDEXING_TYPES:
+-        return butterfly->contiguous().at(this, i).get();
++        return loadElementUnordered(butterfly->contiguous().at(this, i));
+     case ALL_DOUBLE_INDEXING_TYPES:
+         return JSValue(JSValue::EncodeAsDouble, butterfly->contiguousDouble().at(this, i));
+     case ALL_ARRAY_STORAGE_INDEXING_TYPES:
+-        return butterfly->arrayStorage()->m_vector[i].get();
++        return loadElementUnordered(butterfly->arrayStorage()->m_vector[i]);
+     case ALL_BLANK_INDEXING_TYPES:
+         return getIndexQuicklyForTypedArray(i);
+     default:
+@@ -1384,14 +1384,14 @@ inline JSValue JSObject::tryGetIndexQuickly(unsigned i, ArrayProfile* arrayProfi
+         break;
+     case ALL_INT32_INDEXING_TYPES:
+         if (i < butterfly->publicLength()) {
+-            JSValue result = butterfly->contiguous().at(this, i).get();
++            JSValue result = loadElementUnordered(butterfly->contiguous().at(this, i));
+             ASSERT(result.isInt32() || !result);
+             return result;
+         }
+         break;
+     case ALL_CONTIGUOUS_INDEXING_TYPES:
+         if (i < butterfly->publicLength())
+-            return butterfly->contiguous().at(this, i).get();
++            return loadElementUnordered(butterfly->contiguous().at(this, i));
+         break;
+     case ALL_DOUBLE_INDEXING_TYPES: {
+         if (i >= butterfly->publicLength())
+@@ -1403,7 +1403,7 @@ inline JSValue JSObject::tryGetIndexQuickly(unsigned i, ArrayProfile* arrayProfi
+     }
+     case ALL_ARRAY_STORAGE_INDEXING_TYPES:
+         if (i < butterfly->arrayStorage()->vectorLength())
+-            return butterfly->arrayStorage()->m_vector[i].get();
++            return loadElementUnordered(butterfly->arrayStorage()->m_vector[i]);
+         break;
+     default:
+         RELEASE_ASSERT_NOT_REACHED();
 diff --git a/Source/JavaScriptCore/runtime/JSRegExpStringIterator.cpp b/Source/JavaScriptCore/runtime/JSRegExpStringIterator.cpp
 index 701ebef226..c00977d33e 100644
 --- a/Source/JavaScriptCore/runtime/JSRegExpStringIterator.cpp
@@ -3608,6 +4996,176 @@ index 6cf7914918..50805d095d 100644
              return vm.smallStrings.singleCharacterString(c);
      }
  
+diff --git a/Source/JavaScriptCore/runtime/LiteralParser.cpp b/Source/JavaScriptCore/runtime/LiteralParser.cpp
+index c690d36371..04455d251d 100644
+--- a/Source/JavaScriptCore/runtime/LiteralParser.cpp
++++ b/Source/JavaScriptCore/runtime/LiteralParser.cpp
+@@ -35,6 +35,7 @@
+ #include "ObjectConstructor.h"
+ #include <wtf/ASCIICType.h>
+ #include <wtf/Range.h>
++#include <wtf/UnalignedAccess.h>
+ #include <wtf/text/FastCharacterComparison.h>
+ #include <wtf/text/MakeString.h>
+ 
+@@ -734,7 +735,7 @@ static constexpr const bool safeStringLatin1CharactersInStrictJSON[256] = {
+ template <typename CharType>
+ static ALWAYS_INLINE bool NODELETE isJSONWhiteSpace(const CharType& c)
+ {
+-    return tokenTypesOfLatin1Characters[static_cast<uint8_t>(c)] == TokErrorSpace && isLatin1(c);
++    return c == ' ' || c == '\n' || c == '\t' || c == '\r';
+ }
+ 
+ template<typename CharType, JSONReviverMode reviverMode>
+@@ -927,6 +928,42 @@ static ALWAYS_INLINE bool NODELETE isSafeStringCharacterForIdentifier(char16_t c
+         return (c >= ' ' && isLatin1(c) && c != '\\' && c != terminator) || (c == '\t');
+ }
+ 
++#if defined(WEBKIT_IOS6)
++template<typename CharType>
++static ALWAYS_INLINE const CharType* NODELETE findUnsafeStrictJSONStringCharacter(const CharType* ptr, const CharType* end)
++{
++    if constexpr (sizeof(CharType) == 1) {
++        constexpr uint32_t ones = 0x01010101U;
++        constexpr uint32_t highBits = 0x80808080U;
++        constexpr uint32_t quoteBytes = 0x22222222U;
++        constexpr uint32_t escapeBytes = 0x5C5C5C5CU;
++        constexpr uint32_t spaceBytes = 0x20202020U;
++        while (end - ptr >= 4) {
++            uint32_t word = WTF::unalignedLoad<uint32_t>(ptr);
++            uint32_t quotes = word ^ quoteBytes;
++            uint32_t escapes = word ^ escapeBytes;
++            uint32_t hits = (((quotes - ones) & ~quotes) | ((escapes - ones) & ~escapes) | ((word - spaceBytes) & ~word)) & highBits;
++            if (hits) {
++                for (unsigned i = 0; i < 4; ++i) {
++                    if (!safeStringLatin1CharactersInStrictJSON[ptr[i]])
++                        return ptr + i;
++                }
++            }
++            ptr += 4;
++        }
++        for (; ptr < end; ++ptr) {
++            if (!safeStringLatin1CharactersInStrictJSON[*ptr])
++                return ptr;
++        }
++        return end;
++    } else {
++        while (ptr < end && isSafeStringCharacter<SafeStringCharacterSet::Strict>(*ptr, static_cast<CharType>('"')))
++            ++ptr;
++        return ptr;
++    }
++}
++#endif
++
+ template<typename CharType, JSONReviverMode reviverMode>
+ template <JSONIdentifierHint hint>
+ ALWAYS_INLINE TokenType LiteralParser<CharType, reviverMode>::Lexer::lexString(LiteralParserToken<CharType>& token, CharType terminator)
+@@ -940,6 +977,9 @@ ALWAYS_INLINE TokenType LiteralParser<CharType, reviverMode>::Lexer::lexString(L
+             while (m_ptr < m_end && isSafeStringCharacterForIdentifier<SafeStringCharacterSet::Strict>(*m_ptr, terminator))
+                 ++m_ptr;
+         } else {
++#if defined(WEBKIT_IOS6)
++            m_ptr = findUnsafeStrictJSONStringCharacter(m_ptr, m_end);
++#else
+             using UnsignedType = SameSizeUnsignedInteger<CharType>;
+             constexpr auto quoteMask = SIMD::splat<UnsignedType>('"');
+             constexpr auto escapeMask = SIMD::splat<UnsignedType>('\\');
+@@ -957,12 +997,17 @@ ALWAYS_INLINE TokenType LiteralParser<CharType, reviverMode>::Lexer::lexString(L
+             };
+ 
+             m_ptr = SIMD::find(std::span { m_ptr, m_end }, vectorMatch, scalarMatch);
++#endif
+         }
+     } else {
+         if constexpr (hint == JSONIdentifierHint::MaybeIdentifier) {
+             while (m_ptr < m_end && isSafeStringCharacterForIdentifier<SafeStringCharacterSet::Sloppy>(*m_ptr, terminator))
+                 ++m_ptr;
+         } else {
++#if defined(WEBKIT_IOS6)
++            while (m_ptr < m_end && isSafeStringCharacter<SafeStringCharacterSet::Sloppy>(*m_ptr, terminator))
++                ++m_ptr;
++#else
+             using UnsignedType = SameSizeUnsignedInteger<CharType>;
+             auto quoteMask = SIMD::splat<UnsignedType>(terminator);
+             constexpr auto escapeMask = SIMD::splat<UnsignedType>('\\');
+@@ -983,6 +1028,7 @@ ALWAYS_INLINE TokenType LiteralParser<CharType, reviverMode>::Lexer::lexString(L
+             };
+ 
+             m_ptr = SIMD::find(std::span { m_ptr, m_end }, vectorMatch, scalarMatch);
++#endif
+         }
+     }
+ 
+@@ -1003,8 +1049,12 @@ TokenType LiteralParser<CharType, reviverMode>::Lexer::lexStringSlow(LiteralPars
+     do {
+         runStart = m_ptr;
+         if (m_mode == StrictJSON) {
++#if defined(WEBKIT_IOS6)
++            m_ptr = findUnsafeStrictJSONStringCharacter(m_ptr, m_end);
++#else
+             while (m_ptr < m_end && isSafeStringCharacter<SafeStringCharacterSet::Strict>(*m_ptr, terminator))
+                 ++m_ptr;
++#endif
+         } else {
+             while (m_ptr < m_end && isSafeStringCharacter<SafeStringCharacterSet::Sloppy>(*m_ptr, terminator))
+                 ++m_ptr;
+@@ -1133,12 +1183,14 @@ TokenType LiteralParser<CharType, reviverMode>::Lexer::lexNumber(LiteralParserTo
+     auto* start = m_ptr; // Do not include '-'.
+ 
+     // (0 | [1-9][0-9]*)
++    uint32_t accumulator = 0;
+     if (m_ptr < m_end && isASCIIDigit(*m_ptr)) [[likely]] {
+         auto character = *m_ptr++;
++        accumulator = character - '0';
+         if (character != '0') {
+             // [0-9]*
+             while (m_ptr < m_end && isASCIIDigit(*m_ptr))
+-                ++m_ptr;
++                accumulator = accumulator * 10 + (*m_ptr++ - '0');
+         }
+     } else {
+         m_lexErrorMessage = "Invalid number"_s;
+@@ -1147,11 +1199,7 @@ TokenType LiteralParser<CharType, reviverMode>::Lexer::lexNumber(LiteralParserTo
+ 
+     const int numberOfDigitsForSafeInt32 = 9; // The numbers from -999999999 to 999999999 are always in range of Int32.
+     if (m_ptr < m_end && (*m_ptr != '.' && *m_ptr != 'e' && *m_ptr != 'E') && (m_ptr - start) <= numberOfDigitsForSafeInt32) {
+-        int32_t result = 0;
+-        const CharType* cursor = start;
+-        do {
+-            result = result * 10 + (*cursor++) - '0';
+-        } while (cursor < m_ptr);
++        int32_t result = static_cast<int32_t>(accumulator);
+ 
+         if (!negative) [[likely]] {
+             token.type = TokNumberInt32;
+@@ -1268,6 +1316,15 @@ ALWAYS_INLINE JSValue LiteralParser<CharType, reviverMode>::parsePrimitiveValue(
+     case TokFalse:
+         m_lexer.next();
+         return jsBoolean(false);
++    default:
++        return parsePrimitiveValueError();
++    }
++}
++
++template<typename CharType, JSONReviverMode reviverMode>
++NEVER_INLINE JSValue LiteralParser<CharType, reviverMode>::parsePrimitiveValueError()
++{
++    switch (m_lexer.currentToken()->type) {
+     case TokRBracket:
+         m_parseErrorMessage = "Unexpected token ']'"_s;
+         return { };
+diff --git a/Source/JavaScriptCore/runtime/LiteralParser.h b/Source/JavaScriptCore/runtime/LiteralParser.h
+index abfff09aad..f609bda52f 100644
+--- a/Source/JavaScriptCore/runtime/LiteralParser.h
++++ b/Source/JavaScriptCore/runtime/LiteralParser.h
+@@ -293,6 +293,7 @@ private:
+     JSValue parse(VM&, ParserState, JSONRanges*);
+ 
+     JSValue parsePrimitiveValue(VM&);
++    NEVER_INLINE JSValue parsePrimitiveValueError();
+ 
+     static ALWAYS_INLINE bool equalIdentifier(UniquedStringImpl*, typename Lexer::LiteralParserTokenPtr);
+     static ALWAYS_INLINE AtomStringImpl* existingIdentifier(VM&, typename Lexer::LiteralParserTokenPtr);
 diff --git a/Source/JavaScriptCore/runtime/MachineContext.h b/Source/JavaScriptCore/runtime/MachineContext.h
 index 2ac8b24f00..c5126d1989 100644
 --- a/Source/JavaScriptCore/runtime/MachineContext.h
@@ -3718,6 +5276,213 @@ index d8857200f4..454984a687 100644
 +JS_EXPORT_PRIVATE CodeMemoryStatistics codeMemoryStatistics(VM&);
 +
  } // namespace JSC
+diff --git a/Source/JavaScriptCore/runtime/ObjectPrototype.cpp b/Source/JavaScriptCore/runtime/ObjectPrototype.cpp
+index 9b1326dd5d..cdd88bfcd9 100644
+--- a/Source/JavaScriptCore/runtime/ObjectPrototype.cpp
++++ b/Source/JavaScriptCore/runtime/ObjectPrototype.cpp
+@@ -152,7 +152,8 @@ JSC_DEFINE_HOST_FUNCTION(objectProtoFuncIsPrototypeOf, (JSGlobalObject* globalOb
+     VM& vm = globalObject->vm();
+     auto scope = DECLARE_THROW_SCOPE(vm);
+ 
+-    if (!callFrame->argument(0).isObject())
++    JSValue argument = callFrame->argument(0);
++    if (!argument.isObject())
+         return JSValue::encode(jsBoolean(false));
+ 
+     JSValue thisValue = callFrame->thisValue().toThis(globalObject, ECMAMode::strict());
+@@ -161,7 +162,7 @@ JSC_DEFINE_HOST_FUNCTION(objectProtoFuncIsPrototypeOf, (JSGlobalObject* globalOb
+     if (!thisObj) [[unlikely]]
+         return encodedJSValue();
+ 
+-    JSValue v = asObject(callFrame->argument(0))->getPrototype(globalObject);
++    JSValue v = asObject(argument)->getPrototype(globalObject);
+     RETURN_IF_EXCEPTION(scope, encodedJSValue());
+ 
+     while (true) {
+diff --git a/Source/JavaScriptCore/runtime/OperationsInlines.h b/Source/JavaScriptCore/runtime/OperationsInlines.h
+index 5bb142de13..b9a6a41104 100644
+--- a/Source/JavaScriptCore/runtime/OperationsInlines.h
++++ b/Source/JavaScriptCore/runtime/OperationsInlines.h
+@@ -253,11 +253,34 @@ ALWAYS_INLINE JSValue jsStringFromRegisterArray(JSGlobalObject* globalObject, Re
+ {
+     VM& vm = getVM(globalObject);
+     auto scope = DECLARE_THROW_SCOPE(vm);
+-    JSRopeString::RopeBuilder<RecordOverflow> ropeBuilder(vm);
+ 
++    if (count == 2) {
++        JSValue v0 = strings[0].jsValue();
++        JSValue v1 = strings[-1].jsValue();
++        JSString* s0 = v0.isString() ? asString(v0) : v0.toString(globalObject);
++        RETURN_IF_EXCEPTION(scope, { });
++        JSString* s1 = v1.isString() ? asString(v1) : v1.toString(globalObject);
++        RETURN_IF_EXCEPTION(scope, { });
++        RELEASE_AND_RETURN(scope, jsString(globalObject, s0, s1));
++    }
++
++    if (count == 3) {
++        JSValue v0 = strings[0].jsValue();
++        JSValue v1 = strings[-1].jsValue();
++        JSValue v2 = strings[-2].jsValue();
++        JSString* s0 = v0.isString() ? asString(v0) : v0.toString(globalObject);
++        RETURN_IF_EXCEPTION(scope, { });
++        JSString* s1 = v1.isString() ? asString(v1) : v1.toString(globalObject);
++        RETURN_IF_EXCEPTION(scope, { });
++        JSString* s2 = v2.isString() ? asString(v2) : v2.toString(globalObject);
++        RETURN_IF_EXCEPTION(scope, { });
++        RELEASE_AND_RETURN(scope, jsString(globalObject, s0, s1, s2));
++    }
++
++    JSRopeString::RopeBuilder<RecordOverflow> ropeBuilder(vm);
+     for (unsigned i = 0; i < count; ++i) {
+         JSValue v = strings[-static_cast<int>(i)].jsValue();
+-        JSString* string = v.toString(globalObject);
++        JSString* string = v.isString() ? asString(v) : v.toString(globalObject);
+         RETURN_IF_EXCEPTION(scope, { });
+         if (!ropeBuilder.append(string))
+             return throwOutOfMemoryError(globalObject, scope);
+@@ -430,15 +453,15 @@ ALWAYS_INLINE bool toPrimitiveNumeric(JSGlobalObject* globalObject, JSValue v, J
+ template<bool leftFirst>
+ ALWAYS_INLINE bool jsLess(JSGlobalObject* globalObject, JSValue v1, JSValue v2)
+ {
+-    VM& vm = globalObject->vm();
+-    auto scope = DECLARE_THROW_SCOPE(vm);
+-
+-    if (v1.isInt32() && v2.isInt32())
++    if (v1.isInt32() && v2.isInt32()) [[likely]]
+         return v1.asInt32() < v2.asInt32();
+ 
+-    if (v1.isNumber() && v2.isNumber())
++    if (v1.isNumber() && v2.isNumber()) [[likely]]
+         return v1.asNumber() < v2.asNumber();
+ 
++    VM& vm = globalObject->vm();
++    auto scope = DECLARE_THROW_SCOPE(vm);
++
+     if (isJSString(v1) && isJSString(v2)) {
+         auto s1 = asString(v1)->view(globalObject);
+         RETURN_IF_EXCEPTION(scope, false);
+@@ -480,15 +503,15 @@ ALWAYS_INLINE bool jsLess(JSGlobalObject* globalObject, JSValue v1, JSValue v2)
+ template<bool leftFirst>
+ ALWAYS_INLINE bool jsLessEq(JSGlobalObject* globalObject, JSValue v1, JSValue v2)
+ {
+-    VM& vm = globalObject->vm();
+-    auto scope = DECLARE_THROW_SCOPE(vm);
+-
+-    if (v1.isInt32() && v2.isInt32())
++    if (v1.isInt32() && v2.isInt32()) [[likely]]
+         return v1.asInt32() <= v2.asInt32();
+ 
+-    if (v1.isNumber() && v2.isNumber())
++    if (v1.isNumber() && v2.isNumber()) [[likely]]
+         return v1.asNumber() <= v2.asNumber();
+ 
++    VM& vm = globalObject->vm();
++    auto scope = DECLARE_THROW_SCOPE(vm);
++
+     if (isJSString(v1) && isJSString(v2)) {
+         auto s1 = asString(v1)->value(globalObject);
+         RETURN_IF_EXCEPTION(scope, false);
+@@ -553,6 +576,14 @@ ALWAYS_INLINE JSValue jsAddNonNumber(JSGlobalObject* globalObject, JSValue v1, J
+ 
+ ALWAYS_INLINE JSValue jsAdd(JSGlobalObject* globalObject, JSValue v1, JSValue v2)
+ {
++    if (v1.isInt32() && v2.isInt32()) [[likely]] {
++        int32_t a = v1.asInt32();
++        int32_t b = v2.asInt32();
++        int32_t res;
++        if (!__builtin_add_overflow(a, b, &res)) [[likely]]
++            return JSValue(res);
++        return JSValue(JSValue::EncodeAsDouble, static_cast<double>(a) + static_cast<double>(b));
++    }
+     if (v1.isNumber() && v2.isNumber())
+         return jsNumber(v1.asNumber() + v2.asNumber());
+ 
+@@ -595,6 +626,15 @@ ALWAYS_INLINE JSValue arithmeticBinaryOp(JSGlobalObject* globalObject, JSValue v
+ 
+ ALWAYS_INLINE JSValue jsSub(JSGlobalObject* globalObject, JSValue v1, JSValue v2)
+ {
++    if (v1.isInt32() && v2.isInt32()) [[likely]] {
++        int32_t a = v1.asInt32();
++        int32_t b = v2.asInt32();
++        int32_t res;
++        if (!__builtin_sub_overflow(a, b, &res)) [[likely]]
++            return JSValue(res);
++        return JSValue(JSValue::EncodeAsDouble, static_cast<double>(a) - static_cast<double>(b));
++    }
++
+     auto doubleOp = [] (double left, double right) -> double {
+         return left - right;
+     };
+@@ -608,6 +648,17 @@ ALWAYS_INLINE JSValue jsSub(JSGlobalObject* globalObject, JSValue v1, JSValue v2
+ 
+ ALWAYS_INLINE JSValue jsMul(JSGlobalObject* globalObject, JSValue v1, JSValue v2)
+ {
++    if (v1.isInt32() && v2.isInt32()) [[likely]] {
++        int32_t a = v1.asInt32();
++        int32_t b = v2.asInt32();
++        int32_t res;
++        if (!__builtin_mul_overflow(a, b, &res)) [[likely]] {
++            if (res || (a >= 0 && b >= 0) || (a < 0 && b < 0)) [[likely]]
++                return JSValue(res);
++        }
++        return JSValue(JSValue::EncodeAsDouble, static_cast<double>(a) * static_cast<double>(b));
++    }
++
+     auto doubleOp = [] (double left, double right) -> double {
+         return left * right;
+     };
+@@ -785,6 +836,9 @@ ALWAYS_INLINE JSValue jsRShift(JSGlobalObject* globalObject, JSValue v1, JSValue
+ 
+ ALWAYS_INLINE JSValue jsURShift(JSGlobalObject* globalObject, JSValue left, JSValue right)
+ {
++    if (left.isInt32() && right.isInt32()) [[likely]]
++        return jsNumber(static_cast<uint32_t>(left.asInt32()) >> (right.asInt32() & 31));
++
+     VM& vm = globalObject->vm();
+     auto scope = DECLARE_THROW_SCOPE(vm);
+ 
+@@ -837,6 +891,9 @@ ALWAYS_INLINE JSValue bitwiseBinaryOp(JSGlobalObject* globalObject, JSValue v1,
+ 
+ ALWAYS_INLINE JSValue jsBitwiseAnd(JSGlobalObject* globalObject, JSValue v1, JSValue v2)
+ {
++    if (v1.isInt32() && v2.isInt32()) [[likely]]
++        return JSValue(v1.asInt32() & v2.asInt32());
++
+     auto int32Op = [] (int32_t left, int32_t right) -> int32_t {
+         return left & right;
+     };
+@@ -852,6 +909,9 @@ ALWAYS_INLINE JSValue jsBitwiseAnd(JSGlobalObject* globalObject, JSValue v1, JSV
+ 
+ ALWAYS_INLINE JSValue jsBitwiseOr(JSGlobalObject* globalObject, JSValue v1, JSValue v2)
+ {
++    if (v1.isInt32() && v2.isInt32()) [[likely]]
++        return JSValue(v1.asInt32() | v2.asInt32());
++
+     auto int32Op = [] (int32_t left, int32_t right) -> int32_t {
+         return left | right;
+     };
+@@ -868,6 +928,9 @@ ALWAYS_INLINE JSValue jsBitwiseOr(JSGlobalObject* globalObject, JSValue v1, JSVa
+ 
+ ALWAYS_INLINE JSValue jsBitwiseXor(JSGlobalObject* globalObject, JSValue v1, JSValue v2)
+ {
++    if (v1.isInt32() && v2.isInt32()) [[likely]]
++        return JSValue(v1.asInt32() ^ v2.asInt32());
++
+     auto int32Op = [] (int32_t left, int32_t right) -> int32_t {
+         return left ^ right;
+     };
+@@ -884,9 +947,9 @@ ALWAYS_INLINE JSValue jsBitwiseXor(JSGlobalObject* globalObject, JSValue v1, JSV
+ ALWAYS_INLINE EncodedJSValue getByValWithIndexAndThis(JSGlobalObject* globalObject, JSCell* base, uint32_t index, JSValue thisValue)
+ {
+     if (base->isObject()) {
+-        if (JSValue result = asObject(base)->tryGetIndexQuickly(index))
++        if (JSValue result = asObject(base)->tryGetIndexQuickly(index)) [[likely]]
+             return JSValue::encode(result);
+-    } if (isJSString(base)) {
++    } else if (isJSString(base)) {
+         if (asString(base)->canGetIndex(index))
+             return JSValue::encode(asString(base)->getIndex(globalObject, index));
+     }
 diff --git a/Source/JavaScriptCore/runtime/Options.cpp b/Source/JavaScriptCore/runtime/Options.cpp
 index 683bc60a7a..260e3fc3e5 100644
 --- a/Source/JavaScriptCore/runtime/Options.cpp
@@ -3788,10 +5553,10 @@ index 308c8da9dd..6b87ab0174 100644
      static double defaultQuickDFGTierUpThresholdFactor()
      {
 diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
-index 30507f47b3..73f2d65db9 100644
+index 30507f47b3..73e5edb318 100644
 --- a/Source/JavaScriptCore/runtime/OptionsList.h
 +++ b/Source/JavaScriptCore/runtime/OptionsList.h
-@@ -25,6 +25,44 @@
+@@ -25,6 +25,55 @@
  
  #pragma once
  
@@ -3805,6 +5570,7 @@ index 30507f47b3..73f2d65db9 100644
 +#else
 +#define WEBKIT_IOS6_STACK_TRACE_LIMIT 100u
 +#endif
++
 +
 +#if defined(WEBKIT_IOS6)
 +// Compile sooner than upstream does.
@@ -3832,11 +5598,67 @@ index 30507f47b3..73f2d65db9 100644
 +#define WEBKIT_IOS6_OPTIMIZE_SOON 1000
 +#endif
 +
++#if defined(WEBKIT_IOS6)
++// The ahead-of-time bytecode pass only exists on this port, but the option has to
++// exist everywhere because the option list is one macro and cannot be #if'd inside.
++// Off by default off-port so that a build that does not compile the pass also does
++// not advertise a switch that does nothing.
++#define WEBKIT_IOS6_AHEAD_OF_TIME_BYTECODE true
++#else
++#define WEBKIT_IOS6_AHEAD_OF_TIME_BYTECODE false
++#endif
++
 +
  #include <JavaScriptCore/GCLogging.h>
  #include <JavaScriptCore/JSCWebPreferenceOptions.h>
  #include <JavaScriptCore/JSExportMacros.h>
-@@ -84,8 +122,8 @@ bool hasCapacityToUseLargeGigacage();
+@@ -33,6 +82,45 @@
+ #include <mach/vm_param.h>
+ #endif
+ 
++#if defined(WEBKIT_IOS6)
++// Heap sizing. minHeapSize() for HeapType::Large is min(largeHeapSize, ramSize *
++// smallHeapRAMFraction), and that product is the floor the collector will never
++// collect below. Upstream's 32 MB against a quarter of RAM is a desktop number:
++// on a 512 MB device it hands the first VM 32 MB before a page exists, and on a
++// 128 MB device it hands it the entire application budget.
++//
++// The armv7 values are the ones the application already exports through
++// JSC_largeHeapSize and friends before WebKit starts, so this changes nothing on
++// that device - it only means the floor is still right when the environment is
++// not set. armv6 has a 128 MB machine and roughly 25-40 MB before the watchdog,
++// so the same fractions of a much smaller budget.
++#if CPU(ARM_THUMB2)
++#define WEBKIT_IOS6_LARGE_HEAP_SIZE (4 * 1024 * 1024)
++#define WEBKIT_IOS6_SMALL_HEAP_RAM_FRACTION 0.08
++#define WEBKIT_IOS6_MEDIUM_HEAP_RAM_FRACTION 0.2
++#define WEBKIT_IOS6_SMALL_HEAP_GROWTH_FACTOR 1.25
++#define WEBKIT_IOS6_MEDIUM_HEAP_GROWTH_FACTOR 1.12
++#define WEBKIT_IOS6_LARGE_HEAP_GROWTH_FACTOR 1.05
++#define WEBKIT_IOS6_MAX_REGEXP_STACK_SIZE (16 * 1024 * 1024)
++#else
++#define WEBKIT_IOS6_LARGE_HEAP_SIZE (2 * 1024 * 1024)
++#define WEBKIT_IOS6_SMALL_HEAP_RAM_FRACTION 0.04
++#define WEBKIT_IOS6_MEDIUM_HEAP_RAM_FRACTION 0.10
++#define WEBKIT_IOS6_SMALL_HEAP_GROWTH_FACTOR 1.20
++#define WEBKIT_IOS6_MEDIUM_HEAP_GROWTH_FACTOR 1.10
++#define WEBKIT_IOS6_LARGE_HEAP_GROWTH_FACTOR 1.03
++#define WEBKIT_IOS6_MAX_REGEXP_STACK_SIZE (4 * 1024 * 1024)
++#endif
++#else
++#define WEBKIT_IOS6_LARGE_HEAP_SIZE (32 * 1024 * 1024)
++#define WEBKIT_IOS6_SMALL_HEAP_RAM_FRACTION 0.25
++#define WEBKIT_IOS6_MEDIUM_HEAP_RAM_FRACTION 0.5
++#define WEBKIT_IOS6_SMALL_HEAP_GROWTH_FACTOR 2
++#define WEBKIT_IOS6_MEDIUM_HEAP_GROWTH_FACTOR 1.5
++#define WEBKIT_IOS6_LARGE_HEAP_GROWTH_FACTOR 1.24
++#define WEBKIT_IOS6_MAX_REGEXP_STACK_SIZE (128 * 1024 * 1024)
++#endif
++
+ using WTF::PrintStream;
+ 
+ namespace JSC {
+@@ -84,8 +172,8 @@ bool hasCapacityToUseLargeGigacage();
      v(Bool, useLLInt,  true, Normal, "allows the LLINT to be used if true"_s) \
      v(Bool, useJIT, jitEnabledByDefault(), Normal, "allows the executable pages to be allocated for JIT and thunks if true"_s) \
      v(Bool, useBaselineJIT, true, Normal, "allows the baseline JIT to be used if true"_s) \
@@ -3847,7 +5669,7 @@ index 30507f47b3..73f2d65db9 100644
      v(Bool, useDOMJIT, is64Bit(), Normal, "allows the DOMJIT to be used if true"_s) \
      \
      v(Bool, reportMustSucceedExecutableAllocations, false, Normal, nullptr) \
-@@ -101,7 +139,7 @@ bool hasCapacityToUseLargeGigacage();
+@@ -101,7 +189,7 @@ bool hasCapacityToUseLargeGigacage();
      v(Size, jitMemoryReservationAddress, 0, Restricted, "If non-zero, we will attempt to allocate JIT memory at the address provided and crash if we cannot.") \
      \
      v(Bool, forceCodeBlockLiveness, false, Normal, nullptr) \
@@ -3856,7 +5678,28 @@ index 30507f47b3..73f2d65db9 100644
      v(Bool, forceUnlinkedDFG, false, Normal, nullptr) \
      \
      v(Unsigned, repatchCountForCoolDown, 8, Normal, nullptr) \
-@@ -351,12 +389,12 @@ bool hasCapacityToUseLargeGigacage();
+@@ -212,14 +300,14 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, verboseVisitRace, false, Normal, nullptr) \
+     v(Bool, optimizeParallelSlotVisitorsForStoppedMutator, false, Normal, nullptr) \
+     v(Bool, verboseHeapSnapshotLogging, true, Normal, nullptr) \
+-    v(Unsigned, largeHeapSize, 32 * 1024 * 1024, Normal, nullptr) \
++    v(Unsigned, largeHeapSize, WEBKIT_IOS6_LARGE_HEAP_SIZE, Normal, nullptr) \
+     v(Unsigned, mediumHeapSize, 4 * 1024 * 1024, Normal, nullptr) \
+     v(Unsigned, smallHeapSize, 1 * 1024 * 1024, Normal, nullptr) \
+-    v(Double, smallHeapRAMFraction, 0.25, Normal, nullptr) \
+-    v(Double, smallHeapGrowthFactor, 2, Normal, nullptr) \
+-    v(Double, mediumHeapRAMFraction, 0.5, Normal, nullptr) \
+-    v(Double, mediumHeapGrowthFactor, 1.5, Normal, nullptr) \
+-    v(Double, largeHeapGrowthFactor, 1.24, Normal, nullptr) \
++    v(Double, smallHeapRAMFraction, WEBKIT_IOS6_SMALL_HEAP_RAM_FRACTION, Normal, nullptr) \
++    v(Double, smallHeapGrowthFactor, WEBKIT_IOS6_SMALL_HEAP_GROWTH_FACTOR, Normal, nullptr) \
++    v(Double, mediumHeapRAMFraction, WEBKIT_IOS6_MEDIUM_HEAP_RAM_FRACTION, Normal, nullptr) \
++    v(Double, mediumHeapGrowthFactor, WEBKIT_IOS6_MEDIUM_HEAP_GROWTH_FACTOR, Normal, nullptr) \
++    v(Double, largeHeapGrowthFactor, WEBKIT_IOS6_LARGE_HEAP_GROWTH_FACTOR, Normal, nullptr) \
+     v(Double, miniVMHeapGrowthFactor, 1.20, Normal, nullptr) \
+     v(Double, heapGrowthSteepnessFactor, 2.00, Normal, nullptr) \
+     v(Double, heapGrowthMaxIncrease, 3.00, Normal, nullptr) \
+@@ -351,12 +439,12 @@ bool hasCapacityToUseLargeGigacage();
      v(Double, dfgThresholdScaleForLowP0Cores, 2.0, Normal, "On low P0-core-count Apple silicon Macs, scale the DFG tier-up thresholds (thresholdForOptimize*) by this factor."_s) \
      v(Double, ftlThresholdScaleForLowP0Cores, 1.5, Normal, "On low P0-core-count Apple silicon Macs, scale the FTL tier-up thresholds (thresholdForFTLOptimize*) by this factor."_s) \
      v(Bool, forceEagerCompilation, false, Normal, nullptr) \
@@ -3873,7 +5716,7 @@ index 30507f47b3..73f2d65db9 100644
      v(Int32, executionCounterIncrementForLoop, 1, Normal, nullptr) \
      v(Int32, executionCounterIncrementForEntry, 15, Normal, nullptr) \
      \
-@@ -458,8 +496,8 @@ bool hasCapacityToUseLargeGigacage();
+@@ -458,8 +546,8 @@ bool hasCapacityToUseLargeGigacage();
      v(Bool, verifyHeap, false, Normal, nullptr) \
      v(Unsigned, numberOfGCCyclesToRecordForVerification, 3, Normal, nullptr) \
      \
@@ -3884,7 +5727,7 @@ index 30507f47b3..73f2d65db9 100644
      v(Bool, exitOnResourceExhaustion, false, Normal, nullptr) \
      v(Bool, useExceptionFuzz, false, Normal, nullptr) \
      v(Unsigned, fireExceptionFuzzAt, 0, Normal, nullptr) \
-@@ -467,7 +505,7 @@ bool hasCapacityToUseLargeGigacage();
+@@ -467,7 +555,7 @@ bool hasCapacityToUseLargeGigacage();
      v(Bool, validateDFGExceptionHandling, ASSERT_ENABLED, Normal, "Causes the DFG to emit code validating exception handling for each node that can exit"_s) \
      v(Bool, dumpSimulatedThrows, false, Normal, "Dumps the call stack of the last simulated throw if exception scope verification fails"_s) \
      v(Bool, validateExceptionChecks, false, Normal, "Verifies that needed exception checks are performed."_s) \
@@ -3893,6 +5736,17 @@ index 30507f47b3..73f2d65db9 100644
      \
      v(Bool, validateDFGClobberize, false, Normal, "Emits code in the DFG/FTL to validate the Clobberize phase"_s) \
      v(Bool, validateBoundsCheckElimination, false, Normal, "Emits code in the DFG/FTL to validate bounds check elimination"_s) \
+@@ -560,6 +648,10 @@ bool hasCapacityToUseLargeGigacage();
+     \
+     v(Bool, useSourceProviderCache, true, Normal, "If false, the parser will not use the source provider cache. It's good to verify everything works when this is false. Because the cache is so successful, it can mask bugs."_s) \
+     v(Bool, useCodeCache, true, Normal, "If false, the unlinked byte code cache will not be used."_s) \
++    v(Bool, useAheadOfTimeBytecode, WEBKIT_IOS6_AHEAD_OF_TIME_BYTECODE, Normal, "Generate a program's function bytecode ahead of time on a background thread, in a private VM, and hand the result to the source provider's bytecode cache."_s) \
++    v(Unsigned, aheadOfTimeBytecodeMinimumSourceLength, 65536, Normal, "Programs shorter than this are not worth a background pass."_s) \
++    v(Unsigned, aheadOfTimeBytecodeMaximumSourceLength, 4194304, Normal, "Programs longer than this are refused: the pass holds an isolated copy of the source and a whole second heap of unlinked code blocks while it runs."_s) \
++    v(Unsigned, aheadOfTimeBytecodeQueueLength, 8, Normal, "Maximum number of programs waiting for the ahead-of-time bytecode thread. Each pending job pins a copy of its source."_s) \
+     \
+     v(Bool, useWasm, canUseWasm(), Normal, "Expose the Wasm global object."_s) \
+     \
 diff --git a/Source/JavaScriptCore/runtime/PropertyTable.h b/Source/JavaScriptCore/runtime/PropertyTable.h
 index 64bcf53109..2559cab943 100644
 --- a/Source/JavaScriptCore/runtime/PropertyTable.h
@@ -3939,6 +5793,63 @@ index 64bcf53109..2559cab943 100644
          ASSERT(result.offset == invalidOffset);
          ASSERT(result.entryIndex == EmptyEntryIndex);
      }
+diff --git a/Source/JavaScriptCore/runtime/RegExpCache.cpp b/Source/JavaScriptCore/runtime/RegExpCache.cpp
+index b04cf4a823..9ade8c0050 100644
+--- a/Source/JavaScriptCore/runtime/RegExpCache.cpp
++++ b/Source/JavaScriptCore/runtime/RegExpCache.cpp
+@@ -40,8 +40,8 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(RegExpCache);
+ 
+ RegExp* RegExpCache::lookup(VM&, const WTF::String& patternString, OptionSet<Yarr::Flags> flags)
+ {
+-    Locker locker { m_lock };
+     RegExpKey key(flags, patternString);
++    Locker locker { m_lock };
+     return m_weakCache.get(key);
+ }
+ 
+@@ -82,8 +82,7 @@ void RegExpCache::finalize(Handle<Unknown> handle, void*)
+ 
+ void RegExpCache::addToStrongCache(RegExp* regExp)
+ {
+-    String pattern = regExp->pattern();
+-    if (pattern.length() > maxStrongCacheablePatternLength)
++    if (regExp->pattern().length() > maxStrongCacheablePatternLength)
+         return;
+ 
+     m_strongCache[m_nextEntryInStrongCache] = regExp;
+diff --git a/Source/JavaScriptCore/runtime/RegExpObject.h b/Source/JavaScriptCore/runtime/RegExpObject.h
+index 348cfd2da0..7f8a1eeb25 100644
+--- a/Source/JavaScriptCore/runtime/RegExpObject.h
++++ b/Source/JavaScriptCore/runtime/RegExpObject.h
+@@ -73,25 +73,24 @@ public:
+ 
+     bool setLastIndex(JSGlobalObject* globalObject, size_t lastIndex)
+     {
+-        VM& vm = getVM(globalObject);
+-        auto scope = DECLARE_THROW_SCOPE(vm);
+-
+         if (lastIndexIsWritable()) [[likely]] {
+             m_lastIndex.setWithoutWriteBarrier(jsNumber(lastIndex));
+             return true;
+         }
++        VM& vm = getVM(globalObject);
++        auto scope = DECLARE_THROW_SCOPE(vm);
+         throwTypeError(globalObject, scope, ReadonlyPropertyWriteError);
+         return false;
+     }
+     bool setLastIndex(JSGlobalObject* globalObject, JSValue lastIndex, bool shouldThrow)
+     {
+         VM& vm = getVM(globalObject);
+-        auto scope = DECLARE_THROW_SCOPE(vm);
+ 
+         if (lastIndexIsWritable()) [[likely]] {
+             m_lastIndex.set(vm, this, lastIndex);
+             return true;
+         }
++        auto scope = DECLARE_THROW_SCOPE(vm);
+         return typeError(globalObject, scope, shouldThrow, ReadonlyPropertyWriteError);
+     }
+     JSValue getLastIndex() const
 diff --git a/Source/JavaScriptCore/runtime/ScriptExecutable.cpp b/Source/JavaScriptCore/runtime/ScriptExecutable.cpp
 index 76a66a05be..1bf9a6a714 100644
 --- a/Source/JavaScriptCore/runtime/ScriptExecutable.cpp
@@ -3952,6 +5863,78 @@ index 76a66a05be..1bf9a6a714 100644
  #include "Debugger.h"
  #include "EvalCodeBlock.h"
  #include "FunctionCodeBlock.h"
+diff --git a/Source/JavaScriptCore/runtime/StringPrototype.cpp b/Source/JavaScriptCore/runtime/StringPrototype.cpp
+index e6813c4a7a..9d842f8191 100644
+--- a/Source/JavaScriptCore/runtime/StringPrototype.cpp
++++ b/Source/JavaScriptCore/runtime/StringPrototype.cpp
+@@ -206,6 +206,7 @@ StringPrototype* StringPrototype::create(VM& vm, JSGlobalObject* globalObject, S
+ NEVER_INLINE void substituteBackreferencesSlow(StringBuilder& result, StringView replacement, StringView source, const int* ovector, RegExp* reg, size_t i)
+ {
+     bool hasNamedCaptures = reg && reg->hasNamedCaptures();
++    const unsigned numSubpatterns = reg ? reg->numSubpatterns() : 0;
+     int offset = 0;
+     do {
+         if (i + 1 == replacement.length())
+@@ -244,7 +245,7 @@ NEVER_INLINE void substituteBackreferencesSlow(StringBuilder& result, StringView
+             unsigned nameLength = closingBracket - i - 2;
+             unsigned backrefIndex = reg->subpatternIdForGroupName(replacement.substring(i + 2, nameLength), ovector);
+ 
+-            if (!backrefIndex || backrefIndex > reg->numSubpatterns()) {
++            if (!backrefIndex || backrefIndex > numSubpatterns) {
+                 backrefStart = 0;
+                 backrefEnd = 0;
+             } else {
+@@ -255,13 +256,13 @@ NEVER_INLINE void substituteBackreferencesSlow(StringBuilder& result, StringView
+         } else if (reg && isASCIIDigit(ref)) {
+             // 1- and 2-digit back references are allowed
+             unsigned backrefIndex = ref - '0';
+-            if (backrefIndex > reg->numSubpatterns())
++            if (backrefIndex > numSubpatterns)
+                 continue;
+             if (replacement.length() > i + 2) {
+                 ref = replacement[i + 2];
+                 if (isASCIIDigit(ref)) {
+                     backrefIndex = 10 * backrefIndex + ref - '0';
+-                    if (backrefIndex > reg->numSubpatterns())
++                    if (backrefIndex > numSubpatterns)
+                         backrefIndex = backrefIndex / 10;   // Fall back to the 1-digit reference
+                     else
+                         advance = 1;
+@@ -390,13 +391,15 @@ JSString* replaceUsingRegExpSearch(VM& vm, JSGlobalObject* globalObject, JSStrin
+     size_t lastIndex = 0;
+     unsigned startPosition = 0;
+ 
++    const unsigned captureSlots = regExp->numSubpatterns() + 1;
++
+     Vector<Range<int32_t>, 16> sourceRanges;
+     Vector<String, 16> replacements;
+ 
+     // This is either a loop (if global is set) or a one-way (if not).
+     if (global && callData.type == CallData::Type::JS) {
+         // regExp->numSubpatterns() + 1 for pattern args, + 2 for match start and string
+-        int argCount = regExp->numSubpatterns() + 1 + 2;
++        int argCount = captureSlots + 2;
+         if (hasNamedCaptures)
+             ++argCount;
+         JSFunction* func = uncheckedDowncast<JSFunction>(replaceValue);
+@@ -421,7 +424,7 @@ JSString* replaceUsingRegExpSearch(VM& vm, JSGlobalObject* globalObject, JSStrin
+             JSObject* groups = hasNamedCaptures ? constructEmptyObject(vm, groupsStructure ? groupsStructure : globalObject->nullPrototypeObjectStructure()) : nullptr;
+             PropertyOffset groupOffset = 0;
+ 
+-            for (unsigned i = 0; i < regExp->numSubpatterns() + 1; ++i) {
++            for (unsigned i = 0; i < captureSlots; ++i) {
+                 int matchStart = ovector[i * 2];
+                 int matchEnd = ovector[i * 2 + 1];
+ 
+@@ -513,7 +516,7 @@ JSString* replaceUsingRegExpSearch(VM& vm, JSGlobalObject* globalObject, JSStrin
+             JSObject* groups = hasNamedCaptures ? constructEmptyObject(vm, groupsStructure ? groupsStructure : globalObject->nullPrototypeObjectStructure()) : nullptr;
+             PropertyOffset groupOffset = 0;
+ 
+-            for (unsigned i = 0; i < regExp->numSubpatterns() + 1; ++i) {
++            for (unsigned i = 0; i < captureSlots; ++i) {
+                 int matchStart = ovector[i * 2];
+                 int matchEnd = ovector[i * 2 + 1];
+ 
 diff --git a/Source/JavaScriptCore/runtime/Structure.cpp b/Source/JavaScriptCore/runtime/Structure.cpp
 index bd9e01f437..e532cebd87 100644
 --- a/Source/JavaScriptCore/runtime/Structure.cpp
@@ -4033,11 +6016,272 @@ index 808600c421..a3cced1818 100644
      RELEASE_ASSERT(stack.contains(vm.lastStackTop()), 0xaa10, vm.lastStackTop(), stack.origin(), stack.end());
  #if ENABLE(C_LOOP)
      vm.cloopStack().sanitizeStack();
+diff --git a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+index 7ff667c607..456036a7bf 100644
+--- a/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
++++ b/Source/JavaScriptCore/yarr/YarrInterpreter.cpp
+@@ -515,7 +515,9 @@ public:
+ 
+         auto linearSearchRanges = [ch](const Vector<CharacterRange>& ranges) {
+             for (unsigned i = 0; i < ranges.size(); ++i) {
+-                if ((ch >= ranges[i].begin) && (ch <= ranges[i].end))
++                if (ch < ranges[i].begin)
++                    return false;
++                if (ch <= ranges[i].end)
+                     return true;
+             }
+ 
+@@ -551,40 +553,26 @@ public:
+         if (characterClass->m_latin1Table && isLatin1(ch))
+             return static_cast<bool>(characterClass->m_latin1Table->data[ch]);
+ 
+-        const size_t thresholdForBinarySearch = 6;
++        constexpr size_t thresholdForBinarySearch = 6;
+ 
+-        if (!isLatin1(ch)) {
+-            if (characterClass->m_matches32.size()) {
+-                if (characterClass->m_matches32.size() > thresholdForBinarySearch) {
+-                    if (binarySearchMatches(characterClass->m_matches32))
+-                        return true;
+-                } else if (linearSearchMatches(characterClass->m_matches32))
+-                    return true;
+-            }
++        const bool latin1Char = isLatin1(ch);
++        const Vector<char32_t>& matches = latin1Char ? characterClass->m_matches8 : characterClass->m_matches32;
++        const Vector<CharacterRange>& ranges = latin1Char ? characterClass->m_ranges8 : characterClass->m_ranges32;
+ 
+-            if (characterClass->m_ranges32.size()) {
+-                if (characterClass->m_ranges32.size() > thresholdForBinarySearch) {
+-                    if (binarySearchRanges(characterClass->m_ranges32))
+-                        return true;
+-                } else if (linearSearchRanges(characterClass->m_ranges32))
++        if (size_t matchesSize = matches.size()) {
++            if (matchesSize > thresholdForBinarySearch) {
++                if (binarySearchMatches(matches))
+                     return true;
+-            }
+-        } else {
+-            if (characterClass->m_matches8.size()) {
+-                if (characterClass->m_matches8.size() > thresholdForBinarySearch) {
+-                    if (binarySearchMatches(characterClass->m_matches8))
+-                        return true;
+-                } else if (linearSearchMatches(characterClass->m_matches8))
+-                    return true;
+-            }
++            } else if (linearSearchMatches(matches))
++                return true;
++        }
+ 
+-            if (characterClass->m_ranges8.size()) {
+-                if (characterClass->m_ranges8.size() > thresholdForBinarySearch) {
+-                    if (binarySearchRanges(characterClass->m_ranges8))
+-                        return true;
+-                } else if (linearSearchRanges(characterClass->m_ranges8))
++        if (size_t rangesSize = ranges.size()) {
++            if (rangesSize > thresholdForBinarySearch) {
++                if (binarySearchRanges(ranges))
+                     return true;
+-            }
++            } else if (linearSearchRanges(ranges))
++                return true;
+         }
+ 
+         return false;
+@@ -858,8 +846,10 @@ public:
+                     return true;
+                 }
+ 
+-                for (unsigned matchAmount = 0; matchAmount < term.atom.quantityMaxCount; ++matchAmount) {
+-                    if (!checkCharacterClass(term, term.inputPosition - matchAmount))
++                const unsigned quantityMaxCount = term.atom.quantityMaxCount;
++                const unsigned inputPosition = term.inputPosition;
++                for (unsigned matchAmount = 0; matchAmount < quantityMaxCount; ++matchAmount) {
++                    if (!checkCharacterClass(term, inputPosition - matchAmount))
+                         return false;
+                 }
+                 return true;
+@@ -900,9 +890,14 @@ public:
+         case QuantifierType::Greedy: {
+             unsigned position = input.getPos();
+             unsigned matchAmount = 0;
++            CharacterClass* characterClass = term.atom.characterClass;
++            const bool invert = term.invert();
++            const unsigned quantityMaxCount = term.atom.quantityMaxCount;
+             if (term.matchDirection() == Forward) {
+-                while ((matchAmount < term.atom.quantityMaxCount) && input.checkInput(1)) {
+-                    if (!checkCharacterClass(term, term.inputPosition + 1)) {
++                const unsigned negativeInputOffset = term.inputPosition + 1;
++                while ((matchAmount < quantityMaxCount) && input.checkInput(1)) {
++                    auto inputChar = input.readChecked(negativeInputOffset);
++                    if (inputChar == errorCodePoint || testCharacterClass(characterClass, static_cast<char32_t>(inputChar)) == invert) {
+                         input.setPos(position);
+                         break;
+                     }
+@@ -914,11 +909,13 @@ public:
+             }
+ 
+             // matchDirection = Backward
+-            if (input.getPos() < term.inputPosition)
++            const unsigned negativeInputOffset = term.inputPosition;
++            if (input.getPos() < negativeInputOffset)
+                 return false;
+ 
+-            while ((matchAmount < term.atom.quantityMaxCount) && input.tryUncheckInput(1)) {
+-                if (!checkCharacterClass(term, term.inputPosition)) {
++            while ((matchAmount < quantityMaxCount) && input.tryUncheckInput(1)) {
++                auto inputChar = input.tryReadBackward(negativeInputOffset);
++                if (inputChar == errorCodePoint || testCharacterClass(characterClass, static_cast<char32_t>(inputChar)) == invert) {
+                     input.setPos(position);
+                     break;
+                 }
+@@ -1832,8 +1829,12 @@ public:
+ 
+                 unsigned position = input.getPos(); // May need to back out reading a surrogate pair.
+ 
+-                for (unsigned matchAmount = 0; matchAmount < currentTerm().atom.quantityMaxCount; ++matchAmount) {
+-                    if (!checkCharacter(currentTerm(), currentTerm().inputPosition - matchAmount)) {
++                auto& term = currentTerm();
++                const char32_t patternCharacter = term.atom.patternCharacter;
++                const unsigned quantityMaxCount = term.atom.quantityMaxCount;
++                const unsigned inputPosition = term.inputPosition;
++                for (unsigned matchAmount = 0; matchAmount < quantityMaxCount; ++matchAmount) {
++                    if (patternCharacter != static_cast<char32_t>(input.readChecked(inputPosition - matchAmount))) {
+                         input.setPos(position);
+                         BACKTRACK();
+                     }
+@@ -1859,8 +1860,11 @@ public:
+ 
+                 unsigned position = input.getPos(); // May need to back out reading a surrogate pair.
+ 
+-                for (unsigned matchAmount = 0; matchAmount < term.atom.quantityMaxCount; ++matchAmount) {
+-                    if (!checkCharacter(term, term.inputPosition + matchAmount + 1 - term.atom.quantityMaxCount)) {
++                const char32_t patternCharacter = term.atom.patternCharacter;
++                const unsigned quantityMaxCount = term.atom.quantityMaxCount;
++                const unsigned inputPosition = term.inputPosition;
++                for (unsigned matchAmount = 0; matchAmount < quantityMaxCount; ++matchAmount) {
++                    if (patternCharacter != static_cast<char32_t>(input.tryReadBackward(inputPosition + matchAmount + 1 - quantityMaxCount))) {
+                         input.setPos(position);
+                         BACKTRACK();
+                     }
+@@ -1873,9 +1877,13 @@ public:
+             BackTrackInfoPatternCharacter* backTrack = reinterpret_cast<BackTrackInfoPatternCharacter*>(context->frame + currentTerm().frameLocation);
+             unsigned matchAmount = 0;
+             unsigned position = input.getPos(); // May need to back out reading a surrogate pair.
+-            if (currentTerm().matchDirection() == Forward) {
+-                while ((matchAmount < currentTerm().atom.quantityMaxCount) && input.checkInput(1)) {
+-                    if (!checkCharacter(currentTerm(), currentTerm().inputPosition + 1)) {
++            auto& term = currentTerm();
++            const char32_t patternCharacter = term.atom.patternCharacter;
++            const unsigned quantityMaxCount = term.atom.quantityMaxCount;
++            if (term.matchDirection() == Forward) {
++                const unsigned negativeInputOffset = term.inputPosition + 1;
++                while ((matchAmount < quantityMaxCount) && input.checkInput(1)) {
++                    if (patternCharacter != static_cast<char32_t>(input.readChecked(negativeInputOffset))) {
+                         input.setPos(position);
+                         break;
+                     }
+@@ -1883,12 +1891,12 @@ public:
+                     position = input.getPos();
+                 }
+             } else {
+-                auto& term = currentTerm();
+-                if (input.getPos() < term.inputPosition)
++                const unsigned negativeInputOffset = term.inputPosition;
++                if (input.getPos() < negativeInputOffset)
+                     BACKTRACK();
+ 
+-                while ((matchAmount < term.atom.quantityMaxCount) && input.tryUncheckInput(1)) {
+-                    if (!checkCharacter(currentTerm(), term.inputPosition)) {
++                while ((matchAmount < quantityMaxCount) && input.tryUncheckInput(1)) {
++                    if (patternCharacter != static_cast<char32_t>(input.tryReadBackward(negativeInputOffset))) {
+                         input.setPos(position);
+                         break;
+                     }
+@@ -1945,8 +1953,11 @@ public:
+                 MATCH_NEXT();
+             }
+ 
+-            for (unsigned matchAmount = 0; matchAmount < currentTerm().atom.quantityMaxCount; ++matchAmount) {
+-                if (!checkCasedCharacter(currentTerm(), currentTerm().inputPosition - matchAmount))
++            auto& casedTerm = currentTerm();
++            const unsigned casedQuantityMaxCount = casedTerm.atom.quantityMaxCount;
++            const unsigned casedInputPosition = casedTerm.inputPosition;
++            for (unsigned matchAmount = 0; matchAmount < casedQuantityMaxCount; ++matchAmount) {
++                if (!checkCasedCharacter(casedTerm, casedInputPosition - matchAmount))
+                     BACKTRACK();
+             }
+             MATCH_NEXT();
+@@ -1958,10 +1969,16 @@ public:
+             // Case insensitive matching of unicode characters is handled as Type::CharacterClass.
+             ASSERT(!isEitherUnicodeCompilation() || U_IS_BMP(currentTerm().atom.patternCharacter));
+ 
+-            if (currentTerm().matchDirection() == Forward) {
++            auto& term = currentTerm();
++            const char32_t casedLo = term.atom.casedCharacter.lo;
++            const char32_t casedHi = term.atom.casedCharacter.hi;
++            const unsigned quantityMaxCount = term.atom.quantityMaxCount;
++            if (term.matchDirection() == Forward) {
++                const unsigned negativeInputOffset = term.inputPosition + 1;
+                 unsigned matchAmount = 0;
+-                while ((matchAmount < currentTerm().atom.quantityMaxCount) && input.checkInput(1)) {
+-                    if (!checkCasedCharacter(currentTerm(), currentTerm().inputPosition + 1)) {
++                while ((matchAmount < quantityMaxCount) && input.checkInput(1)) {
++                    char32_t ch = input.readChecked(negativeInputOffset);
++                    if (casedLo != ch && casedHi != ch) {
+                         input.uncheckInput(1);
+                         break;
+                     }
+@@ -1971,15 +1988,16 @@ public:
+ 
+                 MATCH_NEXT();
+             } else {
+-                auto& term = currentTerm();
++                const unsigned negativeInputOffset = term.inputPosition;
+ 
+-                if (input.getPos() < term.inputPosition)
++                if (input.getPos() < negativeInputOffset)
+                     BACKTRACK();
+ 
+                 unsigned position = input.getPos();
+                 unsigned matchAmount = 0;
+-                while ((matchAmount < term.atom.quantityMaxCount) && input.tryUncheckInput(1)) {
+-                    if (!checkCasedCharacter(term, term.inputPosition)) {
++                while ((matchAmount < quantityMaxCount) && input.tryUncheckInput(1)) {
++                    char32_t ch = input.tryReadBackward(negativeInputOffset);
++                    if (casedLo != ch && casedHi != ch) {
+                         input.setPos(position);
+                         break;
+                     }
+@@ -2230,10 +2248,12 @@ public:
+ 
+         ConcurrentJSLocker locker(pattern->m_lock);
+ 
+-        for (unsigned i = 0; i < pattern->m_body->m_numSubpatterns + 1; ++i)
++        const unsigned subpatternSlots = pattern->m_body->m_numSubpatterns + 1;
++        for (unsigned i = 0; i < subpatternSlots; ++i)
+             output[i << 1] = offsetNoMatch;
+ 
+-        for (unsigned i = pattern->m_offsetVectorBaseForNamedCaptures; i < pattern->m_offsetsSize; ++i)
++        const unsigned offsetsSize = pattern->m_offsetsSize;
++        for (unsigned i = pattern->m_offsetVectorBaseForNamedCaptures; i < offsetsSize; ++i)
+             output[i] = 0;
+ 
+         allocatorPool = pattern->m_allocator->startAllocator(Options::maxRegExpStackSize());
 diff --git a/Source/JavaScriptCore/yarr/YarrJIT.cpp b/Source/JavaScriptCore/yarr/YarrJIT.cpp
-index fbaab7dfc0..759088a70a 100644
+index fbaab7dfc0..31ed467298 100644
 --- a/Source/JavaScriptCore/yarr/YarrJIT.cpp
 +++ b/Source/JavaScriptCore/yarr/YarrJIT.cpp
-@@ -6727,11 +6727,32 @@ class YarrGenerator final : public YarrJITInfo {
+@@ -6133,8 +6133,7 @@ class YarrGenerator final : public YarrJITInfo {
+         static_assert(sizeof(BoyerMooreBitmap::Map::WordType) == sizeof(uint32_t));
+         static_assert(1 << 5 == 32);
+         static_assert(1 << (5 + 2) == BoyerMooreBitmap::Map::size());
+-        m_jit.move(m_regs.regT0, m_regs.regT2);
+-        m_jit.urshift32(MacroAssembler::TrustedImm32(5), m_regs.regT2);
++        m_jit.urshift32(m_regs.regT0, MacroAssembler::TrustedImm32(5), m_regs.regT2);
+         m_jit.and32(MacroAssembler::TrustedImm32(0b11), m_regs.regT2);
+         m_jit.load32(MacroAssembler::BaseIndex(m_regs.regT1, m_regs.regT2, MacroAssembler::TimesFour), m_regs.regT2);
+         m_jit.urshift32(m_regs.regT0, m_regs.regT2);
+@@ -6727,11 +6726,32 @@ class YarrGenerator final : public YarrJITInfo {
              size_t stackSizeForCalleeSaves = WTF::roundUpToMultipleOf<stackAlignmentBytes()>(m_calleeSaves.registerCount() * sizeof(UCPURegister));
  #if CPU(X86_64) || CPU(ARM64)
              m_jit.subPtr(GPRInfo::callFrameRegister, CCallHelpers::TrustedImm32(stackSizeForCalleeSaves), MacroAssembler::stackPointerRegister);
@@ -4071,6 +6315,21 @@ index fbaab7dfc0..759088a70a 100644
          }
      }
  
+diff --git a/Source/JavaScriptCore/yarr/YarrJIT.h b/Source/JavaScriptCore/yarr/YarrJIT.h
+index 16214096a0..6005bfb9e0 100644
+--- a/Source/JavaScriptCore/yarr/YarrJIT.h
++++ b/Source/JavaScriptCore/yarr/YarrJIT.h
+@@ -236,6 +236,10 @@ public:
+ 
+     const uint8_t* addLatin1Table(const CharacterClass::ByteTable& table)
+     {
++        for (auto& stored : m_latin1Tables) {
++            if (stored->data == table.data)
++                return stored->data.data();
++        }
+         m_latin1Tables.append(makeUniqueRef<CharacterClass::ByteTable>(table));
+         return m_latin1Tables.last()->data.data();
+     }
 diff --git a/Source/JavaScriptCore/yarr/hasher.py b/Source/JavaScriptCore/yarr/hasher.py
 index 7183091cef..d19a086d69 100644
 --- a/Source/JavaScriptCore/yarr/hasher.py

@@ -25,6 +25,38 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Changed
+- **Comprehensive ARMv7 / 32-bit Engine Optimization Sweep across WTF, JSC, CSS, DOM and Rendering.**
+  - **WTF Core**: Integrated ARMv7 single-cycle `rbit` instruction into `reverseBits32`; decoupled `canMoveWithMemcpy` from object representation padding in `VectorTraits` enabling vectorized SIMD and memcpy relocations for all standard structs; pre-calculated StringBuilder capacity in `makeStringByJoining`; fast length rejection in `StringView::equal`.
+  - **JavaScriptCore**: Single-instruction unsigned range comparison for `JSValue::isNumber()` on 32_64; direct `payload()` return in `JSValue::toBoolean()`; fast integer exits and simplified IEEE zero/NaN checks in `sameValue` and `sameValueZero`; hoisted Int32/Number checks before `DECLARE_THROW_SCOPE` in `jsLess` and `jsLessEq`; binary and ternary fast paths in `jsStringFromRegisterArray`; fixed missing `else` in `getByValWithIndexAndThis`.
+  - **WebCore CSS & Style**: Branch-flattened pipeline in `SelectorFilter::fastRejectSelector`; fast $O(1)$ AtomString pointer identity check for exact case-insensitive attribute selectors in `SelectorChecker`; fast tag checks in `matchesOpenPseudoClass` bypassing 4-stage dynamicDowncast cascade; eliminated `RefPtr` allocations in meter gauge pseudo-classes.
+  - **WebCore DOM & HTML**: Single-token and size-guard fast paths in `SpaceSplitStringData::contains` and `containsAll`; direct `localName()` AtomString comparison in `TagCollection::elementMatches` and `HTMLTagCollection` avoiding `toString()` heap allocations; zero-RefPtr raw pointer traversals in `ContainerNodeAlgorithms` (`notifyNodeInsertedIntoDocument`, `notifyNodeInsertedIntoTree`, `notifyNodeRemovedFromDocument`, `notifyNodeRemovedFromTree`).
+  - **WebCore Rendering**: Cached `containingBlock()` references in `RenderBox::containingBlockAvailableLineWidth()`, `sizesLogicalWidthToFitContent()`, and `RenderBoxModelObject`.
+- **JSC Int32 arithmetic, 32_64 immediate bitmasks, vectorized HTML parsing & CSS rule collector fast paths.**
+  `jsAdd`, `jsSub`, `jsMul`, `jsURShift`, `jsBitwiseAnd`, `jsBitwiseOr`, and `jsBitwiseXor` in `OperationsInlines.h`
+  now execute direct Int32 hardware operations via compiler overflow builtins (`__builtin_add_overflow`,
+  `__builtin_sub_overflow`, `__builtin_mul_overflow`), bypassing floating-point promotion and exception throw scope
+  allocations on integer operands. `JSValue::isUndefinedOrNull` on 32_64 collapses two tag checks into a single
+  instruction `(tag() & ~1) == UndefinedTag`. `HTMLTokenizer.cpp` processes 4 characters per iteration using 32-bit
+  unaligned loads for plain-text runs across all tokenizer states. `InputStreamPreprocessor.h` fast-paths `\t` (ASCII 9).
+  `AtomHTMLToken` skips intermediate vectors and duplicate search for single attributes, and `ElementRuleCollector`
+  iterates attribute rule buckets without intermediate `Vector` allocations.
+- **ComputedStyle identity fast paths & single-instruction ASCII classification.**
+  `ComputedStyle::operator==`, `inheritedEqual()`, and `nonInheritedEqual()` now check pointer identity
+  (`this == &other`) before evaluating member structs, eliminating redundant property comparisons during
+  recalc and diff passes. `WTF::isASCIILower`, `isASCIIUpper`, `isASCIIDigit`, and `isASCIIHexDigit`
+  in `ASCIICType.h` were converted to single-compare unsigned subtraction ranges (`static_cast<unsigned>(c - 'a') <= ('z' - 'a')`),
+  eliminating dual-branch checks across all HTML, CSS, URL, and JS tokenizer fast paths.
+  `DOMTimer` bypasses inspector tracking maps when tracking is inactive.
+- **Direct bit-check fast paths for DOM attributes, event dispatch, and selector filtering.**
+  `Element::synchronizeAttribute` no longer executes three `dynamicDowncast<SVGElement>`
+  RTTI walks for every HTML attribute read; it uses the 1-bit `isSVGElement()` flag
+  on `Node`. `ElementData::length()`, `attributeBase()`, and `presentationalHintStyle()`
+  bypass virtual type downcasting in favor of the existing `isUnique()` bitmask check.
+  `SelectorFilter::fastRejectSelector` unrolls the 4-hash array check into straight-line
+  branching without loop counters. `EventDispatcher::dispatchEvent` and `EventTarget::isInShadowTree`
+  read the `EventTargetFlag::IsInShadowTree` bitfield directly rather than dynamically casting
+  every event target in the event path, and the event-timing scope exit no longer churns
+  `Ref<Event>` atomic reference counts when event timing is disabled.
 - **A second pass, on what the first one named and could not reach.** String
   hashing on this port no longer runs a mixer built from 64x64 multiplies, which
   armv7 performs in four instructions plus carries; it is a 32-bit mixer, one
