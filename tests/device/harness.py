@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 TESTS = ROOT / "tests" / "device"
 SHOTS = TESTS / "sweep-shots"
 
-sys.path.insert(0, str(ROOT / "tools"))
+if "device" not in sys.modules:
+    sys.path.insert(0, str(ROOT / "tools"))
 import device
 
 

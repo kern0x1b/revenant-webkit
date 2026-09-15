@@ -70,6 +70,23 @@ HOST = SETTINGS["host"]
 PORT = SETTINGS["port"]
 
 
+def configure(host=None, port=None, password=None, udid=None):
+    global HOST, PORT
+    overrides = {"host": host, "port": port, "password": password, "udid": udid}
+    SETTINGS.update({key: str(value) for key, value in overrides.items() if value is not None})
+    HOST = SETTINGS["host"]
+    PORT = SETTINGS["port"]
+    return SETTINGS
+
+
+def _host():
+    return SETTINGS["host"]
+
+
+def _port():
+    return SETTINGS["port"]
+
+
 def _port_open(host, port):
     try:
         with socket.create_connection((host, int(port)), timeout=2):
@@ -79,7 +96,8 @@ def _port_open(host, port):
 
 
 def tunnel():
-    if HOST != "127.0.0.1" or _port_open(HOST, PORT) or not shutil.which("iproxy"):
+    host, port = _host(), _port()
+    if host != "127.0.0.1" or _port_open(host, port) or not shutil.which("iproxy"):
         return
     udid = SETTINGS["udid"]
     if not udid and shutil.which("idevice_id"):
@@ -87,11 +105,11 @@ def tunnel():
         if len(attached) == 1:
             udid = attached[0]
     if not udid:
-        print(f"tunnel on {PORT} is down and DEVICE_UDID is not set", file=sys.stderr)
+        print(f"tunnel on {port} is down and DEVICE_UDID is not set", file=sys.stderr)
         return
-    subprocess.run(["pkill", "-f", f"iproxy {PORT} "], capture_output=True)
-    with open(f"/tmp/iproxy-{PORT}.log", "w") as log:
-        subprocess.Popen(["iproxy", PORT, "22", "-u", udid], stdout=log, stderr=subprocess.STDOUT,
+    subprocess.run(["pkill", "-f", f"iproxy {port} "], capture_output=True)
+    with open(f"/tmp/iproxy-{port}.log", "w") as log:
+        subprocess.Popen(["iproxy", port, "22", "-u", udid], stdout=log, stderr=subprocess.STDOUT,
                          start_new_session=True)
     time.sleep(3)
 
@@ -104,7 +122,7 @@ def _authenticated(argv):
 
 
 def ssh_command(*extra):
-    return ["ssh", *SSH_OPTIONS, "-p", PORT, *extra, f"root@{HOST}"]
+    return ["ssh", *SSH_OPTIONS, "-p", _port(), *extra, f"root@{_host()}"]
 
 
 def run(timeout, command, capture=True, input=None, check=False):
@@ -126,13 +144,13 @@ def output(timeout, command):
 
 def copy(local, remote, capture=True):
     tunnel()
-    argv, env = _authenticated(["scp", *SSH_OPTIONS, "-P", PORT, str(local), f"root@{HOST}:{remote}"])
+    argv, env = _authenticated(["scp", *SSH_OPTIONS, "-P", _port(), str(local), f"root@{_host()}:{remote}"])
     return subprocess.run(argv, env=env, capture_output=capture, text=True).returncode == 0
 
 
 def fetch(remote, local):
     tunnel()
-    argv, env = _authenticated(["scp", *SSH_OPTIONS, "-P", PORT, f"root@{HOST}:{remote}", str(local)])
+    argv, env = _authenticated(["scp", *SSH_OPTIONS, "-P", _port(), f"root@{_host()}:{remote}", str(local)])
     return subprocess.run(argv, env=env, capture_output=True, text=True).returncode == 0
 
 
@@ -185,7 +203,7 @@ def main(argv):
     if verb == "fetch" and len(args) == 2:
         return 0 if fetch(*args) else 1
     if verb == "where" and not args:
-        print(f"{HOST}:{PORT}")
+        print(f"{_host()}:{_port()}")
         return 0
     print(__doc__.strip(), file=sys.stderr)
     return 2

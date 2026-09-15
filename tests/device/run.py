@@ -4,6 +4,8 @@
     tests/device/run.py [HOST]
     TEST_PORT=8898 tests/device/run.py
 """
+from __future__ import annotations
+
 import argparse
 import os
 import re
@@ -62,10 +64,8 @@ def verdict_feed(server):
     return "".join(f"GET {path}\n" for path in server.matching("/verdicts?"))
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("host", nargs="?", help="address the phone reaches this Mac on; default: this Mac's en0")
-    host = parser.parse_args().host or harness.host_address()
+def run_gate(host: str | None) -> int:
+    host = host or harness.host_address()
     port = int(os.environ.get("TEST_PORT") or 8899)
     base = f"http://{host}:{port}"
 
@@ -86,6 +86,12 @@ def main():
         status = subprocess.run([sys.executable, str(harness.TESTS / "verdicts.py")],
                                 input=verdict_feed(server), text=True).returncode
     return 1 if found else status
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("host", nargs="?", help="address the phone reaches this Mac on; default: this Mac's en0")
+    return run_gate(parser.parse_args().host)
 
 
 if __name__ == "__main__":

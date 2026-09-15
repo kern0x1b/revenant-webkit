@@ -14,7 +14,8 @@ from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
+if "device" not in sys.modules:
+    sys.path.insert(0, str(ROOT / "tools"))
 import device
 
 DEVICE_DIR = "/tmp/jscrun"
@@ -233,12 +234,15 @@ def battery_verdict(output: str, returncode: int) -> Verdict:
     return Verdict(status, verdict, failed, reported)
 
 
-def run_device_tests(root: Path) -> int:
+def default_engine_build(root: Path) -> Path:
+    return Path(os.environ.get("ENGINE_BUILD") or root / "build" / "engine" / "armv7-system")
+
+
+def run_device_tests(root: Path, build: Path) -> int:
     if not device.reachable(12):
         log.error("device tests: the phone is not reachable - check device.env (see device.env.example)")
         return 1
 
-    build = Path(os.environ.get("ENGINE_BUILD") or root / "build" / "engine" / "armv7-system")
     if not sync_engine(root, build):
         return 1
 
@@ -278,7 +282,7 @@ def main() -> int:
     if args.tier in ("host", "all"):
         failures += run_host_tests(ROOT)
     if args.tier in ("device", "all"):
-        failures += run_device_tests(ROOT)
+        failures += run_device_tests(ROOT, default_engine_build(ROOT))
 
     print()
     print(f"run-tests: FAILED ({failures})" if failures else "run-tests: PASSED")
