@@ -3,6 +3,7 @@ set -e
 P=$(cd "$(dirname "$0")/.." && pwd)
 SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
 TC=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
+[ -x "$TC/usr/bin/clang" ] || TC=$(xcode-select -p)
 OUT=$P/third_party/openssl-armv7
 
 cd $P/third_party/src/openssl

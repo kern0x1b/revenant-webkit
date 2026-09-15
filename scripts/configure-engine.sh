@@ -17,13 +17,22 @@ cmake -S $S -B $B -G Ninja \
   `# first pass warms it.` \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
   -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
+  `# Without this the build asks xcrun for an "iphoneos" SDK by name, which` \
+  `# only a full Xcode install has, and then the toolchain file overrides the` \
+  `# answer anyway. Naming the SDK here is what actually gets used, and it` \
+  `# leaves the Command Line Tools sufficient.` \
+  -DCMAKE_OSX_SYSROOT=$SDK \
   -DCMAKE_TOOLCHAIN_FILE=$P/scripts/ios6-armv7-trunk.cmake \
   -DPORT=IOS -DCMAKE_BUILD_TYPE=Release -DDEVELOPER_MODE=OFF \
   -DWEBKIT_IOS6_CRYPTO_LIB=$O/lib/libcrypto.a \
   -DUSE_WEBP=ON -DWebP_INCLUDE_DIR=$WP/include -DWebP_LIBRARY=$WP/lib/libwebp.a -DWebP_DEMUX_LIBRARY=$WP/lib/libwebpdemux.a \
   -DSWIFT_REQUIRED=OFF -DWEBKIT_IOS6_COMPAT_LIB=$P/compat/libios6compat.a -DWEBKIT_IOS6_EXPORTS=$S/Source/WebKitLegacy/WebKitLegacy-iOS.exp -DWEBKIT_IOS6_LIBCXX_DIR=$L -DWEBKIT_NO_AVAILABILITY_OVERLAY=ON \
   -DENABLE_WEBKIT_LEGACY=ON -DENABLE_WEBKIT=OFF \
-  -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+  `# The prefix header is what carries the export macros into every translation` \
+  `# unit, and it reaches them through the precompiled header. Disabling these` \
+  `# leaves WebKitLegacy compiling WebCore headers with WEBCORE_EXPORT undefined,` \
+  `# and which files break depends on how the unified sources happen to group.` \
+  -DCMAKE_DISABLE_PRECOMPILE_HEADERS=OFF \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=6.0 \
   -DENABLE_MEDIA_RECORDER=OFF \
   `# This is a touch device and these sites are written for a finger.` \

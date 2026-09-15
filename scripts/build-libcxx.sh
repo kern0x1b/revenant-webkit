@@ -2,7 +2,8 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
-XC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain
+XC=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
+[ -x "$XC/usr/bin/clang" ] || XC=$(xcode-select -p)
 SRC=$ROOT/third_party/llvm-project
 
 if [ ! -d "$SRC" ]; then

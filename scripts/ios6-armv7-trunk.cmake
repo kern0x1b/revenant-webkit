@@ -21,11 +21,27 @@ set(CMAKE_OSX_SYSROOT ${IOS6_SDK} CACHE PATH "SDK the compiler is pointed at" FO
 set(WEBKIT_IOS6 ON CACHE BOOL "Building the iOS 6 armv7 port" FORCE)
 set(CMAKE_OSX_ARCHITECTURES armv7)
 set(CMAKE_OSX_DEPLOYMENT_TARGET 6.0)
-set(CMAKE_C_COMPILER /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang)
-set(CMAKE_CXX_COMPILER /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++)
+# Xcode is not required to build this port: the Command Line Tools carry the
+# same clang and the same compiler-rt, theos carries the SDK, and the linker
+# and binary utilities are built by scripts/build-linker.sh. DEVELOPER_DIR
+# selects which of the two is used; whichever it is, the compilers live in one
+# of these two places.
+if (DEFINED ENV{DEVELOPER_DIR})
+    set(DEVELOPER_ROOT $ENV{DEVELOPER_DIR})
+else ()
+    execute_process(COMMAND xcode-select -p
+        OUTPUT_VARIABLE DEVELOPER_ROOT OUTPUT_STRIP_TRAILING_WHITESPACE)
+endif ()
+if (EXISTS ${DEVELOPER_ROOT}/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang)
+    set(TOOLCHAIN_BIN ${DEVELOPER_ROOT}/Toolchains/XcodeDefault.xctoolchain/usr/bin)
+else ()
+    set(TOOLCHAIN_BIN ${DEVELOPER_ROOT}/usr/bin)
+endif ()
+set(CMAKE_C_COMPILER ${TOOLCHAIN_BIN}/clang)
+set(CMAKE_CXX_COMPILER ${TOOLCHAIN_BIN}/clang++)
 
 set(SDK6 ${IOS6_SDK})
-set(CXX21 /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/usr/include/c++/v1)
+set(CXX21 ${CMAKE_CURRENT_LIST_DIR}/../third_party/libcxx-armv7/include/c++/v1)
 set(COMMON "-target armv7-apple-ios6.0 -isysroot ${SDK6}")
 set(CMAKE_C_FLAGS_INIT "${COMMON} -DWEBKIT_IOS6_NO_READLINE")
 set(CMAKE_CXX_FLAGS_INIT "${COMMON} -nostdinc++ -isystem ${CXX21} -D_LIBCPP_DISABLE_AVAILABILITY -DWEBKIT_IOS6_NO_READLINE")
@@ -38,4 +54,8 @@ set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 
 # mig needs mach/*.defs, which only the macOS SDK ships.
-set(MIG_SYSROOT /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk)
+if (EXISTS ${DEVELOPER_ROOT}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk)
+    set(MIG_SYSROOT ${DEVELOPER_ROOT}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk)
+else ()
+    set(MIG_SYSROOT ${DEVELOPER_ROOT}/SDKs/MacOSX.sdk)
+endif ()

@@ -2,7 +2,7 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
-XC=/Applications/Xcode.app/Contents/Developer
+XC=$(xcode-select -p)
 CXX21=$XC/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk/usr/include/c++/v1
 SRC=$ROOT/third_party/icu
 mkdir -p $ROOT/third_party

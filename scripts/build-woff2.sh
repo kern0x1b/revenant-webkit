@@ -3,6 +3,7 @@ set -e
 P=$(cd "$(dirname "$0")/.." && pwd)
 SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
 TC=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
+[ -x "$TC/usr/bin/clang" ] || TC=$(xcode-select -p)
 SRC=$P/third_party/src
 OUT=$P/third_party/woff2-armv7
 BROTLI_VERSION=1.1.0
@@ -22,7 +23,7 @@ fi
 
 CC="$TC/usr/bin/clang"
 CXX="$TC/usr/bin/clang++"
-ARCH="-target armv7-apple-ios6.0 -isysroot $SDK -mcpu=cortex-a9 -mfpu=neon -Os -fvisibility=hidden"
+ARCH="-target armv7-apple-ios6.0 -isysroot $SDK -mcpu=cortex-a9 -mfpu=neon -Os -fvisibility=hidden -mno-thumb"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/lib" "$OUT/include" "$OUT/obj"

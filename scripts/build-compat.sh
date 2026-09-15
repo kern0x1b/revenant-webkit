@@ -4,6 +4,7 @@ P=$(cd "$(dirname "$0")/.." && pwd)
 SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
 L=$P/third_party/libcxx-armv7
 TC=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
+[ -x "$TC/usr/bin/clang" ] || TC=$(xcode-select -p)
 
 COMMON="-target armv7-apple-ios6.0 -isysroot $SDK -isystem $P/compat/stubs -O2 -fno-objc-arc -Wno-builtin-requires-header -Wno-protocol -Wno-objc-designated-initializers"
 STUBS="-include $P/compat/stubs/ios6_dispatch_compat.h"
