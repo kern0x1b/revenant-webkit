@@ -170,17 +170,15 @@ Two that are still open, and both of them are this driver rather than this port:
 
 - **NPOT cube maps do not sample.** Two checks in `texture-npot`; NPOT 2D
   textures are fine, which is what OpenGL ES 2.0's core allowance covers.
-  `tools/gles-npot-cube-probe.m` asks the driver directly, outside ANGLE and
-  WebKit: an 8x8 cube map samples green, a 5x5 and a 7x7 sample black with no GL
-  error at all. The driver names no npot extension of any kind. Making this pass
+  Asked directly, outside ANGLE and WebKit, the driver samples green from an 8x8
+  cube map and black from a 5x5 and a 7x7, with no GL error at all. The driver names no npot extension of any kind. Making this pass
   would mean ANGLE rescaling NPOT cube maps to a power of two behind the page's
   back, which nothing in the GL backend does today.
 - **Face culling is unreliable when the colour attachment came from an
-  IOSurface.** Four checks in `rendering/culling`. `tools/gles-cull-probe.m`
-  builds three framebuffers - a renderbuffer, a plain texture, and a texture the
-  CoreVideo cache made from an IOSurface, which is what a canvas draws into here
-  - and runs `BACK`, `FRONT` and `FRONT_AND_BACK` against each, three passes
-  apiece, printing the pixel it read.
+  IOSurface.** Four checks in `rendering/culling`. Three framebuffers were
+  measured - a renderbuffer, a plain texture, and a texture the CoreVideo cache
+  made from an IOSurface, which is what a canvas draws into here - with `BACK`,
+  `FRONT` and `FRONT_AND_BACK` against each, three passes apiece.
 
   The first two are right every time. The IOSurface one is not right and not
   even stable: left alone its answers move from pass to pass, as though the
@@ -206,16 +204,6 @@ Two that are still open, and both of them are this driver rather than this port:
   is presented. That is a trade - conformant culling against a copy per frame -
   and not a bug to be fixed quietly. Nothing in the device suite or the
   eight-site sweep depends on culling today.
-
-## The tools that proved each step
-
-- `tools/gles-iosurface-probe.m` - can this GPU bind an IOSurface as a texture at
-  all? Answered before a line of the backend was written.
-- `tools/angle-eagl-probe.mm` - does ANGLE initialise, make a context and render,
-  outside WebKit? A binary that links the ANGLE archives has to be pointed at the
-  engine's C++ runtime (`install_name_tool -change
-  @executable_path/Frameworks/libc++.1.dylib /usr/lib/librev-c++.1.dylib`) or it
-  traps at load with nothing printed.
 
 ## What is left
 

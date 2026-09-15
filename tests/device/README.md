@@ -41,9 +41,9 @@ whole life, not of one page.
 ## Known limitations, as of 2026-09-09
 
 `mix-blend-mode: hue | saturation | color | luminosity` on an **element** is
-drawn unblended. A page cannot read it, so it is measured from a screenshot:
-`repro/element-blend-modes.html` puts a multiply and a hue over the same orange,
-`/usr/bin/shot` takes the screen, and the two halves are read off the PNG.
+drawn unblended. A page cannot read it, so it was measured from a screenshot: a
+multiply and a hue over the same orange, `/usr/bin/shot` for the screen, and the
+two halves read off the PNG.
 
 The result is the discriminator this had been missing:
 
@@ -53,10 +53,9 @@ The result is the discriminator this had been missing:
 
 Everything else has been eliminated, each by measurement:
 
-- **The platform implements the four modes.** `repro/coregraphics-blend-probe.c`
-  fills orange, sets `kCGBlendModeHue`, begins a transparency layer, fills blue
-  and ends it, in a device-RGB bitmap and again through a `CGLayer`: 105,180,255
-  both times. (There is no `kCGColorSpaceSRGB` by name on this release.)
+- **The platform implements the four modes.** Orange filled, `kCGBlendModeHue`
+  set, a transparency layer begun, blue filled and the layer ended, in a
+  device-RGB bitmap and again through a `CGLayer`: 105,180,255 both times. (There is no `kCGColorSpaceSRGB` by name on this release.)
 - **The box is not composited.** Its layer and its parent's both report no
   backing at the moment the transparency layer is begun, so this is not a layer
   blending against an empty backdrop, and not the missing CoreAnimation filter

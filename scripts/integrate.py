@@ -4,9 +4,6 @@
     scripts/integrate.py upstream/webkitglib/2.54     take the series' own picks
     scripts/integrate.py upstream/main                the base change, when it is time
     scripts/integrate.py --no-merge                   just run the gates on what is here
-
-Add --with-jsc32 to also build JavaScriptCore for 32-bit ARM and run its own
-suites in a container. That tier is slow and needs docker, so it is opt-in.
 """
 import argparse
 import functools
@@ -87,11 +84,6 @@ def build(root: Path) -> None:
             "build failed")
 
 
-def jsc32(root: Path) -> None:
-    require(python_tool(root, "tests/jsc32/build-and-test.py", "stress"),
-            "the 32-bit engine did not pass its own suites")
-
-
 def host_checks(root: Path) -> None:
     result = require(python_tool(root, "tests/run-tests.py", "host"), "host checks failed",
                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
@@ -121,7 +113,6 @@ def parse_args() -> argparse.Namespace:
     target = parser.add_mutually_exclusive_group()
     target.add_argument("ref", nargs="?", help="upstream ref to merge into webkit-254, e.g. upstream/main")
     target.add_argument("--no-merge", action="store_true", help="run the gates on the tree as it is")
-    parser.add_argument("--with-jsc32", action="store_true", help="also build and test 32-bit JavaScriptCore")
     return parser.parse_args()
 
 
@@ -135,7 +126,6 @@ def main() -> int:
         ("carry manifest", check_carry, True),
         ("port delta", port_delta, True),
         ("build, symbols and package", build, True),
-        ("32-bit JavaScriptCore", jsc32, args.with_jsc32),
         ("host checks", host_checks, True),
         ("device", device_gate, True),
     ]

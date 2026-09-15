@@ -99,19 +99,14 @@ this port has spent the most time chasing blind.
 | 1. Carry manifest | nothing | seconds | our code deleted, a flag flipped, a guard reverted |
 | 2. Host checks | Mac | seconds | ICU data damage, the CA bundle's pin, generated encoding lists |
 | 3. armv7 build, then the symbol check | Mac | minutes | every API change upstream made to code we touch, and any new dependency on API iOS 6 may not have |
-| 4. 32-bit JSC build, then its suites | Mac + container | tens of minutes | our own 32-bit JSValue and JIT carry. The build is live; running the binary under emulation aborts at startup and is not solved yet - see tests/README.md |
-| 5. Device suite | the iPhone | minutes | UIKit, CoreText, CoreGraphics, the GPU, and whether pages actually paint |
-| 6. Device long runs | the iPhone | tens of minutes | WebGL conformance, memory bands over cold launches, a crash sweep |
+| 4. Device suite | the iPhone | minutes | UIKit, CoreText, CoreGraphics, the GPU, and whether pages actually paint |
+| 5. Device long runs | the iPhone | tens of minutes | WebGL conformance, memory bands over cold launches, a crash sweep |
 
-Tiers 1 to 4 are the answer to the question of testing without a phone, and tier
-4 exists: `tests/jsc32/`. The 32-bit value representation is not iOS-specific, so
-a JSCOnly build for 32-bit ARM Linux exercises the same `JSVALUE32_64` code, the
-same macro assembler and the same DFG that the phone runs. A container
-cross-compiles it at native speed and `qemu-arm-static` runs it, driven by
-JavaScriptCore's own suites. That is coverage of this port's largest and most
-fragile carry, on the host, with no device in the loop - and it found a real
-missing include the device build hides inside a unified source on the first run
-it completed.
+Tiers 1 to 3 are the answer to the question of testing without a phone. The
+32-bit JSValue representation and the ARMv7 JIT - this port's largest carry -
+have no host tier of their own: a JSCOnly build for 32-bit ARM Linux was tried
+and dropped, because the binary aborts during `JSGlobalObject::init` under
+emulation and a tier that cannot run its own suites is not coverage.
 
 What the phone remains irreplaceable for is everything the manifest cannot
 describe and a Linux container does not have: a 2012 UIKit, this CoreText, this
