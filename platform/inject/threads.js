@@ -29,6 +29,22 @@
 (function () {
     "use strict";
 
+    /* Nothing below this line runs inside a frame that is not the top one.
+     *
+     * This exists now because of prefetchOtherTabs() further down, which opens
+     * other tabs of the site in hidden iframes to warm their bytecode ahead of
+     * a real visit. Each iframe is a fresh window with its own __appchromeScript
+     * flag, so without this guard the injected script would run again inside
+     * it - dismiss-sheet, bottom-bar promotion and all - and promoteBottomBar()
+     * would report the hidden iframe's nav to window.appchrome.chrome(), racing
+     * the real page's bottom bar with whatever the prefetched tab happens to
+     * show. Worse, that inner copy would find the same <nav> shape and start
+     * warming tabs of its own, iframe inside iframe, without end. A page that
+     * legitimately embeds an iframe of its own is not a case this file has any
+     * business touching either way. */
+    if (window !== window.top)
+        return;
+
     /* The runtime re-applies this script whenever it cannot tell whether the
      * document still has it - a navigation inside the site replaces everything.
      * Without a guard each re-application starts another copy of the watcher
@@ -111,9 +127,6 @@
      * last mutation looks too early and then never looks again. So each burst
      * of mutations buys a short series of looks, which ends as soon as the
      * position is reported or there is no dialog left to look at. */
-    var lookTimer = 0;
-    var looksLeft = 0;
-
     /* The sheet comes back: this site raises it again whenever a signed-out
      * reader scrolls. So there is no budget of attempts - while it is up, look
      * again; when it is gone, stop entirely and wait for the page to change.
@@ -134,7 +147,13 @@
     var appPromptWords = ["open threads", "get app", "get the app", "download", "use the app", "open in app"];
 
     function looksLikeAppPrompt(text) {
-        var lowered = (text || "").trim().toLowerCase();
+        /* Measured against the raw string first. textContent of a control that
+         * turns out to be a whole post is the feed serialized, and trimming and
+         * lowercasing it made two more copies of that before the length test
+         * threw all three away. */
+        if (!text || text.length > 200)
+            return false;
+        var lowered = text.trim().toLowerCase();
         if (!lowered || lowered.length > 40)
             return false;
         for (var i = 0; i < appPromptWords.length; i++) {
@@ -144,15 +163,31 @@
         return false;
     }
 
+    /* Every candidate is marked, not only the ones that matched.
+     *
+     * The mark used to go on matches alone, so each pass read textContent for
+     * every control on the page again - and on this feed that grows without
+     * bound while the pass repeats every 800 ms. Marking on sight makes the
+     * scan cost what has been added since the last one. A control's own label
+     * does not become the app pitch later; the capture-phase listener above is
+     * what catches a press whose label was rewritten under us. */
     function retargetAppPrompts() {
         var candidates = document.querySelectorAll("a, div[role=button], button");
         for (var i = 0; i < candidates.length; i++) {
             var element = candidates[i];
             if (element.getAttribute("data-appchrome-retargeted"))
                 continue;
-            if (!looksLikeAppPrompt(element.textContent))
+            var text = element.textContent;
+            /* An element with no label yet is left unmarked: the site fills some
+             * of them in a later commit, and marking one while it is empty - or
+             * while it holds nothing but whitespace - would skip it for good.
+             * Anything past the length looksLikeAppPrompt will consider is
+             * marked without trimming it, because trimming a whole serialized
+             * post is the cost this marking exists to avoid. */
+            if (text && (text.length > 200 || text.trim()))
+                element.setAttribute("data-appchrome-retargeted", "1");
+            if (!looksLikeAppPrompt(text))
                 continue;
-            element.setAttribute("data-appchrome-retargeted", "1");
             if (element.tagName === "A")
                 element.setAttribute("href", "/login");
             var label = element.querySelector("span, div");
@@ -220,14 +255,33 @@
             lookTimer = window.setTimeout(look, 800);
             return;
         }
-        /* A record of requests that fail, kept for one question.
+        retargetAppPrompts();
+        looksLeft = 40;
+        if (pressesForThisSheet < 3 && dismissSheetIfPresent())
+            pressesForThisSheet++;
+        lookTimer = window.setTimeout(look, 800);
+    }
+
+    function scheduleLook() {
+        if (!lookTimer)
+            lookTimer = window.setTimeout(look, 300);
+    }
+
+    /* A record of requests that fail, kept for one question.
      *
      * Logging in reports only "something went wrong", which says nothing about
      * which request failed or how. This keeps the last few failures and any
      * unhandled error on the window, where the runtime can read them after the
-     * fact. It hooks nothing that succeeds beyond one property read, and holds
-     * at most eight entries. */
-    (function recordFailures() {
+     * fact.
+     *
+     * Off unless the page is asked for it with ?__netlog=1, and called once.
+     * It sat inside look(), after the check for the sheet, so every pass while a
+     * sheet was up - one every 800 ms, and this site raises the sheet again on
+     * every scroll - wrapped fetch and XMLHttpRequest in another layer and
+     * started another MutationObserver over the whole document that nothing ever
+     * disconnected. This file's own header says what that costs: the web thread
+     * burned 71-79 seconds of processor in a one minute session. */
+    function recordFailures() {
         window.__netFails = [];
         /* Kept across a navigation as well as in memory: the failure and the
          * page that shows it are often on opposite sides of one. */
@@ -290,18 +344,6 @@
                     }
             }).observe(document.documentElement, {childList: true, subtree: true});
         }
-    })();
-
-    retargetAppPrompts();
-        looksLeft = 40;
-        if (pressesForThisSheet < 3 && dismissSheetIfPresent())
-            pressesForThisSheet++;
-        lookTimer = window.setTimeout(look, 800);
-    }
-
-    function scheduleLook() {
-        if (!lookTimer)
-            lookTimer = window.setTimeout(look, 300);
     }
 
 
@@ -461,6 +503,116 @@
         chromeReported = true;
     }
 
+    /* Warming the other tabs' bytecode while the reader is doing nothing that
+     * competes for it.
+     *
+     * The first visit to a route costs 3-5s of parse and compile that later
+     * visits do not pay, because JSC's bytecode cache is disk-backed and keyed
+     * off the script's own source - patches/engine/03-javascriptcore.patch's
+     * AheadOfTimeBytecodeThread hands the compiled blob to the SourceProvider,
+     * not to whichever frame happened to ask for it. So a hidden iframe that
+     * loads a tab's real href and is left to run the site's own JavaScript to
+     * completion warms exactly the cache entries a real tap on that tab would
+     * need, and does not care what bundler or router produced them: it is the
+     * same browser primitive <Link prefetch> and a background import() build
+     * on, not anything reached through Threads' own __d/requireLazy loader.
+     * requireLazy was the first idea, and Meta's own docs describe it as a
+     * real promise-returning API - but reaching a specific route through it
+     * needs that route's module ID pulled out of BTLDR's table, which is
+     * Threads-specific and would have to be rediscovered by hand for
+     * anything else this wrapper ever points at. This was NOT confirmed
+     * against the live page - device access was not exercised while writing
+     * this, for reasons in the change notes - so treat "requireLazy has a
+     * usable hook" as an unverified lead, not a finding. The iframe needs
+     * nothing but the <a href> already sitting in the bar, on any site.
+     *
+     * Nothing here has been measured on a device: it is built from reading the
+     * cache's engine patch, not from watching BYTECODE totals move. Off unless
+     * asked for with ?__prefetchtabs=1, until it has. */
+    function prefetchOtherTabs() {
+        var idle = window.requestIdleCallback
+            ? function (fn) { window.requestIdleCallback(fn, {timeout: 4000}); }
+            : function (fn) { window.setTimeout(fn, 3000); };
+
+        /* Same shape as promoteBottomBar()'s search, on purpose: a fixed bar
+         * pinned to the bottom half of the screen. Run independently of it,
+         * though - promoteBottomBar only reports a bar once __appchromeNativeBar
+         * is on, and warming the other tabs should not wait on a flag that is
+         * about something else entirely. */
+        var nav = null;
+        var candidates = document.querySelectorAll("nav");
+        for (var i = 0; i < candidates.length; i++) {
+            var style = window.getComputedStyle(candidates[i]);
+            if (style.position !== "fixed")
+                continue;
+            var box = candidates[i].getBoundingClientRect();
+            if (box.height < 30 || box.width < window.innerWidth * 0.8)
+                continue;
+            if (box.top < window.innerHeight * 0.5)
+                continue;
+            nav = candidates[i];
+            break;
+        }
+        if (!nav)
+            return;
+
+        var hrefs = [];
+        var links = nav.querySelectorAll("a[href]");
+        for (var l = 0; l < links.length; l++) {
+            var href = links[l].getAttribute("href");
+            /* Only a same-site path. A bare "/" or the current tab buys
+             * nothing, and anything not starting with "/" is either a
+             * fragment or another origin, neither of which this should touch
+             * from a hidden iframe on the reader's behalf. */
+            if (!href || href.charAt(0) !== "/" || href === location.pathname)
+                continue;
+            if (hrefs.indexOf(href) < 0)
+                hrefs.push(href);
+        }
+        if (!hrefs.length)
+            return;
+
+        var next = 0;
+        function warmOne() {
+            if (next >= hrefs.length)
+                return;
+            var href = hrefs[next++];
+            var frame = document.createElement("iframe");
+            frame.setAttribute("aria-hidden", "true");
+            frame.setAttribute("tabindex", "-1");
+            /* visibility:hidden and off-screen, not display:none - a couple of
+             * engines skip loading a display:none iframe's contents entirely,
+             * which would compile nothing. 1x1 rather than 0x0 for the same
+             * reason: some layout code treats a zero-area frame as not really
+             * there. */
+            frame.style.cssText = "position:absolute;left:-9999px;top:0;"
+                + "width:1px;height:1px;border:0;visibility:hidden;pointer-events:none";
+
+            var settled = false;
+            function done() {
+                if (settled)
+                    return;
+                settled = true;
+                if (frame.parentNode)
+                    frame.parentNode.removeChild(frame);
+                idle(warmOne);
+            }
+            /* load fires once the tab's own HTML has finished, which on a
+             * client-rendered route is before its JavaScript has necessarily
+             * compiled and run everything it is going to. The extra pause
+             * after it is a guess at how long that tail takes, not a
+             * measurement - the number to revisit once BYTECODE totals can be
+             * read across this. Either way something tears the iframe down:
+             * the timeout below covers a tab whose load event never fires at
+             * all, so one bad route cannot stall every tab behind it. */
+            frame.addEventListener("load", function () { window.setTimeout(done, 1500); });
+            (document.body || document.documentElement).appendChild(frame);
+            frame.src = href;
+            window.setTimeout(done, 8000);
+        }
+        idle(warmOne);
+    }
+
     /* The observer watches for the sheet arriving, and is disconnected with the
      * rest of this once the page has settled. Without the disconnect it delivers
      * a callback for every node an infinite feed appends, forever. */
@@ -473,6 +625,10 @@
     retargetAppPrompts();
     promoteBottomBar();
     scheduleLook();
+    if (/[?&]__netlog=1/.test(location.search))
+        recordFailures();
+    if (/[?&]__prefetchtabs=1/.test(location.search))
+        window.setTimeout(prefetchOtherTabs, 4000);
 
     window.__appchromeReady = true;
     /* Where the page's own time goes, when asked for it.
@@ -485,79 +641,85 @@
      *
      * Off unless the page is asked for it, and it is asked for by loading with
      * ?__cost=1, so nothing measures itself in ordinary use. */
-    if (/[?&]__cost=1/.test(location.search)) {
-        window.__cost = {};
-        var account = function (kind, ms) {
-            var c = window.__cost[kind] || { calls: 0, ms: 0, worst: 0 };
-            c.calls++; c.ms += ms;
-            if (ms > c.worst) c.worst = ms;
-            window.__cost[kind] = c;
-        };
-        var time = function (kind, fn, self, args) {
-            var started = Date.now();
-            try { return fn.apply(self, args); }
-            finally { account(kind, Date.now() - started); }
-        };
+    try {
+        if (/[?&]__cost=1/.test(location.search)) {
+            window.__cost = {};
+            var account = function (kind, ms) {
+                var c = window.__cost[kind] || { calls: 0, ms: 0, worst: 0 };
+                c.calls++; c.ms += ms;
+                if (ms > c.worst) c.worst = ms;
+                window.__cost[kind] = c;
+            };
+            var time = function (kind, fn, self, args) {
+                var started = Date.now();
+                try { return fn.apply(self, args); }
+                finally { account(kind, Date.now() - started); }
+            };
 
-        var rAF = window.requestAnimationFrame;
-        window.requestAnimationFrame = function (fn) {
-            return rAF.call(window, function (t) { return time('animation frame', fn, window, [t]); });
-        };
-        var timeout = window.setTimeout;
-        window.setTimeout = function (fn, delay) {
-            if (typeof fn !== 'function') return timeout.apply(window, arguments);
-            return timeout.call(window, function () { return time('timer', fn, window, []); }, delay);
-        };
-        var interval = window.setInterval;
-        window.setInterval = function (fn, delay) {
-            if (typeof fn !== 'function') return interval.apply(window, arguments);
-            return interval.call(window, function () { return time('repeating timer', fn, window, []); }, delay);
-        };
-        if (window.IntersectionObserver) {
-            var IO = window.IntersectionObserver;
-            window.IntersectionObserver = function (callback, options) {
-                return new IO(function (entries, observer) {
-                    return time('intersection observer', callback, window, [entries, observer]);
-                }, options);
+            var rAF = window.requestAnimationFrame;
+            window.requestAnimationFrame = function (fn) {
+                return rAF.call(window, function (t) { return time('animation frame', fn, window, [t]); });
             };
-        }
-        if (window.MutationObserver) {
-            var MO = window.MutationObserver;
-            window.MutationObserver = function (callback) {
-                return new MO(function (records, observer) {
-                    return time('mutation observer', callback, window, [records, observer]);
-                });
+            var timeout = window.setTimeout;
+            window.setTimeout = function (fn, delay) {
+                if (typeof fn !== 'function') return timeout.apply(window, arguments);
+                return timeout.call(window, function () { return time('timer', fn, window, []); }, delay);
             };
-        }
-        /* The scheduler's door. React posts a message to itself to continue work
-         * in a later task, so a single one of these can be seconds long. */
-        var portDescriptor = window.MessagePort
-            && Object.getOwnPropertyDescriptor(MessagePort.prototype, 'onmessage');
-        if (portDescriptor && portDescriptor.set) {
-            Object.defineProperty(MessagePort.prototype, 'onmessage', {
-                configurable: true, get: portDescriptor.get,
-                set: function (fn) {
-                    if (typeof fn !== 'function') return portDescriptor.set.call(this, fn);
-                    var port = this;
-                    return portDescriptor.set.call(this, function (event) {
-                        return time('scheduler', fn, port, [event]);
-                    });
-                }
-            });
-        }
-        var addListener = EventTarget.prototype.addEventListener;
-        EventTarget.prototype.addEventListener = function (type, listener, options) {
-            if (typeof listener === 'function' && (type === 'message' || type === 'scroll' || type === 'touchmove')) {
-                var self = this;
-                return addListener.call(this, type, function (event) {
-                    return time('listener: ' + type, listener, self, [event]);
-                }, options);
+            var interval = window.setInterval;
+            window.setInterval = function (fn, delay) {
+                if (typeof fn !== 'function') return interval.apply(window, arguments);
+                return interval.call(window, function () { return time('repeating timer', fn, window, []); }, delay);
+            };
+            if (window.IntersectionObserver) {
+                var IO = window.IntersectionObserver;
+                window.IntersectionObserver = function (callback, options) {
+                    return new IO(function (entries, observer) {
+                        return time('intersection observer', callback, window, [entries, observer]);
+                    }, options);
+                };
             }
-            return addListener.apply(this, arguments);
-        };
+            if (window.MutationObserver) {
+                var MO = window.MutationObserver;
+                window.MutationObserver = function (callback) {
+                    return new MO(function (records, observer) {
+                        return time('mutation observer', callback, window, [records, observer]);
+                    });
+                };
+            }
+            /* The scheduler's door. React posts a message to itself to continue work
+             * in a later task, so a single one of these can be seconds long. */
+            var portDescriptor = window.MessagePort
+                && Object.getOwnPropertyDescriptor(MessagePort.prototype, 'onmessage');
+            if (portDescriptor && portDescriptor.set) {
+                Object.defineProperty(MessagePort.prototype, 'onmessage', {
+                    configurable: true, get: portDescriptor.get,
+                    set: function (fn) {
+                        if (typeof fn !== 'function') return portDescriptor.set.call(this, fn);
+                        var port = this;
+                        return portDescriptor.set.call(this, function (event) {
+                            return time('scheduler', fn, port, [event]);
+                        });
+                    }
+                });
+            }
+            var addListener = EventTarget.prototype.addEventListener;
+            EventTarget.prototype.addEventListener = function (type, listener, options) {
+                if (typeof listener === 'function' && (type === 'message' || type === 'scroll' || type === 'touchmove')) {
+                    var self = this;
+                    return addListener.call(this, type, function (event) {
+                        return time('listener: ' + type, listener, self, [event]);
+                    }, options);
+                }
+                return addListener.apply(this, arguments);
+            };
+        }
+    } catch (costError) {
+        /* The accounting is a measurement aid; if the engine will not let it
+         * wrap something, the page must still get its chrome. */
+        window.__costError = String(costError);
     }
 
-    window.__appchromeV = 34;
+    window.__appchromeV = 36;
     } catch (error) {
         window.__appchromeError = String(error && error.message || error);
     }
