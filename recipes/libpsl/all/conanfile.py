@@ -41,7 +41,7 @@ class LibPslConan(ConanFile):
         copy(self, "COPYING", self.source_folder, os.path.join(self.package_folder, "licenses"))
         copy(self, "libpsl.h", os.path.join(self.source_folder, "include"),
              os.path.join(self.package_folder, "include"))
-        copy(self, "*.a", self.source_folder, os.path.join(self.package_folder, "lib"), keep_path=False)
+        copy(self, "*.a", self.build_folder, os.path.join(self.package_folder, "lib"), keep_path=False)
 
     def package_info(self):
         self.cpp_info.libs = ["psl"]

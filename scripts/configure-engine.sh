@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -eu
-P=$(cd "$(dirname "$0")/.." && pwd); L=$P/third_party/libcxx-armv7; I=$P/third_party/icu-armv7; X=$P/third_party/libxslt-armv7; W=$P/third_party/woff2-armv7; O=$P/third_party/openssl-armv7; WP=$P/third_party/libwebp-armv7; SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
+P=$(cd "$(dirname "$0")/.." && pwd); SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
+
+DEPS=$P/build/deps/full_deploy/host
+conan install "$P" -pr:h ios6-armv7 -pr:b default \
+    --deployer=full_deploy --deployer-folder="$P/build/deps" --build=missing
+dep() { echo "$DEPS/$1/$2/Release/armv7"; }
+L=$(dep libcxx-armv7 21.1.0); I=$(dep icu 74.2); X=$(dep libxslt 1.1.43)
+O=$(dep openssl-ios6 3.0.15); WP=$(dep libwebp 1.4.0); BR=$(dep brotli 1.1.0)
+W=$(dep woff2 1.0.2)
 S=$P/webkit-254; B=${BUILD_DIR:-$P/build-254-lto}
 LDDIR=$P/third_party/ld64-armv7/bin
 CXXF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -nostdinc++ -isystem $L/include/c++/v1 -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_dispatch_compat.h -include $P/compat/stubs/ios6_class_names.h -D_LIBCPP_DISABLE_AVAILABILITY -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
@@ -134,7 +142,7 @@ cmake -S $S -B $B -G Ninja \
   `# Xcode 27's linker cannot reach the call stubs of a 25MB armv7 dylib from` \
   `# the low third of its text and gives up; ld64 inserts branch islands and` \
   `# links it. -B puts ours first in the driver's search for ld.` \
-  -DCMAKE_SHARED_LINKER_FLAGS="-B$LDDIR -flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0 -L$X/lib -L$W/lib -lbrotlidec" \
+  -DCMAKE_SHARED_LINKER_FLAGS="-B$LDDIR -flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0 -L$X/lib -L$W/lib -L$BR/lib -lbrotlidec -lbrotlicommon" \
   -DCMAKE_EXE_LINKER_FLAGS="-B$LDDIR" \
   -DCMAKE_MODULE_LINKER_FLAGS="-B$LDDIR" \
   -DCMAKE_CXX_FLAGS="$CXXF" -DCMAKE_C_FLAGS="$CF" \

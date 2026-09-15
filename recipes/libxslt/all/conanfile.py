@@ -48,9 +48,12 @@ class LibXsltConan(ConanFile):
     def package(self):
         copy(self, "Copyright", self.source_folder, os.path.join(self.package_folder, "licenses"))
         for header_dir in ("libxslt", "libexslt"):
-            copy(self, "*.h", os.path.join(self.source_folder, header_dir),
-                 os.path.join(self.package_folder, "include", header_dir))
-        copy(self, "*.a", self.source_folder, os.path.join(self.package_folder, "lib"), keep_path=False)
+            for root in (self.source_folder, self.build_folder):
+                copy(self, "*.h", os.path.join(root, header_dir),
+                     os.path.join(self.package_folder, "include", header_dir))
+            copy(self, f"{header_dir}/*.h", self.build_folder,
+                 os.path.join(self.package_folder, "include"))
+        copy(self, "*.a", self.build_folder, os.path.join(self.package_folder, "lib"), keep_path=False)
 
     def package_info(self):
         self.cpp_info.libs = ["exslt", "xslt"]

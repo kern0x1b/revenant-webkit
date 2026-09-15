@@ -1,0 +1,4 @@
+sources:
+  "1.0.2":
+    url: "https://github.com/google/woff2.git"
+    commit: "1bccf208bca986e53a647dfe4811322adb06ecf8"

@@ -24,8 +24,15 @@ new = ('\t$ret .= ".data\\n";\n'
        '\t$ret .= "$name:\\n";\n'
        '\t$ret .= ".long\\t_$name\\n";\n'
        '\t$ret .= ".text";')
-if old in s:
+if new in s:
+    pass
+elif old in s:
     open(p, "w").write(s.replace(old, new, 1))
+else:
+    raise SystemExit(
+        "arm-xlate.pl no longer emits the named non-lazy pointer this patch "
+        "targets. Do not skip it: without the patch the ARM assembly builds "
+        "the form Xcode's linker asserts on, and the failure looks unrelated.")
 PATCH
 
 make clean > /dev/null 2>&1 || true

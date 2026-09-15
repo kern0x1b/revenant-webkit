@@ -16,4 +16,5 @@ class RevenantWebKit(ConanFile):
         self.requires("libxslt/1.1.43")
         self.requires("libpsl/0.23.3")
         self.requires("icu/74.2")
+        self.requires("woff2/1.0.2")
         self.requires("libcxx-armv7/21.1.0")
