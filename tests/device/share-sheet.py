@@ -2,7 +2,9 @@
 """Open navigator.share from a secure page on the phone, then cancel the sheet.
 
     tests/device/share-sheet.py
+    TEST_PORT=8903 tests/device/share-sheet.py
 """
+import argparse
 import os
 import sys
 import time
@@ -12,7 +14,8 @@ import harness
 device = harness.device
 
 
-def main(argv):
+def main():
+    argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter).parse_args()
     port = int(os.environ.get("TEST_PORT") or 8903)
     harness.SHOTS.mkdir(parents=True, exist_ok=True)
 
@@ -42,4 +45,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

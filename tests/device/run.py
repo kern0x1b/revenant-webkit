@@ -4,6 +4,7 @@
     tests/device/run.py [HOST]
     TEST_PORT=8898 tests/device/run.py
 """
+import argparse
 import os
 import re
 import subprocess
@@ -61,8 +62,10 @@ def verdict_feed(server):
     return "".join(f"GET {path}\n" for path in server.matching("/verdicts?"))
 
 
-def main(argv):
-    host = argv[0] if argv and argv[0] else harness.host_address()
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("host", nargs="?", help="address the phone reaches this Mac on; default: this Mac's en0")
+    host = parser.parse_args().host or harness.host_address()
     port = int(os.environ.get("TEST_PORT") or 8899)
     base = f"http://{host}:{port}"
 
@@ -86,4 +89,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())
