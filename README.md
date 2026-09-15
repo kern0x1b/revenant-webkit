@@ -136,7 +136,7 @@ overwriting one with the other drops Safari back to the system engine.
 ```sh
 export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"   # any SDK that still emits armv7
 
-./fetch-source.py          # the engine, a git submodule on the ios6-armv7 branch
+./fetch-source.py          # the engine, a git submodule on the fork's main branch
 ```
 
 Then the libraries this OS cannot supply, the engine, and the package. Each step
@@ -237,7 +237,7 @@ platform/
 scripts/        The build and deploy, one step per script
 tests/          The numeric device suite, host tests, and JS conformance checks
 tools/          Diagnostic instruments, on the host and on the device
-webkit-254/     The engine, a git submodule on the ios6-armv7 branch
+webkit-254/     The engine, a git submodule on the fork's main branch
 ```
 
 
@@ -294,7 +294,7 @@ MIT, see `LICENSE`, for the code in this repository: the compatibility library,
 the tooling, the tests, the packaging and the documentation.
 
 The engine is WebKit and keeps its own terms - LGPL-2.1-or-later and
-BSD-2-Clause - and this port's changes to it are commits on the `ios6-armv7`
+BSD-2-Clause - and this port's changes to it are commits on the `main`
 branch of the `webkit-254` submodule, under those same terms.
 
 Nothing third-party is vendored here. Every library this operating system

@@ -16,7 +16,7 @@ export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"
 ## Engine
 
 ```sh
-./fetch-source.py     # webkit-254, a submodule on the ios6-armv7 branch
+./fetch-source.py     # webkit-254, a submodule on the fork's main branch
 ```
 
 One command builds the libraries iOS 6 predates (declared in `conanfile.py`,

@@ -22,7 +22,7 @@ export IOS_SDK="$HOME/theos/sdks/iPhoneOS13.7.sdk"
 ./fetch-source.py
 ```
 
-`webkit-254` is a git submodule tracking the `ios6-armv7` branch of a WebKit fork,
+`webkit-254` is a git submodule tracking the `main` branch of a WebKit fork,
 where this port's engine changes live as real commits. There is no patch series to
 apply.
 
@@ -99,15 +99,30 @@ the steps in the order that fails cheapest first:
 
 1. `scripts/carry-check.py` - the engine tree still holds what this port needs
 2. `libios6compat.a`, then the engine through CMake and Ninja
-3. `tools/compat-audit.py` - no stub shadows a definition WebKit has
-4. `tools/symbol-check.py` - the symbol surface matches `carry-symbols.txt`
-5. the frameworks laid out as the iOS 6 system frameworks they replace
-6. `tools/ios6-imports-check.py`, when the phone's shared cache is configured
-7. the `.deb`
+3. WebKitLegacy exports exactly the symbols its export list names
+4. `tools/compat-audit.py` - no stub shadows a definition WebKit has
+5. `tools/symbol-check.py` - the symbol surface matches `carry-symbols.txt`
+6. the frameworks laid out as the iOS 6 system frameworks they replace
+7. `tools/ios6-imports-check.py`, when the phone's shared cache is configured
+8. the `.deb`
 
 The version of that package is `version` in `conanfile.py` and nowhere else.
 Everything lands in `build/engine/armv7-system`. Why each CMake setting has the
 value it has is in [engine-configuration.md](engine-configuration.md).
+
+A change to any recipe here or in ios6-toolchain changes its revision, and
+`conan.lock` has to follow in the same commit:
+
+```sh
+conan lock create . -pr:h profiles/revenant-armv7 -pr:b default --lockfile="" --update
+```
+
+A stale lock does not fail on the machine that made the change - the old
+revision is still in its cache and the build quietly uses it - only on a fresh
+clone. `.github/workflows/port.yml` is that fresh clone: without the SDK, which
+cannot be redistributed, it checks that every Python file compiles, that the
+engine at the pinned commit still holds what `carry-manifest.txt` names, that
+`conan.lock` resolves against both repositories' recipes, and ICU on the host.
 
 Three things about this build are worth knowing, because they explain choices
 that look arbitrary otherwise.

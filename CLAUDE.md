@@ -66,7 +66,7 @@ that writes the `space.kern0x1b.rev` preferences domain the engine reads
   `killall Preferences` and reopen. A respring re-locks the device.
 - **`/usr/bin/shot`** always writes `/tmp/screenshot.png` and ignores any path
   argument.
-- **The engine is a git submodule** (`webkit-254/`) on the `ios6-armv7` branch.
+- **The engine is a git submodule** (`webkit-254/`) on the fork's `main` branch.
   Commit and push are forward-only safe; `git checkout`/`reset` inside it can
   destroy the port. Never do destructive git there.
 

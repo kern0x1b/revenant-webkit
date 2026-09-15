@@ -16,7 +16,7 @@ breaks it, because nothing upstream will ever tell us.
 | `main` in this fork | the product: upstream's tree plus this port, as commits |
 | `upstream` remote | `WebKit/WebKit`. Never a branch of ours, only a remote |
 | Topic branches | one per concern, each explaining in its commits why it exists |
-| Frozen `ios6-armv7` | the original graft, kept as a tag so nothing is lost |
+| Tag `ios6-graft-2026-09-11` | the original graft, the tip of the retired `ios6-armv7` branch, kept so nothing is lost |
 
 Two rules, both borrowed from projects that do this at scale:
 
@@ -43,6 +43,7 @@ For (2) the answer is a declarative manifest, checked before anything is built:
 
 ```sh
 scripts/carry-check.py        # reads carry-manifest.txt, exits non-zero with a list
+scripts/carry-check.py --paths   # the engine paths it reads, for a sparse checkout
 ```
 
 It found its first real problem on the day it was written - an assertion that

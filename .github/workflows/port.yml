@@ -1,0 +1,54 @@
+name: port
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: port
+
+jobs:
+  checks:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: port
+
+      - uses: actions/checkout@v4
+        with:
+          repository: kern0x1b/ios6-toolchain
+          path: ios6-toolchain
+
+      - name: Install the host tools
+        run: brew install conan ninja
+
+      - name: Register the toolchain and the port's recipes
+        run: |
+          conan profile detect --force
+          conan config install "$GITHUB_WORKSPACE/ios6-toolchain/config"
+          conan ios6-remote ios6 "$GITHUB_WORKSPACE/ios6-toolchain"
+          conan ios6-remote revenant "$PWD"
+
+      - name: Every Python file compiles
+        run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
+
+      - name: The engine at the pinned commit, as far as the carry manifest reads it
+        run: |
+          git init -q webkit-254
+          git -C webkit-254 remote add origin "$(git config -f .gitmodules submodule.webkit-254.url)"
+          scripts/carry-check.py --paths | git -C webkit-254 sparse-checkout set --no-cone --stdin
+          git -C webkit-254 fetch -q --depth 1 --filter=blob:none origin "$(git rev-parse HEAD:webkit-254)"
+          git -C webkit-254 checkout -q FETCH_HEAD
+
+      - name: The engine still carries what the port depends on
+        run: scripts/carry-check.py
+
+      - name: conan.lock pins what the recipes resolve to
+        run: conan graph info . -pr:h profiles/revenant-armv7 -pr:b default --lockfile=conan.lock
+
+      - name: ICU as the engine uses it
+        run: tests/run-tests.py host

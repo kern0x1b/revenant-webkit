@@ -13,7 +13,7 @@ exactly what this project links against and under what terms.
 
 | Component | Where it comes from | License |
 | --- | --- | --- |
-| WebKit 2.54 | `webkit-254` submodule — the `ios6-armv7` branch of a fork; this port's changes are commits on that branch | LGPL-2.1-or-later and BSD-2-Clause, as WebKit ships them: `Source/WebCore/LICENSE-LGPL-2.1`, `Source/WebCore/LICENSE-APPLE`, `Source/JavaScriptCore/COPYING.LIB` |
+| WebKit 2.54 | `webkit-254` submodule — the `main` branch of a fork; this port's changes are commits on that branch | LGPL-2.1-or-later and BSD-2-Clause, as WebKit ships them: `Source/WebCore/LICENSE-LGPL-2.1`, `Source/WebCore/LICENSE-APPLE`, `Source/JavaScriptCore/COPYING.LIB` |
 | ANGLE | inside the WebKit tree, `Source/ThirdParty/ANGLE`; the EAGL backend this port adds lives there under the same terms | BSD-3-Clause, `Source/ThirdParty/ANGLE/LICENSE` |
 
 ## Libraries this operating system cannot supply

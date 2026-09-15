@@ -2,6 +2,7 @@
 """Check that the engine tree still holds what this port depends on.
 
     scripts/carry-check.py [manifest]
+    scripts/carry-check.py --paths [manifest]
 """
 import argparse
 import re
@@ -98,6 +99,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("manifest", nargs="?", help="default: carry-manifest.txt at the repository root")
+    parser.add_argument("--paths", action="store_true",
+                        help="print the engine paths the manifest reads, for a sparse checkout, and check nothing")
     args = parser.parse_args()
     manifest = Path(args.manifest) if args.manifest else MANIFEST
 
@@ -106,6 +109,14 @@ def main() -> int:
     except OSError as error:
         warn("cannot read the manifest {}: {}".format(manifest, error.strerror))
         directives = None
+
+    if args.paths:
+        if directives is None:
+            return 1
+        paths = {fields[1] for fields in (directive.split(None, 2) for directive in directives)
+                 if len(fields) > 1 and fields[0] in CHECKS and fields[0] != "set"}
+        print("\n".join(sorted(paths)))
+        return 0
 
     intact = directives is not None
     for directive in directives or []:
