@@ -91,9 +91,9 @@ conan config install conan
 
 The last line installs this repository's own commands, `revenant:deploy`,
 `revenant:run-app` and `revenant:test-device`, which take the phone's address
-from `tools/device.env` or from `user.revenant:device_host` and the
-configuration beside it. `conan config install` copies them, so run it again
-after changing anything under `conan/`.
+from `device.env` at the root of the checkout or from
+`user.revenant:device_host` and the configuration beside it. `conan config
+install` copies them, so run it again after changing anything under `conan/`.
 
 `conan build` writes `build/engine/armv7-system/conan/ios6-deps.env` through the
 `ios6-base` generator, straight from the dependency graph - one
@@ -283,7 +283,8 @@ the engine and the C++ runtime bundled inside it and its version taken from
 `conanfile.py`; `conan export-pkg` with the same option puts it in
 `<package folder>/RevWebViewHost.app`. The runner installs it, opens it through its
 `revwebviewhost:` scheme and brings back the log. It needs the device
-credentials in `tools/device.env`, as everything under `tools/` does.
+address in `device.env` at the root of the checkout, as everything that reaches
+the phone does.
 
 **As an embedding surface.** Compiled with `-DREV_WEBVIEW_HOST_NO_MAIN` the file
 carries no `main()`, and `RevWebViewHostControlling` in

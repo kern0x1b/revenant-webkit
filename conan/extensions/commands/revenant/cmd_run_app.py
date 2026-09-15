@@ -1,3 +1,4 @@
+import plistlib
 import time
 from pathlib import Path
 
@@ -7,8 +8,9 @@ from conan.errors import ConanException
 
 import revenant_checkout
 
-SCHEME = "revwebviewhost"
-INSTALL = "cd /Applications && tar xzf - && chmod +x /Applications/RevWebViewHost.app/RevWebViewHost"
+APPLICATIONS = "/Applications"
+LOG = "/tmp/rev-webview-host.log"
+URL_FILE = "/tmp/rev-url.txt"
 
 
 def human_size(path: Path) -> str:
@@ -20,17 +22,27 @@ def human_size(path: Path) -> str:
     return f"{total:.1f}T"
 
 
-def launch_script(wait: int, url: str) -> str:
-    lines = ["rm -f /tmp/rev-webview-host.log /tmp/rev-url.txt"]
+def bundle_facts(app: Path):
+    with (app / "Info.plist").open("rb") as handle:
+        info = plistlib.load(handle)
+    executable = info.get("CFBundleExecutable")
+    schemes = [scheme for entry in info.get("CFBundleURLTypes", []) for scheme in entry.get("CFBundleURLSchemes", [])]
+    if not executable or not schemes:
+        raise ConanException(f"{app}/Info.plist names no executable or no URL scheme to launch it with")
+    return executable, schemes[0]
+
+
+def launch_script(wait: int, url: str, scheme: str) -> str:
+    lines = [f"rm -f {LOG} {URL_FILE}"]
     if url:
-        lines.append(f"echo '{url}' > /tmp/rev-url.txt")
+        lines.append(f"echo '{url}' > {URL_FILE}")
     lines += [
         "su mobile -c uicache >/dev/null 2>&1",
         "sleep 4",
-        f"uiopen {SCHEME}://",
+        f"uiopen {scheme}://",
         f"sleep {wait}",
-        "echo '--- rev-webview-host.log ---'",
-        "cat /tmp/rev-webview-host.log 2>&1",
+        f"echo '--- {Path(LOG).name} ---'",
+        f"cat {LOG} 2>&1",
     ]
     return "\n".join(lines)
 
@@ -47,7 +59,7 @@ def wait_for_phone(device, attempts=3, pause=5) -> bool:
 @conan_command(group="Revenant")
 def run_app(conan_api, parser, *args):
     """
-    Install the standalone RevWebViewHost.app on the phone, launch it and print its log.
+    Install the standalone application on the phone, launch it through its own scheme and print its log.
     """
     revenant_checkout.add_root_argument(parser)
     parser.add_argument("--wait", type=int, default=20, help="seconds to let the app run (default: 20)")
@@ -57,18 +69,22 @@ def run_app(conan_api, parser, *args):
     out = ConanOutput()
     root = revenant_checkout.find_checkout(parsed.root)
     app = revenant_checkout.standalone_app(root)
+    executable, scheme = bundle_facts(app)
+    remote = f"{APPLICATIONS}/{app.name}"
     device = revenant_checkout.device_module(root, conan_api)
 
     out.info(f"device: {device.HOST}:{device.PORT}")
     if not wait_for_phone(device):
         out.warning("the phone did not answer; trying anyway")
-    device.run(40, "killall -9 RevWebViewHost 2>/dev/null; rm -rf /Applications/RevWebViewHost.app")
+    device.run(40, f"killall -9 {executable} 2>/dev/null; rm -rf {remote}")
 
     out.info(f"copying {human_size(app)}")
-    status = device.pipe_into(["tar", "-czf", "-", app.name], INSTALL, cwd=app.parent)
+    status = device.pipe_into(["tar", "-czf", "-", app.name],
+                              f"cd {APPLICATIONS} && tar xzf - && chmod +x {remote}/{executable}",
+                              cwd=app.parent)
     if status:
         raise ConanException(f"copying {app.name} to the phone failed (exit {status})")
 
-    result = device.run(parsed.wait + 60, launch_script(parsed.wait, parsed.url), capture=False)
+    result = device.run(parsed.wait + 60, launch_script(parsed.wait, parsed.url, scheme), capture=False)
     if result.returncode:
         raise ConanException(f"launching {app.name} failed (exit {result.returncode})")
