@@ -7,246 +7,188 @@
 
 LIMIT caps the --unguarded list (default 40).
 """
+import argparse
 import os
 import re
 import subprocess
 import sys
+from collections import Counter
+from pathlib import Path
 
-AWK_BLANKS = re.compile(rb"[ \t\n]+")
-SORT_NUMBER = re.compile(rb"[ \t]*(-?[0-9]+)")
-AWK_NUMBER = re.compile(rb"[ \t\n]*([+-]?[0-9]+)")
-SOURCE_FILE = re.compile(rb"^Source/.*\.(cpp|h|mm)$")
-HEAD_COUNT = re.compile(r"[ \t]*\+?[0-9]+")
-
-
-def logical_cwd():
-    pwd = os.environ.get("PWD")
-    if pwd and os.path.isabs(pwd):
-        try:
-            if os.path.samefile(pwd, "."):
-                return pwd
-        except OSError:
-            pass
-    return os.getcwd()
+ROOT = Path(__file__).resolve().parents[1]
+ENGINE = ROOT / "webkit-254"
+DEFAULT_BASES = ("upstream/webkitglib/2.54", "origin/webkitglib/2.54")
+SOURCE_FILE = re.compile(r"Source/.*\.(cpp|h|mm)")
+COMMITS_LOOKED_AT = 200
+WIDTH = 72
 
 
-def repo_root(script, levels):
-    parts = [os.path.dirname(script)] + [".."] * levels
-    return os.path.normpath(os.path.join(logical_cwd(), *parts))
+def warn(message):
+    print("port-delta: " + message, file=sys.stderr)
 
 
-class Engine(object):
-    def __init__(self, path):
-        self.path = path
-
-    def run(self, args, quiet=False):
-        result = subprocess.run(["git", "-C", self.path] + args, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL if quiet else None)
-        return result.returncode, result.stdout
-
-    def must(self, args, quiet=False):
-        rc, out = self.run(args, quiet)
-        if rc != 0:
-            sys.stdout.flush()
-            sys.exit(rc)
-        return out
-
-    def verify(self, ref):
-        rc, _ = self.run(["rev-parse", "--verify", "-q", ref])
-        return rc == 0
+def git(*args, check=True):
+    result = subprocess.run(["git", "-C", str(ENGINE), *args],
+                            check=check, capture_output=True, text=True, errors="replace")
+    return result.stdout
 
 
-def lines_of(data):
-    lines = data.split(b"\n")
-    if lines and lines[-1] == b"":
-        lines.pop()
-    return lines
+def is_revision(ref):
+    try:
+        git("rev-parse", "--verify", "-q", ref)
+    except subprocess.CalledProcessError:
+        return False
+    return True
 
 
-def awk_fields(line):
-    stripped = line.strip(b" \t\n")
-    return AWK_BLANKS.split(stripped) if stripped else []
+def files_mentioning(pattern, area):
+    try:
+        return set(git("grep", "-l", pattern, "--", area).splitlines())
+    except subprocess.CalledProcessError as error:
+        if error.returncode == 1:
+            return set()
+        raise
 
 
-def field(fields, n):
-    return fields[n - 1] if len(fields) >= n else b""
+def line_count(field):
+    return int(field) if field.isdigit() else 0
 
 
-def awk_number(text):
-    match = AWK_NUMBER.match(text)
-    return int(match.group(1)) if match else 0
-
-
-def sort_number(text):
-    match = SORT_NUMBER.match(text)
-    return int(match.group(1)) if match else 0
-
-
-def cut_chars(data, limit):
-    text = data.decode("utf-8", "surrogateescape")
-    return b"\n".join(line[:limit].encode("utf-8", "surrogateescape") for line in text.split("\n"))
-
-
-def substitution(data):
-    return data.rstrip(b"\n")
-
-
-def unguarded(engine, area, base, out):
-    limit = os.environ.get("LIMIT") or "40"
-    out.write(b"changed files under " + os.fsencode(area) + b" that carry no WEBKIT_IOS6 guard, largest first\n")
-    out.write(b"  these are the ones a conflict here has to be read by hand\n")
-    out.flush()
-    guarded = engine.must(["grep", "-l", "WEBKIT_IOS6", "--", area], quiet=True)
-    guarded_keys = set(lines_of(guarded))
-    changed = []
-    for line in lines_of(engine.must(["diff", "--numstat", base, "HEAD", "--", area])):
-        fields = awk_fields(line)
-        total = awk_number(field(fields, 1)) + awk_number(field(fields, 2))
-        changed.append(b"%d\t%s" % (total, field(fields, 3)))
-    if not HEAD_COUNT.fullmatch(limit) or int(limit) <= 0:
-        sys.stderr.write("head: illegal line count -- %s\n" % limit)
-        return 1
-    rows = [row for row in changed if row.split(b"\t", 1)[1] not in guarded_keys]
-    rows.sort(key=lambda row: (sort_number(row), row), reverse=True)
-    for row in rows[:int(limit)]:
-        out.write(row + b"\n")
-    return 0
-
-
-def freshness(engine, base, out):
-    base_bytes = os.fsencode(base)
-    out.write(b"how fresh the snapshot is, against " + base_bytes + b"\n")
-    _, tip = engine.run(["log", "-1", "--format=%ad  %s", "--date=short", base])
-    out.write(b"  branch tip: " + substitution(cut_chars(tip, 72)) + b"\n")
-    out.flush()
-    boundary = None
-    _, commits = engine.run(["log", "--format=%H", "-n", "200", base])
-    for commit in commits.split():
-        commit = os.fsdecode(commit)
-        _, names = engine.run(["show", "--name-only", "--format=", commit])
-        source = next((name for name in lines_of(names) if SOURCE_FILE.search(name)), None)
-        if not source:
+def numstat(*args):
+    entries = iter(git("diff", "--numstat", "-z", *args).split("\0"))
+    for entry in entries:
+        if not entry:
             continue
-        local = engine.path + "/" + os.fsdecode(source)
-        if not os.path.isfile(local):
+        added, deleted, path = entry.split("\t", 2)
+        if not path:
+            _, path = next(entries), next(entries)
+        yield path, line_count(added), line_count(deleted)
+
+
+def area_of(path):
+    parts = path.split("/") + [""]
+    return parts[0] + "/" + parts[1]
+
+
+def one_line(text):
+    return text.rstrip("\n")[:WIDTH]
+
+
+def report_unguarded(area, base, limit):
+    print("changed files under {} that carry no WEBKIT_IOS6 guard, largest first".format(area))
+    print("  these are the ones a conflict here has to be read by hand")
+    guarded = files_mentioning("WEBKIT_IOS6", area)
+    rows = [(added + deleted, path) for path, added, deleted in numstat(base, "HEAD", "--", area)
+            if path not in guarded]
+    for total, path in sorted(rows, reverse=True)[:limit]:
+        print("{}\t{}".format(total, path))
+
+
+def first_added_line(patch):
+    for line in patch.split("\n"):
+        if line.startswith("+") and not line.startswith("+++") and line[1:].strip():
+            return line[1:]
+    return None
+
+
+def find_boundary(base):
+    for commit in git("log", "--format=%H", "-n", str(COMMITS_LOOKED_AT), base).split():
+        names = git("show", "--name-only", "--format=", commit).splitlines()
+        source = next((name for name in names if SOURCE_FILE.fullmatch(name)), None)
+        if source is None or not (ENGINE / source).is_file():
             continue
-        _, patch = engine.run(["show", commit, "--", os.fsdecode(source)])
-        added = None
-        for line in lines_of(patch):
-            if not line.startswith(b"+") or line.startswith(b"+++"):
-                continue
-            content = line[1:]
-            if content.strip(b" \t\n\r\x0b\x0c") == b"":
-                continue
-            added = content
-            break
-        if not added:
+        added = first_added_line(git("show", commit, "--", source))
+        if added is None:
             continue
         try:
-            with open(local, "rb") as f:
-                present = any(added in text for text in lines_of(f.read()))
+            if added in (ENGINE / source).read_text(errors="replace"):
+                return commit
         except OSError:
-            present = False
-        if present:
-            boundary = commit
-            break
+            continue
+    return None
+
+
+def report_freshness(base):
+    print("how fresh the snapshot is, against " + base)
+    print("  branch tip: " + one_line(git("log", "-1", "--format=%ad  %s", "--date=short", base)))
+    boundary = find_boundary(base)
     if boundary is None:
-        out.write(b"  nothing on the branch matched - the snapshot is older than the 200 commits looked at\n")
-        return 0
-    _, carried = engine.run(["log", "-1", "--format=%ad  %h  %s", "--date=short", boundary])
-    out.write(b"  we carry:   " + substitution(cut_chars(carried, 72)) + b"\n")
-    _, behind = engine.run(["rev-list", "--count", boundary + ".." + base])
-    out.write(b"  behind by:  " + substitution(behind) + b" commits\n")
-    return 0
+        print("  nothing on the branch matched - the snapshot is older than the {} commits looked at"
+              .format(COMMITS_LOOKED_AT))
+        return
+    print("  we carry:   " + one_line(git("log", "-1", "--format=%ad  %h  %s", "--date=short", boundary)))
+    print("  behind by:  {} commits".format(git("rev-list", "--count", boundary + ".." + base).strip()))
 
 
-def size(engine, base, out):
+def report_size(base):
     span = base + "..HEAD"
-    out.write(b"port delta against " + os.fsencode(base) + b"\n")
-    out.write(engine.must(["diff", "--shortstat", span]))
-    out.write(b"\n")
+    print("port delta against " + base)
+    print(git("diff", "--shortstat", span))
 
-    out.write(b"by area:\n")
-    order = []
-    added, deleted, files = {}, {}, {}
-    for line in lines_of(engine.must(["diff", "--numstat", span])):
-        fields = awk_fields(line)
-        path = field(fields, 3)
-        parts = path.split(b"/") if path else []
-        key = field(parts, 1) + b"/" + field(parts, 2)
-        if key not in added:
-            order.append(key)
-            added[key] = deleted[key] = files[key] = 0
-        added[key] += awk_number(field(fields, 1))
-        deleted[key] += awk_number(field(fields, 2))
-        files[key] += 1
-    areas = [(files[k], b"  %-34s %5d files  +%-7d -%d" % (k, files[k], added[k], deleted[k])) for k in order]
-    areas.sort(reverse=True)
-    for _, row in areas[:12]:
-        out.write(row + b"\n")
-    out.write(b"\n")
+    print("by area:")
+    added, deleted, files = Counter(), Counter(), Counter()
+    for path, plus, minus in numstat(span):
+        area = area_of(path)
+        added[area] += plus
+        deleted[area] += minus
+        files[area] += 1
+    for area in sorted(files, key=lambda area: (files[area], area), reverse=True)[:12]:
+        print("  {:<34} {:>5} files  +{:<7} -{}".format(area, files[area], added[area], deleted[area]))
+    print()
 
-    out.write(b"kind of change:\n")
-    kinds = {}
-    for line in lines_of(engine.must(["diff", "--name-status", span])):
-        kind = field(awk_fields(line), 1)
-        kinds[kind] = kinds.get(kind, 0) + 1
-    out.write(b"  %d modified, %d added, %d deleted\n" % (kinds.get(b"M", 0), kinds.get(b"A", 0), kinds.get(b"D", 0)))
+    print("kind of change:")
+    kinds = Counter(line.split("\t")[0] for line in git("diff", "--name-status", span).splitlines())
+    print("  {} modified, {} added, {} deleted".format(kinds["M"], kinds["A"], kinds["D"]))
 
-    changed = set(lines_of(engine.must(["diff", "--name-only", span, "--", "Source"])))
-    guarded = set(lines_of(engine.must(["grep", "-l", "defined(WEBKIT_IOS6)", "--", "Source"])))
-    bare = sorted(changed - guarded)
-
-    out.write(b"\n")
-    out.write(b"how much of it announces itself:\n")
-    out.write(b"  %5d files changed under Source\n" % len(changed))
-    out.write(b"  %5d of them carry the WEBKIT_IOS6 guard\n" % len(changed & guarded))
-    out.write(b"  %5d do not - these are the ones a re-graft has to be careful with\n" % len(bare))
-    out.write(b"\n")
-    out.write(b"  the unguarded ones, by area:\n")
-    counts = {}
-    for path in bare:
-        parts = path.split(b"/")
-        key = parts[0] + b"/" + field(parts, 2)
-        counts[key] = counts.get(key, 0) + 1
-    ranked = sorted(((n, k) for k, n in counts.items()), reverse=True)
-    for n, key in ranked[:8]:
-        out.write(b"    %-32s %d\n" % (field(awk_fields(key), 1), n))
-    return 0
+    changed = set(git("diff", "--name-only", span, "--", "Source").splitlines())
+    guarded = files_mentioning("defined(WEBKIT_IOS6)", "Source")
+    bare = changed - guarded
+    print()
+    print("how much of it announces itself:")
+    print("  {:>5} files changed under Source".format(len(changed)))
+    print("  {:>5} of them carry the WEBKIT_IOS6 guard".format(len(changed & guarded)))
+    print("  {:>5} do not - these are the ones a re-graft has to be careful with".format(len(bare)))
+    print()
+    print("  the unguarded ones, by area:")
+    by_area = Counter(area_of(path) for path in bare)
+    for area, count in sorted(by_area.items(), key=lambda item: (item[1], item[0]), reverse=True)[:8]:
+        print("    {:<32} {}".format(area, count))
 
 
-def main():
-    engine = Engine(repo_root(sys.argv[0], 1) + "/webkit-254")
-    args = sys.argv[1:]
-    mode = "size"
-    area = "Source"
-    if args and args[0] == "--freshness":
-        mode = "freshness"
-        args = args[1:]
-    elif args and args[0] == "--unguarded":
-        mode = "unguarded"
-        args = args[1:]
-        if args:
-            area = args[0]
-            args = args[1:]
-    default_base = "upstream/webkitglib/2.54"
-    if not engine.verify(default_base):
-        default_base = "origin/webkitglib/2.54"
-    base = args[0] if args and args[0] != "" else default_base
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--freshness", action="store_true",
+                      help="find the newest base commit whose content the tree carries")
+    mode.add_argument("--unguarded", nargs="?", const="Source", metavar="AREA",
+                      help="list changed files under AREA (default Source) without a WEBKIT_IOS6 guard")
+    parser.add_argument("base", nargs="?", help="upstream base, default {} or else {}".format(*DEFAULT_BASES))
+    args = parser.parse_args()
 
-    if not engine.verify(base):
-        sys.stderr.write("no such ref: %s (fetch it first)\n" % base)
+    base = args.base or next((ref for ref in DEFAULT_BASES if is_revision(ref)), DEFAULT_BASES[-1])
+    if not is_revision(base):
+        warn("no such ref: {} (fetch it first)".format(base))
         return 1
 
-    out = sys.stdout.buffer
-    if mode == "unguarded":
-        rc = unguarded(engine, area, base, out)
-    elif mode == "freshness":
-        rc = freshness(engine, base, out)
-    else:
-        rc = size(engine, base, out)
-    out.flush()
-    return rc
+    try:
+        if args.unguarded is not None:
+            try:
+                limit = int(os.environ.get("LIMIT") or 40)
+            except ValueError:
+                limit = 0
+            if limit <= 0:
+                warn("LIMIT has to be a positive number of lines, not {!r}".format(os.environ["LIMIT"]))
+                return 1
+            report_unguarded(args.unguarded, base, limit)
+        elif args.freshness:
+            report_freshness(base)
+        else:
+            report_size(base)
+    except subprocess.CalledProcessError as error:
+        warn("{} failed: {}".format(" ".join(error.cmd[3:]), error.stderr.strip()))
+        return error.returncode
+    return 0
 
 
 if __name__ == "__main__":

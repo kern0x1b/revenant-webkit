@@ -12,143 +12,126 @@ A file that carries fewer markers than the reference is either an upstream
 refactor or a carry that was dropped when the file was taken from trunk, and
 every one of them is worth reading before a release.
 """
-import os
+import argparse
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-MARKERS = re.compile(rb"WEBKIT_IOS6|USE\(JSVALUE64\)|JSVALUE32_64|CPU\(ARM_THUMB2\)|payloadGPR|tagGPR")
-SOURCE_SUFFIX = re.compile(rb"\.(cpp|h|mm|m|asm)$")
-
-
-def logical_cwd():
-    pwd = os.environ.get("PWD")
-    if pwd and os.path.isabs(pwd):
-        try:
-            if os.path.samefile(pwd, "."):
-                return pwd
-        except OSError:
-            pass
-    return os.getcwd()
+ROOT = Path(__file__).resolve().parents[1]
+ENGINE = ROOT / "webkit-254"
+MARKERS = re.compile(r"WEBKIT_IOS6|USE\(JSVALUE64\)|JSVALUE32_64|CPU\(ARM_THUMB2\)|payloadGPR|tagGPR")
+SOURCE_SUFFIXES = (".cpp", ".h", ".mm", ".m", ".asm")
+OBJECT_ID = re.compile(r"[0-9a-f]+")
+MARKER_PATHS = ["Source/WebCore", "Source/WebKitLegacy", "Source/JavaScriptCore", "Source/WTF"]
+STALE_PATHS = ["Source/JavaScriptCore", "Source/WTF", "Source/WebCore", "Source/WebKitLegacy"]
+UPSTREAM = "upstream/main"
 
 
-def repo_root(script, levels):
-    parts = [os.path.dirname(script)] + [".."] * levels
-    return os.path.normpath(os.path.join(logical_cwd(), *parts))
+def warn(message):
+    print("carry-audit: " + message, file=sys.stderr)
 
 
-def git_lines(args):
-    result = subprocess.run(["git"] + args, stdout=subprocess.PIPE)
-    return [line.strip(b" \t") for line in result.stdout.split(b"\n")[:-1]]
+def git(*args, check=True, stdin=None):
+    result = subprocess.run(["git", "-C", str(ENGINE), *args], input=stdin,
+                            check=check, capture_output=True, text=True, errors="replace")
+    return result.stdout
 
 
-def resolve_all(rev, paths):
-    if not paths:
-        return []
-    request = b"".join(rev + b":" + path + b"\n" for path in paths)
-    result = subprocess.run(["git", "cat-file", "--batch-check=ok %(objectname)"],
-                            input=request, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    answers = result.stdout.split(b"\n")
-    oids = []
-    for i in range(len(paths)):
-        answer = answers[i] if i < len(answers) else b""
-        oids.append(answer[3:] if answer.startswith(b"ok ") and b" " not in answer[3:] else None)
-    return oids
+def require_revision(revision):
+    try:
+        git("rev-parse", "--verify", "-q", revision + "^{commit}")
+    except subprocess.CalledProcessError:
+        warn("{} is not a revision in {}, so nothing can be compared with it".format(revision, ENGINE))
 
 
-def count_markers(data):
-    return sum(1 for line in data.split(b"\n") if MARKERS.search(line))
+def count_markers(text):
+    return sum(1 for line in text.split("\n") if MARKERS.search(line))
 
 
-class BlobReader(object):
+class BlobReader:
     def __init__(self):
-        self.proc = subprocess.Popen(["git", "cat-file", "--batch"],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.process = subprocess.Popen(["git", "-C", str(ENGINE), "cat-file", "--batch"],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.process.stdin.close()
+        self.process.wait()
 
     def read(self, name):
-        self.proc.stdin.write(name + b"\n")
-        self.proc.stdin.flush()
-        header = self.proc.stdout.readline()
-        fields = header.rstrip(b"\n").split(b" ")
-        if len(fields) < 3 or not fields[-1].isdigit():
-            return b""
-        size = int(fields[-1])
-        data = self.proc.stdout.read(size)
-        self.proc.stdout.read(1)
-        return data
-
-    def close(self):
-        self.proc.stdin.close()
-        self.proc.wait()
+        self.process.stdin.write(name.encode() + b"\n")
+        self.process.stdin.flush()
+        header = self.process.stdout.readline().split()
+        if len(header) != 3 or not header[2].isdigit():
+            return ""
+        blob = self.process.stdout.read(int(header[2]) + 1)
+        return blob[:-1].decode(errors="replace")
 
 
-def enter_engine(engine):
-    try:
-        os.chdir(engine)
-    except OSError as e:
-        sys.stderr.write("%s: cd: %s: %s\n" % (os.path.basename(sys.argv[0]), engine, e.strerror))
-        sys.exit(2)
+def object_ids(revision, paths):
+    request = "".join("{}:{}\n".format(revision, path) for path in paths)
+    answers = git("cat-file", "--batch-check=%(objectname)", stdin=request, check=False).splitlines()
+    return [answer if OBJECT_ID.fullmatch(answer) else None for answer in answers]
 
 
-def stale(engine, args):
-    base = args[0] if args and args[0] != "" else "1b78c03f880e"
-    paths = args[1:] or ["Source/JavaScriptCore", "Source/WTF", "Source/WebCore", "Source/WebKitLegacy"]
-    enter_engine(engine)
-    files = [f for f in git_lines(["ls-files"] + paths) if os.path.isfile(os.fsdecode(f))]
-    ours = resolve_all(b"HEAD", files)
-    bases = resolve_all(os.fsencode(base), files)
-    upstream = resolve_all(b"upstream/main", files)
-    out = sys.stdout.buffer
-    count = 0
-    for f, o, b, u in zip(files, ours, bases, upstream):
-        if o is None or b is None or u is None:
-            continue
-        if o == b and o != u:
-            out.write(f + b"\n")
-            count += 1
-    out.write(b"%d files the port never touched and the merge never moved\n" % count)
-    out.flush()
-    return 0
+def list_stale(base, paths):
+    require_revision(base)
+    require_revision(UPSTREAM)
+    files = [path for path in git("ls-files", "--", *paths, check=False).splitlines()
+             if (ENGINE / path).is_file()]
+    stale = [path for path, ours, theirs, upstream
+             in zip(files, object_ids("HEAD", files), object_ids(base, files), object_ids(UPSTREAM, files))
+             if ours and theirs and upstream and ours == theirs != upstream]
+    for path in stale:
+        print(path)
+    print("{} files the port never touched and the merge never moved".format(len(stale)))
 
 
-def markers(engine, args):
-    ref = args[0] if args and args[0] != "" else "main"
-    paths = args[1:] or ["Source/WebCore", "Source/WebKitLegacy", "Source/JavaScriptCore", "Source/WTF"]
-    enter_engine(engine)
-    listed = [f for f in git_lines(["ls-tree", "-r", "--name-only", ref, "--"] + paths)
-              if SOURCE_SUFFIX.search(f)]
-    out = sys.stdout.buffer
-    reader = BlobReader()
+def list_thinned(ref, paths):
+    require_revision(ref)
+    sources = [path for path in git("ls-tree", "-r", "--name-only", ref, "--", *paths, check=False).splitlines()
+               if path.endswith(SOURCE_SUFFIXES)]
     gaps = 0
-    ref_bytes = os.fsencode(ref)
-    for f in listed:
-        path = os.fsdecode(f)
-        if not os.path.isfile(path):
-            continue
-        a = count_markers(reader.read(ref_bytes + b":" + f))
-        if a <= 0:
-            continue
-        try:
-            with open(path, "rb") as handle:
-                b = count_markers(handle.read())
-        except OSError as e:
-            sys.stderr.write("grep: %s: %s\n" % (path, e.strerror))
-            continue
-        if b < a:
-            out.write(b"%-4s %s (%s has %d, here %d)\n" % (b"-%d" % (a - b), f, ref_bytes, a, b))
-            gaps += 1
-    reader.close()
-    out.write(b"%d files carry fewer markers than %s\n" % (gaps, ref_bytes))
-    out.flush()
+    with BlobReader() as blobs:
+        for path in sources:
+            local = ENGINE / path
+            if not local.is_file():
+                continue
+            there = count_markers(blobs.read("{}:{}".format(ref, path)))
+            if there == 0:
+                continue
+            try:
+                here = count_markers(local.read_text(errors="replace"))
+            except OSError as error:
+                warn("cannot read {}: {}".format(local, error.strerror))
+                continue
+            if here < there:
+                print("{:<4} {} ({} has {}, here {})".format("-{}".format(there - here), path, ref, there, here))
+                gaps += 1
+    print("{} files carry fewer markers than {}".format(gaps, ref))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--stale", action="store_true",
+                        help="list the files that still match the graft base")
+    parser.add_argument("ref", nargs="?", help="reference branch (default main), or with --stale "
+                                               "the graft base (default 1b78c03f880e)")
+    parser.add_argument("paths", nargs="*", help="engine paths to look under")
+    args = parser.parse_args()
+
+    if not ENGINE.is_dir():
+        warn("there is no engine tree at {}".format(ENGINE))
+        return 2
+    if args.stale:
+        list_stale(args.ref or "1b78c03f880e", args.paths or STALE_PATHS)
+    else:
+        list_thinned(args.ref or "main", args.paths or MARKER_PATHS)
     return 0
-
-
-def main():
-    engine = repo_root(sys.argv[0], 1) + "/webkit-254"
-    args = sys.argv[1:]
-    if args and args[0] == "--stale":
-        return stale(engine, args[1:])
-    return markers(engine, args)
 
 
 if __name__ == "__main__":

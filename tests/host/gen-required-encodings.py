@@ -3,50 +3,34 @@
 
     tests/host/gen-required-encodings.py
 """
-import os
+import argparse
 import re
 import sys
+from pathlib import Path
 
-DECLARATION = re.compile(rb'DECLARE_ENCODING_NAME(?:_NO_ALIASES)?\("([^"]+)"')
-
-
-def logical_cwd():
-    pwd = os.environ.get("PWD")
-    if pwd and os.path.isabs(pwd):
-        try:
-            if os.path.samefile(pwd, "."):
-                return pwd
-        except OSError:
-            pass
-    return os.getcwd()
+ROOT = Path(__file__).resolve().parents[2]
+CODEC_TABLE = ROOT / "webkit-254" / "Source" / "WebCore" / "PAL" / "pal" / "text" / "TextCodecICU.cpp"
+OUTPUT = ROOT / "tests" / "host" / "required-encodings.txt"
+DECLARATION = re.compile(r'DECLARE_ENCODING_NAME(?:_NO_ALIASES)?\("([^"\n]+)"')
 
 
-def repo_root(script, levels):
-    parts = [os.path.dirname(script)] + [".."] * levels
-    return os.path.normpath(os.path.join(logical_cwd(), *parts))
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.parse_args()
 
-
-def main():
-    root = repo_root(sys.argv[0], 2)
-    source_file = root + "/webkit-254/Source/WebCore/PAL/pal/text/TextCodecICU.cpp"
-    out = root + "/tests/host/required-encodings.txt"
     try:
-        with open(source_file, "rb") as f:
-            data = f.read()
-    except OSError as e:
-        sys.stderr.write("grep: %s: %s\n" % (source_file, e.strerror))
+        source = CODEC_TABLE.read_text(errors="replace")
+    except OSError as error:
+        print("gen-required-encodings: cannot read {}: {}".format(CODEC_TABLE, error.strerror), file=sys.stderr)
         return 2
-    names = set()
-    for line in data.split(b"\n"):
-        for match in DECLARATION.finditer(line):
-            names.add(match.group(1))
+    names = set(DECLARATION.findall(source))
     if not names:
+        print("gen-required-encodings: {} declares no encodings".format(CODEC_TABLE), file=sys.stderr)
         return 1
-    names.add(b"UTF-8")
-    with open(out, "wb") as f:
-        f.write(b"".join(name + b"\n" for name in sorted(names)))
-    sys.stdout.buffer.write(b"%d encodings -> %s\n" % (len(names), os.fsencode(out)))
-    sys.stdout.flush()
+    names.add("UTF-8")
+    OUTPUT.write_text("".join(name + "\n" for name in sorted(names)))
+    print("{} encodings -> {}".format(len(names), OUTPUT))
     return 0
 
 

@@ -17,7 +17,7 @@ TESTS = ROOT / "tests" / "device"
 SHOTS = TESTS / "sweep-shots"
 
 sys.path.insert(0, str(ROOT / "tools"))
-import device  # noqa: E402
+import device
 
 
 def host_address():

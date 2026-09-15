@@ -136,6 +136,17 @@ def fetch(remote, local):
     return subprocess.run(argv, env=env, capture_output=True, text=True).returncode == 0
 
 
+def pipe_into(producer, command, cwd=None):
+    tunnel()
+    argv, env = _authenticated([*ssh_command(), command])
+    source = subprocess.Popen(producer, cwd=cwd, stdout=subprocess.PIPE)
+    remote = subprocess.Popen(argv, env=env, stdin=source.stdout)
+    source.stdout.close()
+    remote.wait()
+    source.wait()
+    return remote.returncode or source.returncode
+
+
 def reverse_tunnel(port):
     tunnel()
     argv, env = _authenticated([*ssh_command("-N", "-R", f"{port}:127.0.0.1:{port}")])
