@@ -91,7 +91,7 @@ def host_libraries(root: Path) -> dict:
 def device_libraries(root: Path) -> dict:
     return install_dependencies(
         ["conan", "install", root, "-pr:h", root / "profiles" / "revenant-armv7", "-pr:b", "default",
-         "--build=missing", "--deployer=full_deploy", f"--deployer-folder={root / 'build' / 'deps'}"],
+         "--build=missing"],
         root / "build" / "deps-install.log",
         root / "build" / "engine" / "armv7-system" / "conan" / "ios6-deps.env",
         ("IOS6_HOST_LIBCXX",), env={**os.environ, "IOS_SDK": ios_sdk()})

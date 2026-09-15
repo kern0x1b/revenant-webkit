@@ -87,11 +87,6 @@ def build(root: Path) -> None:
             "build failed")
 
 
-def check_symbols(root: Path) -> None:
-    require(["bash", root / "scripts" / "symbol-check.sh"],
-            "the symbol surface moved - check each line against the device")
-
-
 def jsc32(root: Path) -> None:
     require(python_tool(root, "tests/jsc32/build-and-test.py", "stress"),
             "the 32-bit engine did not pass its own suites")
@@ -137,8 +132,7 @@ def main() -> int:
         (f"merging {args.ref}", functools.partial(merge, ref=args.ref), bool(args.ref)),
         ("carry manifest", check_carry, True),
         ("port delta", port_delta, True),
-        ("build", build, True),
-        ("symbols", check_symbols, True),
+        ("build, symbols and package", build, True),
         ("32-bit JavaScriptCore", jsc32, args.with_jsc32),
         ("host checks", host_checks, True),
         ("device", device_gate, True),

@@ -22,9 +22,9 @@ log = logging.getLogger("deploy-engine")
 
 
 def stage_frameworks(root: Path, build: Path) -> Path:
-    staged = root / "dist" / "rev-sys-fw"
-    subprocess.run(["bash", str(root / "scripts" / "layout-sys-frameworks.sh"), str(staged)],
-                   env={**os.environ, "ENGINE_BUILD": str(build)}, stdout=subprocess.DEVNULL, check=True)
+    staged = build / "rev-sys-fw"
+    if not (staged / "WebCore.framework" / "WebCore").is_file():
+        raise SystemExit(f"{staged} holds no laid-out frameworks - run conan build at {root} first")
     return staged
 
 
