@@ -218,3 +218,52 @@ The user agent is the test: a page that echoes it — or the engine's own log at
 
 Then run the numeric suite, which reads pixels and glyph widths rather than
 screenshots: [`tests/device/run.sh`](../tests/device/README.md).
+
+## The toolchain this port needs, and how little of it is Apple's
+
+macOS 27 replaced the linker with ld-27037.1 and broke two things for armv7 at
+once. The first is fixed at the source; the second is what this section is
+really about.
+
+**OpenSSL's ARM assembly.** The new linker asserts on any named atom in a
+`__nl_symbol_ptr` section:
+
+    ld: Assertion failed: (kindIs(Atom::Kind::anon)), function setGotCoalescable
+
+clang emits those slots as local labels, so only hand-written assembly can
+produce one. OpenSSL's ARM generator does, for the capability word every
+NEON-dispatching module reads, and a single such object in an archive kills the
+link whether or not anything references it. `scripts/build-openssl.sh` patches
+the generator - the ios32 branch of `$comm` in `crypto/perlasm/arm-xlate.pl` -
+to emit a plain data word instead. Same address, same label name, no GOT atom.
+Eight objects were affected; all of them link now, with the assembly kept.
+
+**Reach.** WebCore's `__text` is about 25MB. A Thumb branch reaches 16MB, and
+the call stubs are placed after all text, so code in the low third cannot reach
+a stub at all. This is not a regression to be waited out: the classic linker,
+ld64-956.6, fails identically, so no older Xcode fixes it. It is the port's own
+size finally crossing a hardware limit.
+
+Things that do not work, so nobody tries them twice: `-ld_classic` is ignored
+and the binary is gone; `-branch_island_region_size` governs island regions
+between text sections, not stub placement; `-mlong-calls` cures the reach and
+replaces it with text relocations, which would make `__TEXT` pages dirty at
+load - the wrong trade on a device that is killed for dirty memory; lld has no
+32-bit ARM Mach-O backend at all.
+
+**Nothing here needs Xcode.** The toolchain can be assembled from parts that
+outlive any macOS release:
+
+- the compiler: any recent LLVM, Homebrew's `llvm` is enough - `armv7-apple-ios6.0`
+  is a supported target;
+- the linker and the binary utilities: `cctools-port` (cctools 1030.6.3,
+  ld64 956.6), which builds on macOS, supports armv7, reads `.tbd` stubs through
+  `apple-libtapi`, and does LTO through the same LLVM;
+- the SDK: `iPhoneOS13.7.sdk`, which theos already carries and which has never
+  depended on Xcode.
+
+Two snags when building those: `apple-libtapi` calls `get_darwin_linker_version`,
+a CMake helper its vendored LLVM does not ship, so guard the call and set
+`HOST_LINK_VERSION` by hand; and cctools' bundled `llvm-c/lto.h` wants headers
+from a newer LLVM, so configure it with `CPPFLAGS=-I$(brew --prefix llvm)/include`.
+
