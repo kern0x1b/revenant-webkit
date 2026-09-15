@@ -25,13 +25,13 @@ graft base.
 2. Resolve conflicts by the rule the port already uses: the carried side wins
    where `carry-manifest.txt` pins it, upstream wins everywhere else, and every
    resolution that is neither gets read by hand.
-3. `scripts/carry-check.sh` must pass - it is what proves nothing carried was
+3. `scripts/carry-check.py` must pass - it is what proves nothing carried was
    dropped in the merge.
 4. Build `build-254-trunk`, deploy, run the device gate on the phone.
 5. Re-run the parts of `JSTests/stress` that the merge touched; a full sweep
    only if the gate or the build says something changed under JavaScriptCore.
 
-Done when: the gate is 55/55 on the merged engine and `carry-check.sh` is
+Done when: the gate is 55/55 on the merged engine and `carry-check.py` is
 clean.
 
 ## Step 2 - the 220 files still at the 2023 base
@@ -89,6 +89,6 @@ explicit decision to leave the iPad at 52/55.
 
 ## Verification, every step
 
-`scripts/carry-check.sh`, a build of `build-254-trunk`, `scripts/deploy-engine.sh`,
-`tests/device/run.sh` against the phone. The iPad gets the same engine once the
+`scripts/carry-check.py`, a build of `build-254-trunk`, `scripts/deploy-engine.py`,
+`tests/device/run.py` against the phone. The iPad gets the same engine once the
 phone's gate is green.

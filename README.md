@@ -92,8 +92,8 @@ needs. Each of those is fixed here.
 
 Correctness is checked by a numeric suite that runs on the device and reads
 pixels, glyph widths and the platform surface rather than screenshots:
-`tests/device/run.sh`, currently **57 of 57**. Alongside it,
-`tests/device/sweep.sh` loads real sites and reports whether each one survived,
+`tests/device/run.py`, currently **57 of 57**. Alongside it,
+`tests/device/sweep.py` loads real sites and reports whether each one survived,
 painted, and what it cost in memory - the failures that only the actual web
 produces do not show up in a suite that checks its own numbers. Both are described
 in [tests/device/README.md](tests/device/README.md).
@@ -136,7 +136,7 @@ overwriting one with the other drops Safari back to the system engine.
 ```sh
 export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"   # any SDK that still emits armv7
 
-./fetch-source.sh          # the engine, a git submodule on the ios6-armv7 branch
+./fetch-source.py          # the engine, a git submodule on the ios6-armv7 branch
 ```
 
 Then the libraries this OS cannot supply, the engine, and the package. Each step

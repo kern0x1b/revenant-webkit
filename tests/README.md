@@ -1,10 +1,10 @@
 # Tests
 
-Run before every deploy: `tests/run-tests.sh`
+Run before every deploy: `tests/run-tests.py`
 
-    tests/run-tests.sh host      ICU data checks on this Mac, seconds once ICU is built
-    tests/run-tests.sh device    JavaScript batteries under jsc on the iPhone
-    tests/run-tests.sh all       both (default)
+    tests/run-tests.py host      ICU data checks on this Mac, seconds once ICU is built
+    tests/run-tests.py device    JavaScript batteries under jsc on the iPhone
+    tests/run-tests.py all       both (default)
 
 ## host
 
@@ -14,7 +14,7 @@ phone ships. `tests/host/conanfile.py` asks for the `icu` package that
 `conan.lock` pins and builds it for this Mac with the recipe's own data filter,
 so the first run builds ICU once and every later run reuses it.
 
-The encoding list is not maintained by hand. `gen-required-encodings.sh` reads
+The encoding list is not maintained by hand. `gen-required-encodings.py` reads
 it out of `TextCodecICU.cpp`, so it tracks the engine: everything else is
 decoded by WebKit itself (`TextCodecCJK`, `TextCodecSingleByte`,
 `TextCodecLatin1`, `TextCodecUTF8`) and needs nothing from ICU. Re-run the
@@ -77,8 +77,8 @@ The most expensive thing this port carries is the part of JavaScriptCore that
 upstream deleted: the 32-bit JSValue representation and the ARMv7 JIT. Neither
 needs iOS to run, so neither needs the device to be tested.
 
-    tests/jsc32/build-and-test.sh            build, then a smoke run
-    tests/jsc32/build-and-test.sh stress     and a slice of JSTests/stress
+    tests/jsc32/build-and-test.py            build, then a smoke run
+    tests/jsc32/build-and-test.py stress     and a slice of JSTests/stress
 
 A Debian container cross-compiles `jsc` for `armv7` at native speed - the
 compiler runs on the host architecture and only the product is 32-bit - and the
