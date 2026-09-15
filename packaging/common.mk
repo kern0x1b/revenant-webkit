@@ -1,7 +1,7 @@
 IOS6_DEPS := $(dir $(lastword $(MAKEFILE_LIST)))../build/engine/armv7-system/conan/ios6-deps.env
 
 ifeq ($(wildcard $(IOS6_DEPS)),)
-$(error $(IOS6_DEPS) is missing. Run conan install at the repository root, or bash scripts/deps.sh)
+$(error $(IOS6_DEPS) is missing. Build the package with conan build at the repository root)
 endif
 
 include $(IOS6_DEPS)

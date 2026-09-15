@@ -28,7 +28,7 @@ re-execs. The second launch loads the new engine first.
 | Artifact | On device | Built by | Role |
 | --- | --- | --- | --- |
 | Loader | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `packaging/loader` | Reads the enabled-apps preference, re-execs an enabled app with the engine's `DYLD_*` set, skips SpringBoard |
-| Engine | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | CMake + `scripts/layout-sys-frameworks.sh` | The WebKit build itself |
+| Engine | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `conan build`, which lays it out under the system's names | The WebKit build itself |
 | Compat | `/usr/lib/rev-safari-compat.dylib` | `packaging/compat` | The ABI iOS 6 predates, the bookmarks start page, WebAssembly, preference reads |
 
 ### Framework names have to be the system's

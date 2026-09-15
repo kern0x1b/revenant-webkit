@@ -109,7 +109,7 @@ first. Three artifacts do this:
 | Artifact | On device | Built by | Role |
 | --- | --- | --- | --- |
 | **Loader** | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `packaging/loader` (Theos) | Reads the enabled-apps preference and re-execs an enabled app with the engine's `DYLD_*` set. Skips SpringBoard. |
-| **Engine** | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `conan build` from `conanfile.py`, laid out by `scripts/layout-sys-frameworks.sh` | The WebKit build itself. |
+| **Engine** | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `conan build` from `conanfile.py`, which also lays it out under the system's names | The WebKit build itself. |
 | **Compat / hooks** | `/usr/lib/rev-safari-compat.dylib` | `packaging/compat` (Theos) | The ABI symbols iOS 6 predates, plus the bookmarks start page, WebAssembly, and preference reads. Inserted by the loader. |
 
 The loader and the compat dylib are two different files with two different jobs —
@@ -153,13 +153,11 @@ then misbehaves with no crash to read.
 
 ### The Safari substitution, as a package
 
-The engine is built by CMake; everything that goes on the device around it is
-built and packaged by [Theos](https://theos.dev), from `packaging/`:
-
-```sh
-scripts/layout-sys-frameworks.sh          # stage the engine as dist/rev-sys-fw
-make -C packaging package FINALPACKAGE=1  # packaging/packages/*.deb
-```
+The same `conan build` finishes it: the engine laid out as the system frameworks
+it replaces, and everything that goes on the device around it built by
+[Theos](https://theos.dev) from `packaging/`, into
+`build/engine/armv7-system/packages/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
+The version is `version` in `conanfile.py` - change it there and build.
 
 One `.deb` carries all of it: the loader and its MobileSubstrate filter, the
 compatibility and hook dylib, the TLS library, the Settings bundle with its
@@ -190,8 +188,9 @@ Then build and install the package, which carries the loader, the compatibility
 dylib, the TLS dylib and the Settings pane, and can be removed again:
 
 ```sh
-make -C packaging package FINALPACKAGE=1
-scp packaging/packages/*.deb root@device:/tmp/ && ssh root@device dpkg -i /tmp/*.deb
+conan build . -pr:h profiles/revenant-armv7 -pr:b default
+tools/device.py copy build/engine/armv7-system/packages/*.deb /tmp/rev.deb
+tools/device.py run 120 "dpkg -i /tmp/rev.deb"
 ```
 
 **Verify it took.** Open any page in Safari and check the user agent — a request

@@ -34,18 +34,19 @@ A change to a WebCore header means a full `ninja` — a partial build leaves the
 other frameworks on the old class size, and the result loads and misbehaves with
 no crash log. `docs/building.md` has the whole sequence.
 
-`build/` and `dist/` are gitignored and reproducible.
+`build/` is gitignored and reproducible.
 
 ## Safari-substitution artifacts
 
-Build after the engine:
+The same `conan build` finishes them: after the engine it runs the carry,
+compat and symbol checks, lays the frameworks out as
+`build/engine/armv7-system/rev-sys-fw` (-> `/usr/lib/rev-fw`), and packs loader,
+compat, TLS, prefs and engine into
+`build/engine/armv7-system/packages/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
+The version is `version` in `conanfile.py`. Every binary is signed with `ldid -S`.
 
-```sh
-scripts/layout-sys-frameworks.sh   # stage the engine as dist/rev-sys-fw (-> /usr/lib/rev-fw)
-make -C packaging package FINALPACKAGE=1   # loader + compat + TLS + prefs + engine, as a .deb
-```
-
-Each signs with `ldid -S`.
+Add `-c user.ios6:dyld_shared_cache=<path>` with a copy of the phone's
+`dyld_shared_cache_armv7` to have the build refuse imports iOS 6 does not export.
 
 ## After building an injected dylib — always verify it will load
 

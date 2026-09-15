@@ -62,8 +62,8 @@ What it asserts about a merged tree:
   armv7, `USE(JSVALUE32_64)` reached by the armv7 configuration, the CMake
   entries that name the files above.
 - **The symbol surface**, in `carry-symbols.txt` and checked by
-  `scripts/symbol-check.sh` once a build exists: every symbol the three
-  frameworks leave undefined - 6603 of them - and every Objective-C class they
+  `tools/symbol-check.py` as a step of `conan build`: every symbol the three
+  frameworks leave undefined - 6486 of them - and every Objective-C class they
   export by name. A *new* undefined symbol is the important one: it means an
   upstream change reached for API this system may not have, and dyld kills the
   process at load with no crash log. A lost exported class is the same death
@@ -82,7 +82,7 @@ merge quietly take away from us".
 It is a question, not a verdict. Each new undefined symbol is looked up against
 what iOS 6 has, and there are only two outcomes: either the system has it - the
 engine loads, the suite passes, and the pin is regenerated with
-`scripts/symbol-check.sh --pin` so the new baseline is one the device has
+`tools/symbol-check.py --pin` so the new baseline is one the device has
 verified - or it does not, and something has to provide it.
 
 The first time this ran in anger, on 2026-09-11, it was the second case: an
@@ -133,8 +133,8 @@ In order, stopping at the first failure that matters:
 2. `scripts/carry-check.py` — before a single file is compiled.
 3. `scripts/port-delta.py` — the delta and the guard census, against the new
    base, kept as the before-and-after of the merge.
-4. The armv7 build.
-5. `scripts/symbol-check.sh` against the pin.
+4. The armv7 build, `conan build`.
+5. `tools/symbol-check.py` against the pin, which the build runs itself.
 6. Host tests.
 7. Deploy, then the device suite — if the phone answers. If it does not, the run
    exits 3 and says the integration is unverified and must not be shipped.

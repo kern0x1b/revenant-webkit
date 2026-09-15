@@ -65,14 +65,13 @@ conan ios6-remote ios6 <ios6-toolchain>
 conan ios6-remote revenant .
 ```
 
-Every script that needs a library sources `scripts/deps.sh`, which runs `conan
-install` and loads `build/engine/armv7-system/conan/ios6-deps.env`. That file is written by the
-`ios6-base` generator straight from the dependency graph - one
+`conan build` writes `build/engine/armv7-system/conan/ios6-deps.env` through the
+`ios6-base` generator, straight from the dependency graph - one
 `IOS6_HOST_<NAME>=path` line per library and `IOS6_BUILD_<NAME>=path` per build
-tool, so `IOS6_BUILD_LD64` is the linker - and it reads the same from a shell
-(`.`) and from make (`include`). No script names a version, an architecture or
-a folder layout; change a version in `conanfile.py` and everything follows.
-Building the engine builds whatever is missing and reuses whatever is not.
+tool, so `IOS6_BUILD_LD64` is the linker. The packaging makefiles `include` it;
+nothing names a version, an architecture or a folder layout. Change a version in
+`conanfile.py` and everything follows. Building builds whatever is missing and
+reuses whatever is not.
 
 `libios6compat.a` holds only this port's own stubs. It used to carry copies of
 OpenSSL's and libpsl's objects, and because it comes first on the link line
@@ -93,11 +92,22 @@ standalone application carries against the hash this project reviewed, and with
 conan build . -pr:h profiles/revenant-armv7 -pr:b default
 ```
 
-`conanfile.py` is the whole build: it installs the libraries, builds
-`libios6compat.a`, writes the CMake toolchain and cache - every path taken from
-the dependency graph, the linker from the `ld64` package - and runs CMake and
-Ninja. The build lands in `build/engine/armv7-system`. Why each CMake setting has
-the value it has is in [engine-configuration.md](engine-configuration.md).
+`conanfile.py` is the whole build, the way a Gradle or Maven build file is: it
+installs the libraries, writes the CMake toolchain and cache - every path taken
+from the dependency graph, the linker from the `ld64` package - and then runs
+the steps in the order that fails cheapest first:
+
+1. `scripts/carry-check.py` - the engine tree still holds what this port needs
+2. `libios6compat.a`, then the engine through CMake and Ninja
+3. `tools/compat-audit.py` - no stub shadows a definition WebKit has
+4. `tools/symbol-check.py` - the symbol surface matches `carry-symbols.txt`
+5. the frameworks laid out as the iOS 6 system frameworks they replace
+6. `tools/ios6-imports-check.py`, when the phone's shared cache is configured
+7. the `.deb`
+
+The version of that package is `version` in `conanfile.py` and nowhere else.
+Everything lands in `build/engine/armv7-system`. Why each CMake setting has the
+value it has is in [engine-configuration.md](engine-configuration.md).
 
 Three things about this build are worth knowing, because they explain choices
 that look arbitrary otherwise.
@@ -110,10 +120,14 @@ links `_OBJC_CLASS_$_WebView`, not a prefixed spelling. The recipe therefore
 builds the unprefixed engine by default; `-o prefixed=True` builds the prefixed
 one for the standalone application.
 
-**`layout-sys-frameworks.sh` arranges that build as the system frameworks a
-process expects**, into a standalone directory rather than an application
-bundle, which is what makes `DYLD_FRAMEWORK_PATH` substitution possible for
-Mobile Safari.
+**The recipe arranges that build as the system frameworks a process expects**,
+into `build/engine/armv7-system/rev-sys-fw` rather than an application bundle,
+which is what makes `DYLD_FRAMEWORK_PATH` substitution possible for Mobile
+Safari: `WebKitLegacy` becomes `WebKit.framework`, every framework takes the
+install name of the iOS 6 framework it stands in for (`JavaScriptCore` is a
+private framework on this release), the C++ runtime is renamed
+`librev-c++` so it cannot be mistaken for the system's, and nothing is left
+depending on `@rpath`.
 
 **Nothing in the compatibility library may define a symbol WebKit itself
 defines.** A stub that shadows a real definition links cleanly and then fails at
@@ -131,14 +145,16 @@ is years newer than the system it runs on, so a call can link cleanly against a
 function iOS 6 never had. Nothing fails at load: the import is bound lazily, and
 the process dies the first time the call is made. A plain `ws://` WebSocket did
 exactly that. `tools/ios6-imports-check.py` compares every non-weak import of the
-laid-out frameworks with what the phone's own shared cache exports:
+laid-out frameworks with what the phone's own shared cache exports, and the build
+runs it once it knows where a copy of that cache is:
 
 ```sh
 tools/device.py fetch /System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7 build/
-python3 tools/ios6-imports-check.py --cache build/dyld_shared_cache_armv7 --dist dist/rev-sys-fw
+conan build . -pr:h profiles/revenant-armv7 -pr:b default \
+    -c user.ios6:dyld_shared_cache="$PWD/build/dyld_shared_cache_armv7"
 ```
 
-`build/` and `dist/` are reproducible and gitignored.
+`build/` is reproducible and gitignored.
 
 **A change to a WebCore header means a full `ninja`.** A partial build leaves
 WebKit and WebKitLegacy compiled against the old class size, and the result loads
@@ -153,13 +169,12 @@ engine in one process. The shipped build is the unprefixed one; see
 
 ## 4. The package
 
-Everything that goes on the device around the engine is built and packaged by
-Theos from `packaging/`:
-
-```sh
-scripts/layout-sys-frameworks.sh          # stage the engine as dist/rev-sys-fw
-make -C packaging package FINALPACKAGE=1  # -> packaging/packages/*.deb
-```
+The last step of `conan build` hands the laid-out frameworks and the version to
+Theos, which builds everything around the engine from `packaging/` and packs it
+into `build/engine/armv7-system/packages/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
+To release a new version, change `version` in `conanfile.py` and build.
+`packaging/control` carries no version of its own, and the packaging makefile
+refuses to run without the version and the frameworks the recipe passes it.
 
 One `.deb` carries the loader and its MobileSubstrate filter, the compatibility
 and hook dylib, the TLS library, the Settings bundle with its PreferenceLoader
@@ -184,7 +199,8 @@ scripts/deploy-engine.py    # engine only: stage, back up, push to /usr/lib/rev-
 For everything else, install the package the way any tweak is installed:
 
 ```sh
-scp packaging/packages/*.deb root@device:/tmp/ && ssh root@device dpkg -i /tmp/*.deb
+tools/device.py copy build/engine/armv7-system/packages/*.deb /tmp/rev.deb
+tools/device.py run dpkg -i /tmp/rev.deb
 ```
 
 ## The engine without Safari
@@ -245,13 +261,19 @@ Four things this file had to learn, for anyone embedding it:
 
 ## Verifying an injected dylib will load
 
-A dylib can compile clean and still be refused by dyld, silently. Before
-deploying one:
+A dylib can compile clean and still be refused by dyld, silently. The build's
+imports check covers what it links against; two things it cannot see are worth
+looking at in the package itself:
 
 ```sh
-otool -L dist/rev-safari-compat.dylib
-nm -u dist/rev-safari-compat.dylib | c++filt
+dpkg-deb -x build/engine/armv7-system/packages/*.deb /tmp/rev-deb
+otool -L /tmp/rev-deb/usr/lib/rev-safari-compat.dylib
+otool -l /tmp/rev-deb/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib | grep LC_ENCRYPTION_INFO
 ```
+
+The second must print nothing. Apple's linker from Xcode 27 writes that load
+command into armv7 dylibs, and iOS 6 then never starts the app the tweak is
+injected into; the packaging links through ld64 for exactly this reason.
 
 - The loader links only `libSystem` and `CoreFoundation`, with install name
   `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib`.

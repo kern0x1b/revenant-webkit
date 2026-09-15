@@ -18,22 +18,25 @@ Scripts import it instead of building SSH option strings of their own.
 
 ## Push everything
 
+`conan build` leaves one package with the whole substitution in it; install it
+the way any tweak is installed:
+
 ```sh
-make -C packaging package install DEVICE_IP=...   # the whole substitution, then respring
+tools/device.py copy build/engine/armv7-system/packages/*.deb /tmp/rev.deb
+tools/device.py run 120 "dpkg -i /tmp/rev.deb"
 ```
 
-It backs up each target before overwriting and installs to the correct paths:
+Its postinst restarts Mobile Safari and Preferences; no respring is needed. The
+package puts each file where it belongs:
 
-| Local | Device |
+| In the package | Device |
 | --- | --- |
-| `dist/RevSafari.dylib` | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` |
-| `platform/safari/rev-safari.plist` | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.plist` |
-| `dist/rev-safari-compat.dylib` | `/usr/lib/rev-safari-compat.dylib` |
-| `dist/RevPrefs.bundle` | `/Library/PreferenceBundles/RevPrefs.bundle` |
-| `dist/RevWebKit.plist` | `/Library/PreferenceLoader/Preferences/RevWebKit.plist` |
-
-The engine frameworks (`/usr/lib/rev-fw`, plus the TLS shim and libc++) are a
-one-time install; the tweak assumes they are already present.
+| the loader | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` and `RevSafari.plist` |
+| compat and hooks | `/usr/lib/rev-safari-compat.dylib` |
+| TLS | `/usr/lib/rev-TLS.dylib` |
+| the engine | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` |
+| the C++ runtime | `/usr/lib/librev-c++.1.dylib`, `/usr/lib/librev-c++abi.1.dylib` |
+| the Settings pane | `/Library/PreferenceBundles/RevPrefs.bundle`, `/Library/PreferenceLoader/Preferences/RevWebKit.plist` |
 
 ## Rules that keep the device bootable
 

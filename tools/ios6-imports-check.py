@@ -95,7 +95,7 @@ def main():
         description="Refuse a build that imports a symbol the device's iOS does not export. "
                     "A missing lazy import loads fine and kills the process at its first call.")
     parser.add_argument("--cache", required=True, help="dyld_shared_cache_armv7 copied from the device")
-    parser.add_argument("--dist", required=True, help="the laid-out frameworks, dist/rev-sys-fw")
+    parser.add_argument("--dist", required=True, help="the laid-out frameworks, build/engine/<arch>-system/rev-sys-fw")
     args = parser.parse_args()
 
     exports = cache_exports(args.cache)

@@ -26,7 +26,7 @@ A loader is injected into the launching app, sets `DYLD_FRAMEWORK_PATH` /
 | --- | --- | --- | --- |
 | `platform/safari/rev-safari-tweak.c` | `dist/RevSafari.dylib` | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | The **loader**: reads `InjectedApps`, re-execs enabled apps, skips SpringBoard. |
 | `platform/safari/safari-compat.mm` | `dist/rev-safari-compat.dylib` | `/usr/lib/rev-safari-compat.dylib` | **Compat + hooks**: iOS 6 ABI stubs, bookmarks start page, WebAssembly, preference reads. Inserted by the loader. |
-| the engine build | `dist/rev-sys-fw` | `/usr/lib/rev-fw/*.framework` | The WebKit engine itself. |
+| the engine build | `build/engine/armv7-system/rev-sys-fw` | `/usr/lib/rev-fw/*.framework` | The WebKit engine itself. |
 
 **The loader and the compat dylib are different files.** Deploying the compat
 dylib over `RevSafari.dylib` (or vice versa) drops Safari to the system engine —
@@ -84,9 +84,10 @@ that writes the `space.kern0x1b.rev` preferences domain the engine reads
 ## Where to look
 
 - Build: `conan build . -pr:h profiles/revenant-armv7 -pr:b default` (add `-o prefixed=True` for the standalone application's engine); see `docs/building.md`.
-- Package: `packaging/` — Theos makefiles for the loader, the compat dylib, the
-  TLS library and the Settings bundle; `make -C packaging package FINALPACKAGE=1`
-  produces the installable `.deb`, engine frameworks included.
-- Deploy: `make -C packaging package install`, `scripts/deploy-engine.py`, `tools/device.py`.
+- Package: the same `conan build` ends in
+  `build/engine/armv7-system/packages/*.deb`, engine frameworks included;
+  `packaging/` holds the Theos makefiles it drives. The version is `version` in
+  `conanfile.py`.
+- Deploy: `dpkg -i` that package through `tools/device.py`; `scripts/deploy-engine.py` for the engine alone.
 - Documentation: `docs/` (`architecture.md`, `network.md`, `compatibility.md`, `building.md`, `memory-and-caches.md`).
 - Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.

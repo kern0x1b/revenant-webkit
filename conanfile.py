@@ -1,14 +1,18 @@
 import os
+import re
 import shutil
+from io import StringIO
 
 from conan import ConanFile
 from conan.errors import ConanException
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain
 from conan.tools.env import Environment
+from conan.tools.files import copy, mkdir, rmdir
 
 
 class RevenantWebKit(ConanFile):
     name = "revenant-webkit"
+    version = "0.1.0"
     description = "WebKit for armv7 / iOS 6"
     package_type = "application"
     options = {"prefixed": [True, False]}
@@ -19,6 +23,16 @@ class RevenantWebKit(ConanFile):
     python_requires_extend = "ios6-base.Ios6Port"
 
     _cmake_packages = ("icu", "libcxx", "libxml2", "libxslt")
+    _system_frameworks = {
+        "JavaScriptCore": ("JavaScriptCore", "/System/Library/PrivateFrameworks/JavaScriptCore.framework/JavaScriptCore"),
+        "WebCore": ("WebCore", "/System/Library/PrivateFrameworks/WebCore.framework/WebCore"),
+        "WebKitLegacy": ("WebKit", "/System/Library/PrivateFrameworks/WebKit.framework/WebKit"),
+    }
+    _runtime = {
+        "libc++.1.0.dylib": "librev-c++.1.dylib",
+        "libc++abi.1.0.dylib": "librev-c++abi.1.dylib",
+    }
+    _webcore_left_out = ("WebCore", "Headers", "PrivateHeaders", "Modules", "_CodeSignature")
 
     def requirements(self):
         self.requires("openssl/3.0.15@ios6/stable")
@@ -50,6 +64,10 @@ class RevenantWebKit(ConanFile):
         if self.options.prefixed:
             return os.path.join(self.build_folder, "WebKitLegacy-iOS-rev.exp")
         return os.path.join(self.source_folder, "Source", "WebKitLegacy", "WebKitLegacy-iOS.exp")
+
+    @property
+    def _stage(self):
+        return os.path.join(self.build_folder, "rev-sys-fw")
 
     def generate(self):
         super().generate()
@@ -183,6 +201,16 @@ class RevenantWebKit(ConanFile):
         environment.define("CCACHE_BASEDIR", root)
         environment.vars(self, scope="build").save_script("ccache_basedir")
 
+    def _tool(self, name):
+        path = shutil.which(name)
+        if not path:
+            raise ConanException(f"{name} is not on PATH; the package cannot be finished without it")
+        return path
+
+    def _python(self, script, *arguments):
+        quoted = " ".join(f'"{argument}"' for argument in arguments)
+        self.run(f'python3 "{os.path.join(self.recipe_folder, script)}" {quoted}')
+
     def _build_compat(self):
         folder = os.path.dirname(self._compat_library)
         psl = self._dependency("libpsl")
@@ -196,8 +224,95 @@ class RevenantWebKit(ConanFile):
                  f'-DLIBPSL_INCLUDE_DIR="{psl}/include"')
         self.run(f'cmake --build "{folder}"')
 
+    def _output(self, command):
+        output = StringIO()
+        self.run(command, stdout=output)
+        return output.getvalue()
+
+    def _dylib_references(self, binary):
+        listing = self._output(f'otool -L "{binary}"')
+        return [match.group(1) for match in re.finditer(r"^\t(\S+) \(compatibility version", listing, re.M)][1:]
+
+    def _compatibility_version(self, binary):
+        commands = self._output(f'otool -l "{binary}"').split("Load command")
+        identity = next((block for block in commands if "cmd LC_ID_DYLIB" in block), "")
+        match = re.search(r"compatibility version (\S+)", identity)
+        return match.group(1) if match else None
+
+    def _lay_out_frameworks(self):
+        stage = self._stage
+        rmdir(self, stage)
+        installed = {}
+        for built, (name, system_path) in self._system_frameworks.items():
+            destination = os.path.join(stage, f"{name}.framework", name)
+            mkdir(self, os.path.dirname(destination))
+            shutil.copy2(os.path.join(self.build_folder, f"{built}.framework", built), destination)
+            installed[destination] = system_path
+
+        webcore = os.path.join(self.build_folder, "WebCore.framework")
+        staged_webcore = os.path.join(stage, "WebCore.framework")
+        for entry in sorted(os.listdir(webcore)):
+            if entry in self._webcore_left_out:
+                continue
+            source = os.path.join(webcore, entry)
+            if entry == "en.lproj":
+                copy(self, "*.js", source, os.path.join(staged_webcore, entry))
+            elif os.path.isdir(source):
+                shutil.copytree(source, os.path.join(staged_webcore, entry), symlinks=True)
+            else:
+                shutil.copy2(source, staged_webcore)
+        controls = os.path.join(staged_webcore, "modern-media-controls", "images")
+        if os.path.isdir(os.path.join(controls, "iOS")):
+            for pattern in ("*.svg", "*.png"):
+                copy(self, pattern, os.path.join(controls, "iOS"), controls)
+
+        runtime = os.path.join(self._dependency("libcxx"), "lib")
+        for built, name in self._runtime.items():
+            destination = os.path.join(stage, name)
+            shutil.copy2(os.path.join(runtime, built), destination)
+            installed[destination] = f"/usr/lib/{name}"
+
+        by_basename = {os.path.basename(path).replace("librev-", "lib"): path for path in installed.values()}
+        install_name_tool = self._tool("install_name_tool")
+        for binary, identity in installed.items():
+            self.run(f'"{install_name_tool}" -id "{identity}" "{binary}"')
+            for reference in self._dylib_references(binary):
+                target = by_basename.get(os.path.basename(reference))
+                if target and target != reference:
+                    self.run(f'"{install_name_tool}" -change "{reference}" "{target}" "{binary}"')
+            unresolved = [ref for ref in self._dylib_references(binary) if ref.startswith("@rpath/")]
+            if unresolved:
+                raise ConanException(f"{binary} still depends on {', '.join(unresolved)}")
+
+        strip, ldid = self._tool("strip"), self._tool("ldid")
+        for binary in installed:
+            if not binary.endswith(".dylib"):
+                if self._compatibility_version(binary) != "1.0.0":
+                    raise ConanException(f"{binary} does not declare compatibility version 1.0.0, "
+                                         "which the system's clients of this framework recorded")
+                self.run(f'"{strip}" -S -x "{binary}"')
+            self.run(f'"{ldid}" -S "{binary}"')
+        return stage
+
+    def _package(self, stage):
+        packages = os.path.join(self.build_folder, "packages")
+        rmdir(self, packages)
+        self.run(f'make -C "{os.path.join(self.recipe_folder, "packaging")}" package FINALPACKAGE=1 '
+                 f'PACKAGE_VERSION={self.version} ENGINE_STAGE="{stage}" THEOS_PACKAGE_DIR="{packages}"')
+
     def build(self):
+        self._python("scripts/carry-check.py")
         self._build_compat()
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
+        self._python("tools/compat-audit.py", "--compat", self._compat_library,
+                     "--engine-build", self.build_folder, "--icu", self._dependency("icu"))
+        if self.options.prefixed:
+            return
+        self._python("tools/symbol-check.py", "--build", self.build_folder)
+        stage = self._lay_out_frameworks()
+        dyld_cache = self.conf.get("user.ios6:dyld_shared_cache", check_type=str)
+        if dyld_cache:
+            self._python("tools/ios6-imports-check.py", "--cache", dyld_cache, "--dist", stage)
+        self._package(stage)

@@ -1,35 +1,28 @@
-# The Safari substitution, packaged.
+# The Safari substitution, packaged. conan build at the repository root runs
+# this with the version from conanfile.py and the frameworks it laid out:
 #
-#   make package        -> packages/space.kern0x1b.rev_<version>_iphoneos-arm.deb
-#   make package install DEVICE_IP=... -> builds and installs over SSH
-#
-# The engine frameworks themselves are built by CMake (see scripts/) and staged
-# into the package by `make stage-engine`, because a .deb is the honest way to
-# ship a system framework, not a scp of loose files.
+#   make package PACKAGE_VERSION=<version> ENGINE_STAGE=<laid-out frameworks>
 include $(dir $(lastword $(MAKEFILE_LIST)))common.mk
 include $(THEOS)/makefiles/common.mk
+
+ifeq ($(PACKAGE_VERSION),)
+$(error PACKAGE_VERSION is not set. The version lives in conanfile.py; build the package with conan build at the repository root)
+endif
+ifeq ($(wildcard $(ENGINE_STAGE)/WebCore.framework/WebCore),)
+$(error ENGINE_STAGE does not hold the laid-out frameworks. Build the package with conan build at the repository root)
+endif
 
 SUBPROJECTS := loader compat tls prefs
 
 include $(THEOS_MAKE_PATH)/aggregate.mk
 
-# The engine is 60MB of frameworks built elsewhere; copy the staged layout in
-# before packaging so the .deb carries everything the substitution needs.
-ENGINE_STAGE := $(THEOS_PROJECT_DIR)/../dist/rev-sys-fw
 before-package::
-	@echo "staging the two loader plists"
 	@mkdir -p "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries" \
-	          "$(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences"
+	          "$(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences" \
+	          "$(THEOS_STAGING_DIR)/usr/lib/rev-fw"
 	@cp "$(THEOS_PROJECT_DIR)/../platform/safari/rev-safari.plist" \
 	    "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/RevSafari.plist"
 	@cp "$(THEOS_PROJECT_DIR)/../platform/prefs/entry.plist" \
 	    "$(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/RevWebKit.plist"
-	@if [ -d "$(ENGINE_STAGE)" ]; then \
-		echo "staging engine frameworks from $(ENGINE_STAGE)"; \
-		mkdir -p "$(THEOS_STAGING_DIR)/usr/lib/rev-fw"; \
-		rsync -a --exclude 'librev-c++*.dylib' "$(ENGINE_STAGE)/" "$(THEOS_STAGING_DIR)/usr/lib/rev-fw/"; \
-		rsync -a "$(ENGINE_STAGE)/"librev-c++*.dylib "$(THEOS_STAGING_DIR)/usr/lib/"; \
-	else \
-		echo "note: $(ENGINE_STAGE) is missing - packaging without the engine."; \
-		echo "      run scripts/layout-sys-frameworks.sh first to include it."; \
-	fi
+	@rsync -a --exclude 'librev-c++*.dylib' "$(ENGINE_STAGE)/" "$(THEOS_STAGING_DIR)/usr/lib/rev-fw/"
+	@rsync -a "$(ENGINE_STAGE)/"librev-c++*.dylib "$(THEOS_STAGING_DIR)/usr/lib/"
