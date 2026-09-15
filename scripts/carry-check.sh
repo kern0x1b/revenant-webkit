@@ -20,6 +20,15 @@ while read -r kind a b; do
                 report FAIL "$a no longer contains: $b"
             fi
             ;;
+        pref)
+            key=${b%% *}
+            text=${b#* }
+            if [ -f "$E/$a" ] && awk -v k="$key:" '$0==k{f=1;next} f&&/^$/{exit} f' "$E/$a" | grep -qF -- "$text"; then
+                report ok "$a $key keeps $text"
+            else
+                report FAIL "$a $key lost: $text"
+            fi
+            ;;
         set)
             if grep -qF -- "$b" "$P/$a"; then
                 report ok "$a keeps $b"
