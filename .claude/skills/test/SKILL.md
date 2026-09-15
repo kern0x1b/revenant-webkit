@@ -48,13 +48,16 @@ two checks means it is not crash-looping.
 ## Memory breakdown (the device has no vmmap)
 
 `tools/revmem.c` is a vmmap-lite: it sums a process's dirty/resident pages by VM
-tag (CoreAnimation, CoreGraphics/ImageIO, JavaScriptCore, malloc, ...). Build and
-run as root:
+tag (CoreAnimation, CoreGraphics/ImageIO, JavaScriptCore, malloc, ...). The
+`revenant-device-tools` package builds it with `revpid`, `revtouch` and
+`raise-memory-limit`, each signed with the entitlements it needs. Install it into
+`dist/` and run as root:
 
 ```sh
-clang -target armv7-apple-ios6.0 -isysroot "$IOS_SDK" -O2 tools/revmem.c -o dist/revmem
-ldid -S<task_for_pid-allow entitlements> dist/revmem     # needs task_for_pid-allow
-tools/device.py copy dist/revmem /usr/bin/revmem
+conan install --requires=revenant-device-tools/1.0.0@revenant/stable --lockfile="" \
+  -pr:h profiles/revenant-armv7 -pr:b default --build=missing \
+  --deployer=direct_deploy --deployer-folder=dist --output-folder=dist/conan
+tools/device.py copy dist/direct_deploy/revenant-device-tools/bin/revmem /usr/bin/revmem
 tools/device.py run 40 "/usr/bin/revmem <mobilesafari-pid>"       # pid from launchctl list
 ```
 
