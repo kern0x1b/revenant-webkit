@@ -2,7 +2,7 @@
     "version": "0.5",
     "requires": [
         "openssl-ios6/3.0.15#bf8b5bb5e876ff78cfbd867fd00f8077%1789472475.590642",
-        "brotli/1.1.0#0b3f6c4ddf0b7a6215a35a6445e73452%1789471806.8850281"
+        "brotli/1.1.0#3f631ef77008f7b5eb388780116371a3%1764862343.045"
     ],
     "build_requires": [
         "ld64-armv7/956.6#0c2467fd3af838a8f957a787b6b4f1ac%1789472158.0880058"

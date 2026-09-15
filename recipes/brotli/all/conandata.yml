@@ -1,0 +1,4 @@
+sources:
+  "1.1.0":
+    url: "https://github.com/google/brotli.git"
+    commit: "ed738e842d2fbdf2d6459e39267a633c4a9b2f5d"
