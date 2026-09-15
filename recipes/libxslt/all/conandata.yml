@@ -1,4 +1,4 @@
 sources:
-  "1.1.43":
+  "1.1.45":
     url: "https://gitlab.gnome.org/GNOME/libxslt.git"
-    commit: "71be7a32637760d769b193d95e0c745ecb86b679"
+    commit: "35323d6a15f6e63c9919ddbc0abe64c90a0dd88a"

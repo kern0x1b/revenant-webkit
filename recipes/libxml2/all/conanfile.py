@@ -5,13 +5,13 @@ from conan.tools.scm import Git
 import os
 
 
-class LibXsltConan(ConanFile):
-    name = "libxslt"
+class LibXml2Conan(ConanFile):
+    name = "libxml2"
     user = "ios6"
     channel = "stable"
-    description = "XSLT and EXSLT, built against the libxml2 package"
+    description = "XML parser and toolkit, linked into the engine instead of the 2010 copy iOS 6 ships"
     license = "MIT"
-    homepage = "https://gitlab.gnome.org/GNOME/libxslt"
+    homepage = "https://gitlab.gnome.org/GNOME/libxml2"
     package_type = "static-library"
     settings = "os", "arch", "compiler", "build_type"
 
@@ -20,7 +20,7 @@ class LibXsltConan(ConanFile):
         self.settings.rm_safe("compiler.libcxx")
 
     def requirements(self):
-        self.requires("libxml2/2.15.4@ios6/stable", transitive_headers=True)
+        self.requires("icu/74.2@ios6/stable")
 
     def layout(self):
         cmake_layout(self, src_folder="src")
@@ -33,13 +33,12 @@ class LibXsltConan(ConanFile):
         tc = CMakeToolchain(self)
         tc.cache_variables.update({
             "BUILD_SHARED_LIBS": False,
-            "LIBXSLT_WITH_PROGRAMS": False,
-            "LIBXSLT_WITH_TESTS": False,
-            "LIBXSLT_WITH_PYTHON": False,
-            "LIBXSLT_WITH_PROFILER": False,
-            "LIBXSLT_WITH_DEBUGGER": False,
-            "LIBXSLT_WITH_CRYPTO": False,
-            "LIBXSLT_WITH_MODULES": False,
+            "LIBXML2_WITH_PROGRAMS": False,
+            "LIBXML2_WITH_TESTS": False,
+            "LIBXML2_WITH_PYTHON": False,
+            "LIBXML2_WITH_DOCS": False,
+            "LIBXML2_WITH_ICU": True,
+            "LIBXML2_WITH_ICONV": False,
         })
         tc.extra_cflags.append("-fvisibility=hidden")
         tc.generate()
@@ -60,14 +59,10 @@ class LibXsltConan(ConanFile):
         rmdir(self, os.path.join(self.package_folder, "bin"))
 
     def package_info(self):
-        self.cpp_info.set_property("cmake_file_name", "LibXslt")
-        xslt = self.cpp_info.components["xslt"]
-        xslt.set_property("cmake_target_name", "LibXslt::LibXslt")
-        xslt.libs = ["xslt"]
-        xslt.defines = ["LIBXSLT_STATIC"]
-        xslt.requires = ["libxml2::libxml2"]
-        exslt = self.cpp_info.components["exslt"]
-        exslt.set_property("cmake_target_name", "LibXslt::LibExslt")
-        exslt.libs = ["exslt"]
-        exslt.defines = ["LIBEXSLT_STATIC"]
-        exslt.requires = ["xslt"]
+        self.cpp_info.set_property("cmake_file_name", "libxml2")
+        self.cpp_info.set_property("cmake_target_name", "LibXml2::LibXml2")
+        self.cpp_info.set_property("pkg_config_name", "libxml-2.0")
+        self.cpp_info.libs = ["xml2"]
+        self.cpp_info.includedirs = [os.path.join("include", "libxml2")]
+        self.cpp_info.defines = ["LIBXML_STATIC"]
+        self.cpp_info.requires = ["icu::icu-uc"]

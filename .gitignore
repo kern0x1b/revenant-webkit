@@ -50,3 +50,5 @@ build-254-angle/
 # A sweep list is the operator's, never the repository's.
 tests/device/sweep-sites.txt
 build/conan/
+**/test_package/build*/
+**/test_package/CMakeUserPresets.json

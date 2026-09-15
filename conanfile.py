@@ -3,7 +3,7 @@ import shutil
 
 from conan import ConanFile
 from conan.errors import ConanException
-from conan.tools.cmake import CMake, CMakeToolchain
+from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain
 from conan.tools.env import Environment
 
 
@@ -18,13 +18,14 @@ class RevenantWebKit(ConanFile):
     python_requires = "ios6-base/1.0@ios6/stable"
     python_requires_extend = "ios6-base.Ios6Port"
 
-    _libraries = ("openssl", "brotli", "libwebp", "libxslt", "libpsl", "icu", "woff2", "libcxx")
+    _cmake_packages = ("icu", "libcxx", "libxml2", "libxslt")
 
     def requirements(self):
         self.requires("openssl/3.0.15@ios6/stable")
         self.requires("brotli/1.1.0@ios6/stable")
         self.requires("libwebp/1.4.0@ios6/stable")
-        self.requires("libxslt/1.1.43@ios6/stable")
+        self.requires("libxml2/2.15.4@ios6/stable")
+        self.requires("libxslt/1.1.45@ios6/stable")
         self.requires("libpsl/0.23.3@ios6/stable")
         self.requires("icu/74.2@ios6/stable")
         self.requires("woff2/1.0.2@ios6/stable")
@@ -56,8 +57,8 @@ class RevenantWebKit(ConanFile):
         sdk = self.conf.get("tools.apple:sdk_path", check_type=str)
         if not sdk:
             raise ConanException("tools.apple:sdk_path is not set; install with the port's profile")
-        libcxx, icu, xslt, ssl, webp, brotli, woff2, psl = (
-            self._dependency(n) for n in ("libcxx", "icu", "libxslt", "openssl", "libwebp", "brotli", "woff2", "libpsl"))
+        libcxx, xslt, ssl, webp, brotli, woff2, psl = (
+            self._dependency(n) for n in ("libcxx", "libxslt", "openssl", "libwebp", "brotli", "woff2", "libpsl"))
         linker = os.path.join(self.dependencies.build["ld64"].package_folder, "bin")
         stubs = os.path.join(root, "compat", "stubs")
         prefix_header = "ios6_class_prefix.h" if self.options.prefixed else "ios6_class_names.h"
@@ -65,10 +66,10 @@ class RevenantWebKit(ConanFile):
         tuning = " ".join(self.conf.get("tools.build:cxxflags", default=[], check_type=list))
         defines = "-DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
         common = f"-flto=thin -mllvm -hot-cold-split=false -target {target} {tuning} -isysroot {sdk}"
-        cxx_flags = (f"{common} -nostdinc++ -isystem {libcxx}/include/c++/v1 -isystem {xslt}/include "
+        cxx_flags = (f"{common} -nostdinc++ -isystem {libcxx}/include/c++/v1 "
                      f"-isystem {stubs} -include {stubs}/ios6_dispatch_compat.h -include {stubs}/{prefix_header} "
                      f"-D_LIBCPP_DISABLE_AVAILABILITY {defines}")
-        c_flags = f"{common} -isystem {xslt}/include -isystem {stubs} -include {stubs}/{prefix_header} {defines}"
+        c_flags = f"{common} -isystem {stubs} -include {stubs}/{prefix_header} {defines}"
 
         if self.options.prefixed:
             os.makedirs(self.build_folder, exist_ok=True)
@@ -89,6 +90,7 @@ class RevenantWebKit(ConanFile):
             "CMAKE_OSX_SYSROOT": sdk,
             "CMAKE_OSX_DEPLOYMENT_TARGET": str(self.settings.os.version),
             "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_PROJECT_WebKit_INCLUDE": os.path.join(root, "scripts", "ios6-conan-targets.cmake"),
             "PORT": "Cocoa",
             "DEVELOPER_MODE": "OFF",
             "PYTHON_EXECUTABLE": shutil.which("python3"),
@@ -109,10 +111,6 @@ class RevenantWebKit(ConanFile):
             "WOFF2_DEC_INCLUDE_DIR": f"{woff2}/include",
             "WOFF2_LIBRARY": f"{woff2}/lib/libwoff2common.a",
             "WOFF2_DEC_LIBRARY": f"{woff2}/lib/libwoff2dec.a",
-            "ICU_UC_LIBRARY": f"{icu}/lib/libicuuc.a",
-            "ICU_I18N_LIBRARY": f"{icu}/lib/libicui18n.a",
-            "ICU_DATA_LIBRARY": f"{icu}/lib/libicudata.a",
-            "ICU_INCLUDE_DIR": f"{icu}/include",
             "ENABLE_WEBKIT_LEGACY": "ON",
             "ENABLE_WEBKIT": "OFF",
             "ENABLE_TOUCH_EVENTS": "ON",
@@ -174,6 +172,12 @@ class RevenantWebKit(ConanFile):
         if self.options.prefixed:
             variables.update({"ENABLE_MEDIA_STREAM": "OFF", "ENABLE_NOTIFICATIONS": "OFF", "ENABLE_WEBGL": "OFF"})
         tc.generate()
+
+        deps = CMakeDeps(self)
+        for dependency in self.dependencies.host.values():
+            if dependency.ref.name not in self._cmake_packages:
+                deps.set_property(dependency.ref.name, "cmake_find_mode", "none")
+        deps.generate()
 
         environment = Environment()
         environment.define("CCACHE_BASEDIR", root)

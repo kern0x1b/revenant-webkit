@@ -39,7 +39,8 @@ and each names a git URL and a commit rather than vendoring a copy:
 | `openssl/3.0.15@ios6/stable` | TLS 1.2/1.3 and Web Crypto |
 | `libpsl/0.23.3@ios6/stable` | public-suffix lookups this CFNetwork does not do |
 | `libwebp/1.4.0@ios6/stable` | this ImageIO cannot decode WebP |
-| `libxslt/1.1.43@ios6/stable` | XSLT |
+| `libxml2/2.15.4@ios6/stable` | the system copy is 2.7.8 from 2010, older than the API libxslt and the SDK headers expect |
+| `libxslt/1.1.45@ios6/stable` | XSLT; the SDK has no libxslt headers or armv7 library |
 | `woff2/1.0.2@ios6/stable` | web fonts in the format the web serves them |
 | `brotli/1.1.0@ios6/stable` | what woff2 decompresses with |
 

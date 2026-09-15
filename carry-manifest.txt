@@ -104,6 +104,9 @@ grep  Source/WebCore/platform/ios/wak/WAKWindow.h _windowRef
 # ---- CFNetwork calls this system does not have -----------------------------
 grep  Source/WebKitLegacy/WebCoreSupport/SocketStreamHandleImplCFNet.cpp UNUSED_PARAM(sessionID)
 
+# ---- libxml2 and libxslt from packages, not from the 2010 system copy -------
+grep  Source/cmake/OptionsCocoa.cmake WEBKIT_ADD_SDK_IMPORTED_LIBRARY(LibXml2::LibXml2 libxml2.tbd usr/include/libxml2)
+
 # ---- the build settings the device depends on -----------------------------
 set   conanfile.py "ENABLE_JIT": "ON"
 set   conanfile.py "ENABLE_C_LOOP": "OFF"

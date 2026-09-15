@@ -4,18 +4,19 @@
         "woff2/1.0.2@ios6/stable#96fac1c46134ae3ffaf8765e753a0764%1789481277.167691",
         "wasm3/cci.20260905@ios6/stable#189c3cfd21679bf3e32bea5f4e9b656e%1789497970.857419",
         "openssl/3.0.15@ios6/stable#9644e9acfa94375549e5dffa144dd0e5%1789487267.576513",
-        "libxslt/1.1.43@ios6/stable#d11dda8fe26a506cefeae2a5defa2713%1789488778.159431",
+        "libxslt/1.1.45@ios6/stable#b24119554b79982003eeab499dbc2d98%1789503728.483317",
+        "libxml2/2.15.4@ios6/stable#32553a35078bcb76d845679c81b2d221%1789503659.072584",
         "libwebp/1.4.0@ios6/stable#7d6f336ebc9845c730b3fb7d872776d9%1789481277.1308742",
         "libpsl/0.23.3@ios6/stable#47307ae3ad7e5dccb2e52c20ba5ad9d3%1789488778.164918",
         "libcxx/21.1.0@ios6/stable#9b197c7bb9254ed7e39e48d30059ff72%1789481277.162252",
-        "icu/74.2@ios6/stable#07cbe1abea35dd3985d43c6df7c6cf8a%1789486977.313092",
+        "icu/74.2@ios6/stable#bb62f1dc511ab9d83d645a043c11a922%1789503658.90288",
         "brotli/1.1.0@ios6/stable#45087e5e9a848adf12951285469015db%1789481277.125658"
     ],
     "build_requires": [
         "ld64/956.6@ios6/stable#48d7c9b304979150b0aa94190670e63c%1789489782.5778718"
     ],
     "python_requires": [
-        "ios6-base/1.0@ios6/stable#07cbec8fee1085baf2fd670e15be514a%1789493331.2661738"
+        "ios6-base/1.0@ios6/stable#3e7c954814bf9876fdf57ac5940590bd%1789503721.840698"
     ],
     "config_requires": []
 }

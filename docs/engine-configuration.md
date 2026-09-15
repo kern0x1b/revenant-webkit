@@ -67,13 +67,17 @@ the preference said. Web notifications have `WebNotificationClient` wired into
 granted. MathML, once cut with these as "pure code weight", is back at the
 upstream default: it is plain layout code with no platform backend to write.
 
-**XSLT.** The SDK ships only `libxslt.tbd` - a link stub, with no headers and no
-static library for armv7. libxml2's headers are in the SDK and used as they are;
-libxslt's come from its package. Linking still goes through
-`WEBKIT_ADD_SDK_IMPORTED_LIBRARY(LibXslt::LibXslt libxslt.tbd)`, the same
-mechanism as libxml2, sqlite3 and zlib; the package's library directory is on
-the linker's search path so a fully static link - bypassing the system's
-libxslt the way OpenSSL bypasses SecureTransport - has something to point at.
+**XML and XSLT.** iOS 6 ships Apple's libxml2 2.7.8 from 2010, and the SDK's
+headers are 2.9.4, so compiling against one and running on the other left
+libxslt calling functions the phone does not have. Both libraries now come from
+packages - libxml2 2.15.4 and libxslt 1.1.45 - and are linked into WebCore
+statically, with their symbols hidden. WebKit creates `LibXml2::LibXml2` and
+`LibXslt::LibXslt` from the SDK only when no such target exists yet;
+`scripts/ios6-conan-targets.cmake`, included into the WebKit project, finds the
+packages' own targets first, and the SDK's header directories now travel with
+the SDK targets instead of being added to WebCore unconditionally. libxslt's
+library directory stays on the linker's search path because WebCore also asks
+for it by name, as `-weak-lxslt`, and that has to resolve to the same archive.
 
 **The system allocator.** bmalloc builds and runs on this port - the classic
 allocator lives in `Source/bmalloc/bmalloc/ios6`, behind the CMake variable

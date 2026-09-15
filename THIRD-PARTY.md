@@ -29,7 +29,8 @@ and built for armv7. Each package carries its upstream license file under
 | OpenSSL | 3.0.15 | Apache-2.0 | `recipes/openssl` |
 | libpsl | 0.23.3 | MIT; the Public Suffix List data it carries is MPL-2.0 | `recipes/libpsl` |
 | libwebp | 1.4.0 | BSD-3-Clause | `recipes/libwebp` |
-| libxslt | 1.1.43 | MIT | `recipes/libxslt` |
+| libxml2 | 2.15.4 | MIT | `recipes/libxml2` |
+| libxslt | 1.1.45 | MIT | `recipes/libxslt` |
 | woff2 | 1.0.2 | MIT | `recipes/woff2` |
 | brotli | 1.1.0 | MIT | `recipes/brotli` |
 | wasm3 | commit 40e42cc of 2026-09-05 (`cci.20260905`) | MIT | `recipes/wasm3` |

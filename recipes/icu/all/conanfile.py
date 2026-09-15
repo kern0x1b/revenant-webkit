@@ -102,5 +102,19 @@ class IcuConan(ConanFile):
              os.path.join(self.package_folder, "licenses"))
 
     def package_info(self):
-        self.cpp_info.libs = ["icui18n", "icuuc", "icudata"]
-        self.cpp_info.defines = ["U_STATIC_IMPLEMENTATION"]
+        self.cpp_info.set_property("cmake_file_name", "ICU")
+        self.cpp_info.set_property("cmake_config_version_compat", "AnyNewerVersion")
+        data = self.cpp_info.components["icu-data"]
+        data.set_property("cmake_target_name", "ICU::data")
+        data.libs = ["icudata"]
+        data.defines = ["U_STATIC_IMPLEMENTATION", "U_DISABLE_RENAMING=1"]
+        if self._cross:
+            data.requires = ["libcxx::libcxx"]
+        uc = self.cpp_info.components["icu-uc"]
+        uc.set_property("cmake_target_name", "ICU::uc")
+        uc.libs = ["icuuc"]
+        uc.requires = ["icu-data"]
+        i18n = self.cpp_info.components["icu-i18n"]
+        i18n.set_property("cmake_target_name", "ICU::i18n")
+        i18n.libs = ["icui18n"]
+        i18n.requires = ["icu-uc"]
