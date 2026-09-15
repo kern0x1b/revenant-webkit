@@ -109,7 +109,7 @@ first. Three artifacts do this:
 | Artifact | On device | Built by | Role |
 | --- | --- | --- | --- |
 | **Loader** | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `packaging/loader` (Theos) | Reads the enabled-apps preference and re-execs an enabled app with the engine's `DYLD_*` set. Skips SpringBoard. |
-| **Engine** | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `scripts/configure-engine.sh` + `ninja`, laid out by `scripts/layout-sys-frameworks.sh` | The WebKit build itself. |
+| **Engine** | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `conan build` from `conanfile.py`, laid out by `scripts/layout-sys-frameworks.sh` | The WebKit build itself. |
 | **Compat / hooks** | `/usr/lib/rev-safari-compat.dylib` | `packaging/compat` (Theos) | The ABI symbols iOS 6 predates, plus the bookmarks start page, WebAssembly, and preference reads. Inserted by the loader. |
 
 The loader and the compat dylib are two different files with two different jobs —
@@ -124,9 +124,12 @@ overwriting one with the other drops Safari back to the system engine.
 
 **Build host** (macOS)
 
-- Xcode's toolchain and an **iOS 13.7 SDK** — the newest SDK that still emits
-  armv7 and accepts a 6.0 deployment target. Point `IOS_SDK` at it.
-- `cmake`, `ninja`, and **`ldid`** (for ad-hoc signing).
+- The Command Line Tools and an **iOS 13.7 SDK** — the newest SDK that still
+  emits armv7 and accepts a 6.0 deployment target. theos carries it; point
+  `IOS_SDK` elsewhere only if yours lives elsewhere. Xcode is not needed.
+- `conan`, `cmake`, `ninja`, `ccache` and **`ldid`** (for ad-hoc signing), and
+  [ios6-toolchain](https://github.com/kern0x1b/ios6-toolchain) installed with
+  `conan config install`.
 
 ## Build
 
@@ -142,9 +145,7 @@ sequence, and why each piece exists, is in **[docs/building.md](docs/building.md
 
 | Step | Builds |
 | --- | --- |
-| `conanfile.py`, `conan.lock`, `recipes/` | the libraries iOS 6 predates, declared and pinned rather than scripted |
-| `scripts/build-compat.sh` | `libios6compat.a`, the symbols iOS 6 lacks |
-| `scripts/configure-engine.sh` then `ninja -C build-254-lto` | the engine |
+| `conan build . -pr:h profiles/revenant-armv7 -pr:b default` | the libraries iOS 6 predates, `libios6compat.a` and the engine, into `build/engine/armv7-system` |
 
 A change to a WebCore header means a full `ninja`: a partial build leaves the
 other frameworks compiled against the old class size, and the result loads and

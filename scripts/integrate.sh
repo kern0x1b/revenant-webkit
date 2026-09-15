@@ -44,7 +44,7 @@ step "port delta"
 bash "$P/scripts/port-delta.sh" 2>/dev/null | head -14
 
 step "build"
-ninja -C "$P/build-254-lto" || die "build failed"
+conan build "$P" -pr:h "$P/profiles/revenant-armv7" -pr:b default || die "build failed"
 
 step "symbols"
 bash "$P/scripts/symbol-check.sh" || die "the symbol surface moved - check each line against the device"

@@ -19,7 +19,7 @@ if grep -q "Address already in use" "$LOG"; then
     exit 2
 fi
 
-pages=(text-and-emoji gradients-and-blends image-draw-cost svg-image-filters web-platform)
+pages=(text-and-emoji gradients-and-blends image-draw-cost svg-image-filters web-platform websocket)
 token=0
 ensure_bridge() {
     for attempt in 1 2 3; do
@@ -60,7 +60,7 @@ for page in "${pages[@]}"; do
     fi
 done
 
-grep -o 'GET /verdicts?[^ ]*' "$LOG" | python3 "$ROOT/tests/device/verdicts.py"
+grep -ao 'GET /verdicts?[^ ]*' "$LOG" | python3 "$ROOT/tests/device/verdicts.py"
 status=$?
 [ "$missing" -eq 0 ] && exit "$status"
 exit 1

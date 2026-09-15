@@ -1,0 +1,4 @@
+sources:
+  "cci.20260905":
+    url: "https://github.com/wasm3/wasm3.git"
+    commit: "40e42cc0f33b24f1db3c632d82cec14084a3a83d"

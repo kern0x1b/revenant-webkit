@@ -2,6 +2,7 @@
     "version": "0.5",
     "requires": [
         "woff2/1.0.2@ios6/stable#96fac1c46134ae3ffaf8765e753a0764%1789481277.167691",
+        "wasm3/cci.20260905@ios6/stable#189c3cfd21679bf3e32bea5f4e9b656e%1789497970.857419",
         "openssl/3.0.15@ios6/stable#9644e9acfa94375549e5dffa144dd0e5%1789487267.576513",
         "libxslt/1.1.43@ios6/stable#d11dda8fe26a506cefeae2a5defa2713%1789488778.159431",
         "libwebp/1.4.0@ios6/stable#7d6f336ebc9845c730b3fb7d872776d9%1789481277.1308742",

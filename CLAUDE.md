@@ -78,12 +78,12 @@ that writes the `space.kern0x1b.rev` preferences domain the engine reads
   placeholders in scripts and docs.
 - **Commit messages:** plain imperative subject describing the change. No AI or
   tool attribution.
-- **Build artifacts** (`dist/`, `build-254*/`, `*.dylib`, `*.a`, `*.log`) are
-  gitignored and reproducible from the scripts — do not commit them.
+- **Build artifacts** (`dist/`, `build/`, `build-254*/`, `*.dylib`, `*.a`, `*.log`) are
+  gitignored and reproducible from the recipe — do not commit them.
 
 ## Where to look
 
-- Build: `scripts/build-*.sh` and `configure-engine.sh`, then `ninja -C build-254-lto`; see `docs/building.md`.
+- Build: `conan build . -pr:h profiles/revenant-armv7 -pr:b default` (add `-o prefixed=True` for the standalone application's engine); see `docs/building.md`.
 - Package: `packaging/` — Theos makefiles for the loader, the compat dylib, the
   TLS library and the Settings bundle; `make -C packaging package FINALPACKAGE=1`
   produces the installable `.deb`, engine frameworks included.

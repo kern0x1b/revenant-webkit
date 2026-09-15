@@ -5,11 +5,7 @@ webkit-603/
 webkit-trunk/
 webkit-trunk-jit/
 
-# Sources cloned outside the package graph, such as wasm3.
-third_party
-third_party/
-
-# Build trees. Every one of these is reproducible from configure-*.sh and the
+# Build trees. Every one of these is reproducible from conan build and the
 # packages it installs, and together they are several gigabytes.
 /build/
 build-254*/

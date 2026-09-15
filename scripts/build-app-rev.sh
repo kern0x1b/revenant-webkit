@@ -2,7 +2,7 @@
 set -eu
 P=$(cd "$(dirname "$0")/.." && pwd)
 . "$P/scripts/deps.sh"
-B=$P/build-254-rev
+B=$P/build/engine/armv7-prefixed
 TC=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
 [ -x "$TC/usr/bin/clang" ] || TC=$(xcode-select -p)
 
