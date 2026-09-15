@@ -137,6 +137,7 @@ class RevenantWebKit(ConanFile):
         variables = tc.cache_variables
         variables.update({
             "IOS6_SDK": sdk,
+            "IOS6_DEPLOYMENT_TARGET": str(self.settings.os.version),
             "CMAKE_OSX_SYSROOT": sdk,
             "CMAKE_OSX_DEPLOYMENT_TARGET": str(self.settings.os.version),
             "CMAKE_BUILD_TYPE": "Release",
@@ -244,7 +245,8 @@ class RevenantWebKit(ConanFile):
         toolchain = os.path.join(self.generators_folder, "conan_toolchain.cmake")
         values = " ".join(f'-D{name}="{value}"' for name, value in definitions.items())
         self.run(f'cmake -S "{source}" -B "{folder}" -G Ninja -DCMAKE_BUILD_TYPE=Release '
-                 f'-DCMAKE_TOOLCHAIN_FILE="{toolchain}" -DIOS6_SDK="{self._sdk}" {values}')
+                 f'-DCMAKE_TOOLCHAIN_FILE="{toolchain}" -DIOS6_SDK="{self._sdk}" '
+                 f'-DIOS6_DEPLOYMENT_TARGET="{self.settings.os.version}" {values}')
         self.run(f'cmake --build "{folder}"')
 
     def _output(self, command):

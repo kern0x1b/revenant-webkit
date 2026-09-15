@@ -11,20 +11,19 @@ set(CMAKE_SYSTEM_PROCESSOR arm)
 # yields nothing and cmake quietly falls back to the newest installed SDK, which
 # compiles the whole tree against headers from a system fifteen years newer than
 # the target. It looks like hundreds of syntax errors in Apple's own headers.
-if(NOT IOS6_SDK)
-    set(IOS6_SDK "$ENV{IOS_SDK}" CACHE PATH "SDK used to build for armv7" FORCE)
+if(NOT IOS6_SDK OR NOT IOS6_DEPLOYMENT_TARGET)
+    message(FATAL_ERROR "IOS6_SDK and IOS6_DEPLOYMENT_TARGET come from the Conan profile; configure through conan build")
 endif()
-if(NOT IOS6_SDK)
-    message(FATAL_ERROR "IOS_SDK is not set and no SDK is remembered in the cache")
-endif()
+set(IOS6_SDK "${IOS6_SDK}" CACHE PATH "SDK used to build for armv7" FORCE)
+set(IOS6_DEPLOYMENT_TARGET "${IOS6_DEPLOYMENT_TARGET}" CACHE STRING "Oldest iOS the build runs on" FORCE)
 set(CMAKE_OSX_SYSROOT ${IOS6_SDK} CACHE PATH "SDK the compiler is pointed at" FORCE)
-list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES IOS6_SDK)
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES IOS6_SDK IOS6_DEPLOYMENT_TARGET)
 set(WEBKIT_IOS6 ON CACHE BOOL "Building the iOS 6 armv7 port" FORCE)
 set(CMAKE_OSX_ARCHITECTURES armv7)
-set(CMAKE_OSX_DEPLOYMENT_TARGET 6.0)
+set(CMAKE_OSX_DEPLOYMENT_TARGET ${IOS6_DEPLOYMENT_TARGET})
 # Xcode is not required to build this port: the Command Line Tools carry the
-# same clang and the same compiler-rt, theos carries the SDK, and the linker
-# comes from the ld64 package. DEVELOPER_DIR
+# same clang and the same compiler-rt, the SDK comes from theos/sdks, and the
+# linker comes from the ld64 package. DEVELOPER_DIR
 # selects which of the two is used; whichever it is, the compilers live in one
 # of these two places.
 if (DEFINED ENV{DEVELOPER_DIR})
@@ -42,7 +41,7 @@ set(CMAKE_C_COMPILER ${TOOLCHAIN_BIN}/clang)
 set(CMAKE_CXX_COMPILER ${TOOLCHAIN_BIN}/clang++)
 
 set(SDK6 ${IOS6_SDK})
-set(COMMON "-target armv7-apple-ios6.0 -isysroot ${SDK6}")
+set(COMMON "-target armv7-apple-ios${IOS6_DEPLOYMENT_TARGET} -isysroot ${SDK6}")
 set(CMAKE_C_FLAGS_INIT "${COMMON} -DWEBKIT_IOS6_NO_READLINE")
 set(CMAKE_OBJC_FLAGS_INIT "${COMMON} -DWEBKIT_IOS6_NO_READLINE")
 set(CMAKE_CXX_FLAGS_INIT "${COMMON} -DWEBKIT_IOS6_NO_READLINE")

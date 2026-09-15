@@ -37,6 +37,9 @@ jobs:
       - name: Every Python file compiles
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
 
+      - name: The application's trust store is the reviewed one
+        run: scripts/check-cacert.py
+
       - name: The engine at the pinned commit, as far as the carry manifest reads it
         run: |
           git init -q webkit-254
