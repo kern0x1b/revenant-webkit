@@ -82,7 +82,7 @@ def staged_frameworks(root: Path) -> Path:
 
 
 def frameworks_in(build: Path, root: Path) -> Path:
-    staged = build / "rev-sys-fw"
+    staged = build / "stage" / "usr" / "lib" / "rev-fw"
     if not (staged / "WebCore.framework" / "WebCore").is_file():
         raise ConanException(f"{staged} holds no laid-out frameworks - run conan build at {root} first")
     return staged

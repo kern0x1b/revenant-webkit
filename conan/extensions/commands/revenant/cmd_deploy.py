@@ -47,7 +47,7 @@ def deploy(conan_api, parser, *args):
     Install the built engine frameworks into /usr/lib/rev-fw on the phone and restart Mobile Safari.
     """
     revenant_checkout.add_root_argument(parser)
-    parser.add_argument("--build", help="engine build folder holding rev-sys-fw; "
+    parser.add_argument("--build", help="engine build folder whose stage holds usr/lib/rev-fw; "
                                         "default: build/engine/armv7-system of the checkout")
     parsed = parser.parse_args(*args)
 
