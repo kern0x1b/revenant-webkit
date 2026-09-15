@@ -218,11 +218,13 @@ this engine, because it drives its view through the *system* WebCore's
 `UIWebView`'s own implementation would.
 
 ```sh
-scripts/build-app-rev.sh
+conan build . -pr:h profiles/revenant-armv7 -pr:b default -o prefixed=True
 scripts/run-app-rev.py 20
 ```
 
-The runner installs `dist/RevWebViewHost.app`, opens it through its
+The prefixed build ends in `build/engine/armv7-prefixed/RevWebViewHost.app`,
+the engine and the C++ runtime bundled inside it and its version taken from
+`conanfile.py`. The runner installs it, opens it through its
 `revwebviewhost:` scheme and brings back the log. It needs the device
 credentials in `tools/device.env`, as everything under `tools/` does.
 

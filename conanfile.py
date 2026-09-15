@@ -1,10 +1,12 @@
 import os
+import plistlib
 import re
 import shutil
 from io import StringIO
 
 from conan import ConanFile
 from conan.errors import ConanException
+from conan.tools.apple import XCRun
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain
 from conan.tools.env import Environment
 from conan.tools.files import copy, mkdir, rmdir
@@ -239,6 +241,17 @@ class RevenantWebKit(ConanFile):
         match = re.search(r"compatibility version (\S+)", identity)
         return match.group(1) if match else None
 
+    def _check_exports(self):
+        binary = os.path.join(self.build_folder, "WebKitLegacy.framework", "WebKitLegacy")
+        with open(self._exports) as listing:
+            listed = {line.strip() for line in listing if line.strip() and not line.lstrip().startswith("#")}
+        exported = set(self._output(f'nm -gUj "{binary}"').split())
+        missing, unlisted = sorted(listed - exported), sorted(exported - listed)
+        if missing or unlisted:
+            raise ConanException(f"WebKitLegacy was not linked with {self._exports}: "
+                                 f"{len(missing)} listed symbols not exported (first: {missing[:3]}), "
+                                 f"{len(unlisted)} exported symbols not listed (first: {unlisted[:3]})")
+
     def _lay_out_frameworks(self):
         stage = self._stage
         rmdir(self, stage)
@@ -300,15 +313,95 @@ class RevenantWebKit(ConanFile):
         self.run(f'make -C "{os.path.join(self.recipe_folder, "packaging")}" package FINALPACKAGE=1 '
                  f'PACKAGE_VERSION={self.version} ENGINE_STAGE="{stage}" THEOS_PACKAGE_DIR="{packages}"')
 
+    def _build_standalone_app(self):
+        name = "RevWebViewHost"
+        root = self.recipe_folder
+        app = os.path.join(self.build_folder, f"{name}.app")
+        frameworks = os.path.join(app, "Frameworks")
+        rmdir(self, app)
+        mkdir(self, frameworks)
+
+        sdk = self.conf.get("tools.apple:sdk_path", check_type=str)
+        ssl = self._dependency("openssl")
+        linker = os.path.join(self.dependencies.build["ld64"].package_folder, "bin")
+        sources = " ".join(f'"{os.path.join(root, "app", source)}"'
+                           for source in ("rev-webview-host.m", "ModernTLSURLProtocol.m", "WebKitUIKitDelegate.m"))
+        system_frameworks = " ".join(f"-framework {framework}" for framework in
+                                     ("UIKit", "Foundation", "QuartzCore", "CoreGraphics", "ImageIO", "MobileCoreServices"))
+        self.run(f'"{XCRun(self).cc}" -target armv7-apple-ios{self.settings.os.version} -isysroot "{sdk}" '
+                 f'-fno-objc-arc -O0 -g -B"{linker}" '
+                 f'-include "{os.path.join(root, "compat", "stubs", "ios6_class_prefix.h")}" '
+                 f'-I"{os.path.join(self.build_folder, "WebKitLegacy", "Headers")}" '
+                 f'-I"{os.path.join(self.build_folder, "WebCore.framework", "PrivateHeaders")}" '
+                 f'-I"{os.path.join(self.build_folder, "WTF", "Headers")}" -F"{self.build_folder}" '
+                 f'{system_frameworks} -framework WebKitLegacy '
+                 f'-Wl,-rpath,@executable_path/Frameworks -Wl,-dead_strip {sources} '
+                 f'-I"{ssl}/include" "{ssl}/lib/libssl.a" "{ssl}/lib/libcrypto.a" -lz '
+                 f'-o "{os.path.join(app, name)}"')
+
+        bundled = {}
+        for framework in self._system_frameworks:
+            destination = os.path.join(frameworks, f"{framework}.framework", framework)
+            shutil.copytree(os.path.join(self.build_folder, f"{framework}.framework"),
+                            os.path.dirname(destination), symlinks=True)
+            bundled[destination] = f"@executable_path/Frameworks/{framework}.framework/{framework}"
+        runtime = os.path.join(self._dependency("libcxx"), "lib")
+        for built in self._runtime:
+            library = built.replace(".1.0.", ".1.")
+            destination = os.path.join(frameworks, library)
+            shutil.copy2(os.path.join(runtime, built), destination)
+            bundled[destination] = f"@executable_path/Frameworks/{library}"
+
+        by_basename = {os.path.basename(identity): identity for identity in bundled.values()}
+        install_name_tool = self._tool("install_name_tool")
+        for binary in list(bundled) + [os.path.join(app, name)]:
+            if binary in bundled:
+                self.run(f'"{install_name_tool}" -id "{bundled[binary]}" "{binary}"')
+                if not binary.endswith(".dylib") and self._compatibility_version(binary) != "1.0.0":
+                    raise ConanException(f"{binary} does not declare compatibility version 1.0.0")
+            for reference in self._dylib_references(binary):
+                target = by_basename.get(os.path.basename(reference))
+                if target and reference != target:
+                    self.run(f'"{install_name_tool}" -change "{reference}" "{target}" "{binary}"')
+            unresolved = [reference for reference in self._dylib_references(binary) if reference.startswith("@rpath/")]
+            if unresolved:
+                raise ConanException(f"{binary} still depends on {', '.join(unresolved)}")
+
+        shutil.copy2(os.path.join(root, "app", "cacert.pem"), app)
+        with open(os.path.join(app, "Info.plist"), "wb") as info:
+            plistlib.dump({
+                "CFBundleName": name,
+                "CFBundleDisplayName": name,
+                "CFBundleIdentifier": "space.kern0x1b.revwebviewhost",
+                "CFBundleExecutable": name,
+                "CFBundlePackageType": "APPL",
+                "CFBundleVersion": self.version,
+                "CFBundleShortVersionString": self.version,
+                "CFBundleSupportedPlatforms": ["iPhoneOS"],
+                "UIDeviceFamily": [1],
+                "MinimumOSVersion": str(self.settings.os.version),
+                "UISupportedInterfaceOrientations": ["UIInterfaceOrientationPortrait"],
+                "CFBundleURLTypes": [{"CFBundleURLName": "space.kern0x1b.revwebviewhost",
+                                      "CFBundleURLSchemes": ["revwebviewhost"]}],
+            }, info)
+
+        ldid = self._tool("ldid")
+        for binary in bundled:
+            self.run(f'"{ldid}" -S "{binary}"')
+        self.run(f'"{ldid}" -S"{os.path.join(root, "app", "entitlements.xml")}" "{os.path.join(app, name)}"')
+        return app
+
     def build(self):
         self._python("scripts/carry-check.py")
         self._build_compat()
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
+        self._check_exports()
         self._python("tools/compat-audit.py", "--compat", self._compat_library,
                      "--engine-build", self.build_folder, "--icu", self._dependency("icu"))
         if self.options.prefixed:
+            self._build_standalone_app()
             return
         self._python("tools/symbol-check.py", "--build", self.build_folder)
         stage = self._lay_out_frameworks()

@@ -37,15 +37,16 @@ depends on.
 The compilers (`clang`, `clang++`) with their own headers and the armv7 slice of
 `libclang_rt.ios.a`; `libtool`, `ar` and `ranlib` for archives; `mig`; and
 `install_name_tool`, `strip`, `otool` and `nm` in the layout and inspection
-scripts. The engine is not linked by the Command Line Tools' linker - it is
-linked by the `ld64` package through `-B`. The tweak dylibs are small enough for
-the Command Line Tools' linker and use it. Signing is `/usr/bin/codesign` and
-`ldid`.
+scripts. Nothing is linked by the Command Line Tools' linker: the engine, the
+standalone application and the tweak dylibs all go through the `ld64` package
+with `-B`, because that linker stamps every armv7 dylib with an
+`LC_ENCRYPTION_INFO` load command iOS 6 refuses in a tweak. Signing is
+`/usr/bin/codesign` and `ldid`.
 
 ## Not measured in this pass
 
-The prefixed engine and the standalone application
-(`-o prefixed=True`, `build-app-rev.sh`) were not built for it.
+The prefixed engine and the standalone application (`-o prefixed=True`) were not
+built for it.
 
 ## Measuring again
 

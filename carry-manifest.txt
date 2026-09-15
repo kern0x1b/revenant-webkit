@@ -107,6 +107,9 @@ grep  Source/WebKitLegacy/WebCoreSupport/SocketStreamHandleImplCFNet.cpp UNUSED_
 # ---- libxml2 and libxslt from packages, not from the 2010 system copy -------
 grep  Source/cmake/OptionsCocoa.cmake WEBKIT_ADD_SDK_IMPORTED_LIBRARY(LibXml2::LibXml2 libxml2.tbd usr/include/libxml2)
 
+# ---- the class-prefixed engine exports its classes under their prefixed names ---
+grep  Source/WebKitLegacy/PlatformCocoa.cmake -exported_symbols_list ${WEBKIT_IOS6_EXPORTS}
+
 # ---- the build settings the device depends on -----------------------------
 set   conanfile.py "ENABLE_JIT": "ON"
 set   conanfile.py "ENABLE_C_LOOP": "OFF"

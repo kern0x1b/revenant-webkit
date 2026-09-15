@@ -11,7 +11,7 @@ and the machinery that runs it. There are two ways the engine is used:
 
 1. **Standalone app** — the engine hosted in this repo's own application
    (`app/`), which exists to exercise the engine directly. Built by
-   `scripts/build-app-rev.sh`.
+   `conan build . -pr:h profiles/revenant-armv7 -pr:b default -o prefixed=True`.
 2. **Safari substitution** — the engine dropped underneath the phone's own Mobile
    Safari by a MobileSubstrate tweak. This is the current focus; the screenshots
    in the README are of it.

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Install dist/RevWebViewHost.app on the phone, launch it and print its log.
+"""Install the standalone RevWebViewHost.app on the phone, launch it and print its log.
 
     scripts/run-app-rev.py [WAIT] [URL]
+
+The application is what conan build -o prefixed=True leaves in
+build/engine/armv7-prefixed.
 """
 import argparse
 import sys
@@ -13,7 +16,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import device
 
-APP = ROOT / "dist" / "RevWebViewHost.app"
+APP = ROOT / "build" / "engine" / "armv7-prefixed" / "RevWebViewHost.app"
 SCHEME = "revwebviewhost"
 INSTALL = "cd /Applications && tar xzf - && chmod +x /Applications/RevWebViewHost.app/RevWebViewHost"
 
