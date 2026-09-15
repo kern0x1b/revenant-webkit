@@ -12,9 +12,9 @@ cp device.env.example device.env
 # set DEVICE_HOST, DEVICE_PORT, DEVICE_PASSWORD in device.env (gitignored)
 ```
 
-`tools/device.sh` reads it and exposes `device_run <timeout> "<cmd>"` and
-`device_copy <local> <remote>`. Always source it through an array-based option
-set — never hand-build the SSH option string (it word-splits and errors).
+`tools/device.py` reads it: `tools/device.py run <timeout> "<cmd>"`,
+`tools/device.py copy <local> <remote>` and `tools/device.py fetch <remote> <local>`.
+Scripts import it instead of building SSH option strings of their own.
 
 ## Push everything
 
@@ -42,11 +42,11 @@ one-time install; the tweak assumes they are already present.
 - **Keep the `.bak` files** the deploy makes. To recover, copy a `.bak` back over
   its target and respring — see `.claude/skills/debug`.
 - **Iterating on the Settings pane needs no respring:** redeploy the bundle, then
-  `device_run 15 "killall Preferences"` and reopen it. A respring re-locks the
+  `tools/device.py run 15 "killall Preferences"` and reopen it. A respring re-locks the
   device.
 
 ## After deploying
 
-Respring with `device_run 15 "killall SpringBoard"`, wait for it to come back
+Respring with `tools/device.py run 15 "killall SpringBoard"`, wait for it to come back
 (`launchctl list | grep com.apple.SpringBoard`), then verify — see
 `.claude/skills/test`.

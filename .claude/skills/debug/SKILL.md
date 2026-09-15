@@ -9,11 +9,11 @@ description: Diagnose and recover the Safari substitution on device — Safari f
 
 The loader did not re-exec Safari, or the engine did not load. Check in order:
 
-1. `device_run 12 "cat /tmp/rev-safari-tweak.log"` — is there a
+1. `tools/device.py run 12 "cat /tmp/rev-safari-tweak.log"` — is there a
    `re-exec …MobileSafari` line? No line → the loader bailed (Safari disabled in
    `InjectedApps`, or the loader failed to load).
 2. Confirm the two dylibs are the right files and sizes:
-   `device_run 12 "ls -la /Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib /usr/lib/rev-safari-compat.dylib"`.
+   `tools/device.py run 12 "ls -la /Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib /usr/lib/rev-safari-compat.dylib"`.
    A common mistake is deploying the compat dylib over `RevSafari.dylib` — the
    loader is small; the compat dylib is much larger (bundles WASM).
 3. Compare the on-device dylib's linkage to the local build: pull it back and run
@@ -46,7 +46,7 @@ The loader did not re-exec Safari, or the engine did not load. Check in order:
 The deploy leaves `.bak` copies. Restore and respring:
 
 ```sh
-device_run 15 "cp -f /Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib.bak2 /Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib; killall SpringBoard"
+tools/device.py run 15 "cp -f /Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib.bak2 /Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib; killall SpringBoard"
 ```
 
 If a bad **broad** injection makes the UI misbehave, restoring the loader + its

@@ -7,7 +7,7 @@ ancestry, updated by applying other people's diffs - and
 [maintaining.md](maintaining.md) is what that fork is carried by now.
 
 How far the port has drifted is still a question about content rather than about
-the log, and `scripts/port-delta.sh` answers it. Today, against
+the log, and `scripts/port-delta.py` answers it. Today, against
 `origin/webkitglib/2.54`:
 
 ```
@@ -22,7 +22,7 @@ the log, and `scripts/port-delta.sh` answers it. Today, against
 
 ## How far behind the snapshot is
 
-`scripts/port-delta.sh --freshness` answers that from content rather than dates,
+`scripts/port-delta.py --freshness` answers that from content rather than dates,
 because content is what the question is really about: for each commit on the upstream branch
 it takes a line that commit added and looks for it in our tree, and the first
 one we already carry is where the snapshot sits. Today:
@@ -95,8 +95,8 @@ git -C webkit-254 merge upstream/webkitglib/2.54
 ```
 
 Conflicts land only where a pick touches a file this port also changed, which
-`scripts/port-delta.sh` lists, and `rerere.enabled` means a resolution is only
-made once. Then the carry check, the build, and `tests/device/run.sh`.
+`scripts/port-delta.py` lists, and `rerere.enabled` means a resolution is only
+made once. Then the carry check, the build, and `tests/device/run.py`.
 
 The last update done the old way, on 2026-09-10, took the branch's five newest
 picks as a diff: none touched a port-changed file, the engine rebuilt whole
@@ -123,7 +123,7 @@ carry a `WEBKIT_IOS6` guard on one side.
 own removals over 3222 commits, but five were load-bearing here - the 32-bit
 LLInt, the ARMv7 registers and macro assembler, two 32-bit JIT sources - and
 nothing in git said so, because this port had not touched them since the branch
-point. `scripts/carry-check.sh` named all five in under a second. That is the
+point. `scripts/carry-check.py` named all five in under a second. That is the
 clearest argument for the manifest that exists.
 
 **Two build systems have to be carried, not merged.** Upstream removed the iOS
@@ -424,7 +424,7 @@ left needs work per family rather than per file:
 The audit that found the lost adaptations is now a script:
 
 ```sh
-scripts/carry-audit.sh main Source/WebCore/page
+scripts/carry-audit.py main Source/WebCore/page
 ```
 
 It compares, per file, how many port markers a file carries here against the
@@ -456,7 +456,7 @@ like it worked and not be the thing under test.
 
 `scripts/layout-sys-frameworks.sh` took its build directory from
 `ENGINE_BUILD` and defaulted to `build-254-lto`, the fork build kept for
-comparison. `scripts/deploy-engine.sh` does not set it, so every deploy that
+comparison. `scripts/deploy-engine.py` does not set it, so every deploy that
 did not set it by hand staged and installed the fork. The default is now the
 trunk build, the one being shipped. The size of the installed
 `JavaScriptCore` is the cheap check: the staged file and the file on the
@@ -469,7 +469,7 @@ really was not installing it. `/usr/lib/rev-safari-compat.dylib` on the iPad
 was the September 10 01:34 build, 215456 bytes; the phone carries the 03:50
 one, 468464 bytes, which is the first that installs the bridge from the
 engine's window-object-cleared callback. The compat library is a separate
-artifact from the three frameworks and `scripts/deploy-engine.sh` does not
+artifact from the three frameworks and `scripts/deploy-engine.py` does not
 carry it, so a device can sit arbitrarily far behind on it while its engine is
 current.
 
@@ -594,7 +594,7 @@ what is left.
 
 ## The procedure this argues for
 
-1. Run `scripts/port-delta.sh` against the current base and keep the output. It
+1. Run `scripts/port-delta.py` against the current base and keep the output. It
    is the before picture, and the after picture has to be explainable.
 2. Fetch the new upstream branch and diff it against the current base to see
    which of the 440 unguarded WebCore/JSC files upstream also touched. Only those
@@ -612,7 +612,7 @@ what is left.
    that name them — plus this port's own fixes on top of them, which are in the
    delta above. Expect the JSValue representation to be the hard part: see
    [armv7-jit.md](armv7-jit.md).
-5. Build, then run `tests/device/run.sh`. The suite is the acceptance test: it
+5. Build, then run `tests/device/run.py`. The suite is the acceptance test: it
    is numeric, it runs on the device, and it stands at 55 of 55 today.
 6. Anything the suite does not cover that the update touches gets a check added
    to it first, not after.
@@ -634,7 +634,7 @@ mechanically, which would change meaning in some of them for no benefit.
 For triage during a merge:
 
 ```sh
-scripts/port-delta.sh --unguarded Source/WebCore/platform
+scripts/port-delta.py --unguarded Source/WebCore/platform
 ```
 
 lists the changed files in an area that carry no guard, largest diff first -

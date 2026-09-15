@@ -22,7 +22,7 @@ a probe should be the experiment and nothing else.
 | `revmem.c` | `revmem <pid>` - dirty and resident memory of another process, summed by VM tag. A vmmap for a phone that ships no vmmap; run as root, and read it to see which framework owns the resident dirty pages. |
 | `revpid.c` | `revpid [name]` - the pid of each running process, or only those whose name matches. This device has no `ps`, so this is how a process is found at all. |
 | `raise-memory-limit.c` | Raises the jetsam limit for a process, for measurements that would otherwise be killed before they finish. |
-| `device.sh` | Not a probe: the address, port and credentials of the phone in one place, sourced by every script that talks to it. Two things it does that matter. **Source it from bash** - in zsh `BASH_SOURCE` is empty, `device.env` is never read, and commands go to whatever is on the default port. And it revives the `iproxy` tunnel before every command, because a dead tunnel answers "connection refused", which reads in a log exactly like a browser that crashed - an evening went into a crash that was a dead cable. |
+| `device.py` | Not a probe: the address, port and credentials of the phone in one place, imported by every script that talks to it and runnable by hand as `tools/device.py run SECONDS COMMAND`, `copy LOCAL REMOTE`, `fetch REMOTE LOCAL`. It revives the `iproxy` tunnel before every command, because a dead tunnel answers "connection refused", which reads in a log exactly like a browser that crashed - an evening went into a crash that was a dead cable. |
 
 ## Building one
 
@@ -47,5 +47,5 @@ install_name_tool -change @executable_path/Frameworks/libc++.1.dylib \
     /usr/lib/librev-c++.1.dylib dist/angle-eagl-probe
 ```
 
-Copy it over with `scp` on the device port and run it over ssh; `tools/device.sh`
+Copy it over with `scp` on the device port and run it over ssh; `tools/device.py`
 has both.

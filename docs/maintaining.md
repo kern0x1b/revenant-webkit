@@ -42,7 +42,7 @@ loud:
 For (2) the answer is a declarative manifest, checked before anything is built:
 
 ```sh
-scripts/carry-check.sh        # reads carry-manifest.txt, exits non-zero with a list
+scripts/carry-check.py        # reads carry-manifest.txt, exits non-zero with a list
 ```
 
 It found its first real problem on the day it was written - an assertion that
@@ -130,8 +130,8 @@ In order, stopping at the first failure that matters:
 
 1. `git merge` the chosen upstream ref into an integration branch, with
    `rerere.enabled` so a conflict resolved once is replayed next time.
-2. `scripts/carry-check.sh` — before a single file is compiled.
-3. `scripts/port-delta.sh` — the delta and the guard census, against the new
+2. `scripts/carry-check.py` — before a single file is compiled.
+3. `scripts/port-delta.py` — the delta and the guard census, against the new
    base, kept as the before-and-after of the merge.
 4. The armv7 build.
 5. `scripts/symbol-check.sh` against the pin.
