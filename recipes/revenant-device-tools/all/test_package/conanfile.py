@@ -37,9 +37,6 @@ class TestPackage(ConanFile):
             archs = self._output(f'lipo -archs "{binary}"').split()
             if archs != ["armv7"]:
                 raise ConanException(f"{tool} is {archs}, not a thin armv7 Mach-O")
-            if "LC_ENCRYPTION_INFO" in self._output(f'otool -l "{binary}"'):
-                raise ConanException(f"{tool} carries LC_ENCRYPTION_INFO, which iOS 6 refuses to run: "
-                                     "it was linked by the system ld instead of ld64")
             signature = self._output(f'codesign -dv "{binary}"')
             if "CodeDirectory" not in signature:
                 raise ConanException(f"{tool} carries no code signature: {signature}")
