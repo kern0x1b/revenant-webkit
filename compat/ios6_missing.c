@@ -22,13 +22,13 @@ static void report(const char *name)
     fprintf(__stderrp, "[ios6] unavailable: %s\n", name);
 }
 
-long CCCryptorGCMOneshotDecrypt() { report("CCCryptorGCMOneshotDecrypt"); return 0; }
-long CCDeriveKey() { report("CCDeriveKey"); return 0; }
-long CCKDFParametersCreateHkdf() { report("CCKDFParametersCreateHkdf"); return 0; }
+long CCCryptorGCMOneshotDecrypt() { report("CCCryptorGCMOneshotDecrypt"); return -1; }
+long CCDeriveKey() { report("CCDeriveKey"); return -1; }
+long CCKDFParametersCreateHkdf() { report("CCKDFParametersCreateHkdf"); return -1; }
 long CCKDFParametersDestroy() { report("CCKDFParametersDestroy"); return 0; }
 long CCRSACryptorGetPublicKeyFromPrivateKey() { report("CCRSACryptorGetPublicKeyFromPrivateKey"); return 0; }
-long CCRSAGetCRTComponents() { report("CCRSAGetCRTComponents"); return 0; }
-long CCRSAGetCRTComponentsSizes() { report("CCRSAGetCRTComponentsSizes"); return 0; }
+long CCRSAGetCRTComponents() { report("CCRSAGetCRTComponents"); return -1; }
+long CCRSAGetCRTComponentsSizes() { report("CCRSAGetCRTComponentsSizes"); return -1; }
 long CGContextDrawPDFPageWithAnnotations() { report("CGContextDrawPDFPageWithAnnotations"); return 0; }
 long CGImageApplyHDRGainMap() { report("CGImageApplyHDRGainMap"); return 0; }
 long CGImageCreateFromIOSurface() { report("CGImageCreateFromIOSurface"); return 0; }
@@ -43,9 +43,6 @@ long FPFontCopyPostScriptName() { report("FPFontCopyPostScriptName"); return 0; 
 long FPFontCopySFNTData() { report("FPFontCopySFNTData"); return 0; }
 long FPFontCreateFontsFromData() { report("FPFontCreateFontsFromData"); return 0; }
 long FPFontCreateMemorySafeFontsFromData() { report("FPFontCreateMemorySafeFontsFromData"); return 0; }
-long MGGetBoolAnswer() { report("MGGetBoolAnswer"); return 0; }
-long MGGetFloat32Answer() { report("MGGetFloat32Answer"); return 0; }
-long MGGetSInt32Answer() { report("MGGetSInt32Answer"); return 0; }
 long SecCertificateGetSignatureHashAlgorithm() { report("SecCertificateGetSignatureHashAlgorithm"); return 0; }
 long SecTrustDeserialize() { report("SecTrustDeserialize"); return 0; }
 long SecTrustEvaluateWithError() { report("SecTrustEvaluateWithError"); return 0; }
@@ -67,8 +64,8 @@ long _os_log_default() { report("_os_log_default"); return 0; }
 long _os_log_internal() { report("_os_log_internal"); return 0; }
 long abort_with_reason() { report("abort_with_reason"); return 0; }
 long cache_simulate_memory_warning_event() { report("cache_simulate_memory_warning_event"); return 0; }
-long compression_stream_destroy() { report("compression_stream_destroy"); return 0; }
-long compression_stream_process() { report("compression_stream_process"); return 0; }
+long compression_stream_destroy() { report("compression_stream_destroy"); return -1; }
+long compression_stream_process() { report("compression_stream_process"); return -1; }
 long dispatch_block_create_with_qos_class() { report("dispatch_block_create_with_qos_class"); return 0; }
 long dispatch_queue_attr_make_with_qos_class() { report("dispatch_queue_attr_make_with_qos_class"); return 0; }
 long dyld_shared_cache_file_path() { report("dyld_shared_cache_file_path"); return 0; }
@@ -98,11 +95,68 @@ long pthread_set_qos_class_self_np() { report("pthread_set_qos_class_self_np"); 
 long sqlite3_bind_blob64() { report("sqlite3_bind_blob64"); return 0; }
 long sqlite3_errstr() { report("sqlite3_errstr"); return 0; }
 long vDSP_vaddi() { report("vDSP_vaddi"); return 0; }
-long vImageConvert_AnyToAny() { report("vImageConvert_AnyToAny"); return 0; }
-long vImageConverter_CreateWithCGImageFormat() { report("vImageConverter_CreateWithCGImageFormat"); return 0; }
-long vImageCopyBuffer() { report("vImageCopyBuffer"); return 0; }
+long vImageConvert_AnyToAny() { report("vImageConvert_AnyToAny"); return -21773; }
+void *vImageConverter_CreateWithCGImageFormat(void *srcFormat, void *destFormat, void *backgroundColor, unsigned flags, long *error)
+{
+    (void)srcFormat; (void)destFormat; (void)backgroundColor; (void)flags;
+    report("vImageConverter_CreateWithCGImageFormat");
+    if (error)
+        *error = -21771;
+    return 0;
+}
+long vImageCopyBuffer() { report("vImageCopyBuffer"); return -21773; }
 
 /* These are reachable in normal operation, so they are implemented. */
+
+typedef const void *CFTypeRef;
+typedef const void *CFStringRef;
+typedef const void *CFDictionaryRef;
+typedef const void *CFNumberRef;
+typedef const void *CFBooleanRef;
+typedef unsigned long CFTypeID;
+typedef long CFIndex;
+
+extern CFTypeRef MGCopyAnswer(CFStringRef question, CFDictionaryRef options);
+extern void CFRelease(CFTypeRef object);
+extern CFTypeID CFGetTypeID(CFTypeRef object);
+extern CFTypeID CFNumberGetTypeID(void);
+extern CFTypeID CFBooleanGetTypeID(void);
+extern unsigned char CFBooleanGetValue(CFBooleanRef object);
+extern unsigned char CFNumberGetValue(CFNumberRef number, CFIndex type, void *valuePtr);
+
+int MGGetBoolAnswer(CFStringRef question)
+{
+    CFTypeRef answer = MGCopyAnswer(question, 0);
+    if (!answer)
+        return 0;
+    int result = CFGetTypeID(answer) == CFBooleanGetTypeID() && CFBooleanGetValue(answer);
+    CFRelease(answer);
+    return result;
+}
+
+int MGGetSInt32Answer(CFStringRef question, int defaultValue)
+{
+    CFTypeRef answer = MGCopyAnswer(question, 0);
+    if (!answer)
+        return defaultValue;
+    int result = defaultValue;
+    if (CFGetTypeID(answer) == CFNumberGetTypeID())
+        CFNumberGetValue(answer, 3, &result);
+    CFRelease(answer);
+    return result;
+}
+
+float MGGetFloat32Answer(CFStringRef question, float defaultValue)
+{
+    CFTypeRef answer = MGCopyAnswer(question, 0);
+    if (!answer)
+        return defaultValue;
+    float result = defaultValue;
+    if (CFGetTypeID(answer) == CFNumberGetTypeID())
+        CFNumberGetValue(answer, 5, &result);
+    CFRelease(answer);
+    return result;
+}
 
 const void *CFAutorelease(const void *object)
 {
