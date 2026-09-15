@@ -1,0 +1,8 @@
+include(ios6-armv7)
+
+[settings]
+compiler.cppstd=23
+
+[conf]
+tools.build:cflags=["-mcpu=cortex-a9", "-mtune=cortex-a9", "-mfpu=neon"]
+tools.build:cxxflags=["-mcpu=cortex-a9", "-mtune=cortex-a9", "-mfpu=neon"]

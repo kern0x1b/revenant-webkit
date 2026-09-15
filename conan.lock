@@ -14,7 +14,7 @@
         "ld64/956.6@ios6/stable#48d7c9b304979150b0aa94190670e63c%1789489782.5778718"
     ],
     "python_requires": [
-        "ios6-base/1.0@ios6/stable#f1e326174b2da6022688affcda0d222e%1789486977.2844312"
+        "ios6-base/1.0@ios6/stable#07cbec8fee1085baf2fd670e15be514a%1789493331.2661738"
     ],
     "config_requires": []
 }

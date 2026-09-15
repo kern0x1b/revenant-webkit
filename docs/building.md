@@ -49,6 +49,13 @@ order does not fail - it quietly builds against a recipe that cannot
 cross-compile for armv7. The namespace makes a bare `icu/74.2` unresolvable
 from these indexes, so a reference that forgets it is an error instead.
 
+The target comes from ios6-toolchain's shared `ios6-armv7` profile, which says
+only what is true of armv7 on iOS 6. What is this port's own - C++23, and
+tuning for the Cortex-A9 in the iPhone 4S and iPad 2 - is in
+`profiles/revenant-armv7`, which includes the shared one. A 3GS is a
+Cortex-A8, and another port on the same toolchain has no reason to inherit
+either choice.
+
 Register the two indexes once, the toolchain's and this repository's:
 
 ```sh
@@ -58,7 +65,7 @@ conan ios6-remote revenant .
 ```
 
 Every script that needs a library sources `scripts/deps.sh`, which runs `conan
-install` and loads `build/conan/ios6-deps.env`. That file is written by the
+install` and loads `build/conan/armv7/ios6-deps.env`. That file is written by the
 `ios6-base` generator straight from the dependency graph - one
 `IOS6_HOST_<NAME>=path` line per library and `IOS6_BUILD_<NAME>=path` per build
 tool, so `IOS6_BUILD_LD64` is the linker - and it reads the same from a shell
