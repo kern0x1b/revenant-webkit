@@ -63,6 +63,12 @@ worthless.
                               posts and document height as it grows
     tests/scrollbench.html    scrolling: the gap distribution between animation
                               frames, not a mean
+    tests/scrollbench-fixed-bars.html
+                              the same measurement under two position:fixed bars
+                              whose height changes while a feed grows during the
+                              run - the shape the fixed-bar flush race needs
+    tests/fullscreentest.html element.requestFullscreen() on a div, with a canvas
+                              that keeps drawing while fullscreen
 
 `scrollbench.html` has two knobs, because the regime is part of what is
 measured: `?posts=1400` puts the collector in the band a content-bearing feed
