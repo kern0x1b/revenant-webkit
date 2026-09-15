@@ -8,191 +8,161 @@
 Add --with-jsc32 to also build JavaScriptCore for 32-bit ARM and run its own
 suites in a container. That tier is slow and needs docker, so it is opt-in.
 """
-import os
+import argparse
+import functools
+import itertools
+import logging
 import subprocess
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
-import device  # noqa: E402
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import device
 
+ENGINE = "webkit-254"
+PORT_DELTA_LINES = 14
 
-def logical_cwd():
-    pwd = os.environ.get("PWD")
-    if pwd and os.path.isabs(pwd):
-        try:
-            if os.path.samefile(pwd, "."):
-                return pwd
-        except OSError:
-            pass
-    return os.getcwd()
+log = logging.getLogger("integrate")
 
 
-def repo_root(script, levels):
-    parts = [os.path.dirname(script)] + [".."] * levels
-    return os.path.normpath(os.path.join(logical_cwd(), *parts))
+class Stopped(Exception):
+    pass
 
 
-def parse_args(argv):
-    with_jsc32 = False
-    rest = []
-    for a in argv:
-        if a == "--with-jsc32":
-            with_jsc32 = True
-        else:
-            rest.append(a)
-    ref = rest[0] if rest else ""
-    return with_jsc32, ref
+class NoDevice(Exception):
+    pass
 
 
-def split_ref(ref):
-    remote = ref.split("/", 1)[0]
-    branch = ref.split("/", 1)[1] if "/" in ref else ref
-    return remote, branch
-
-
-def say(text):
-    sys.stdout.write(text)
-    sys.stdout.flush()
-
-
-def emit(data):
-    sys.stdout.flush()
-    sys.stdout.buffer.write(data)
-    sys.stdout.buffer.flush()
-
-
-def step(name):
-    say("\n=== %s\n" % name)
-
-
-def die(message):
-    say("\nSTOPPED: %s\n" % message)
-    sys.exit(1)
-
-
-def status(argv, **kwargs):
-    sys.stdout.flush()
+def require(argv: list, reason: str, **kwargs) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(argv, **kwargs).returncode
-    except OSError as e:
-        sys.stderr.write("%s: %s\n" % (argv[0], e.strerror))
-        return 127
+        return subprocess.run([str(part) for part in argv], check=True, **kwargs)
+    except OSError as error:
+        log.error("%s: %s", argv[0], error.strerror)
+        raise Stopped(reason) from error
+    except subprocess.CalledProcessError as error:
+        raise Stopped(reason) from error
 
 
-def captured(argv):
-    sys.stdout.flush()
+def python_tool(root: Path, relative: str, *args: str) -> list:
+    return [sys.executable, str(root / relative), *args]
+
+
+def head_of(engine: Path) -> str:
+    return subprocess.run(["git", "-C", str(engine), "rev-parse", "HEAD"],
+                          stdout=subprocess.PIPE, text=True, check=True).stdout.strip()
+
+
+def merge(root: Path, ref: str) -> None:
+    engine = root / ENGINE
+    remote, _, branch = ref.partition("/")
+    require(["git", "-C", engine, "fetch", "--filter=blob:none", remote,
+             f"refs/heads/{branch or ref}:refs/remotes/{ref}"], "fetch failed")
+    before = head_of(engine)
+    require(["git", "-C", engine, "merge", "--no-edit", ref],
+            f"merge conflicts left in {ENGINE} - resolve, commit, then rerun with --no-merge")
+    if head_of(engine) == before:
+        log.info("already up to date")
+
+
+def check_carry(root: Path) -> None:
+    result = subprocess.run(python_tool(root, "scripts/carry-check.py"), stdout=subprocess.PIPE,
+                            text=True, errors="replace", check=False)
+    for line in result.stdout.splitlines():
+        if not line.startswith("ok"):
+            print(line)
+    if result.returncode:
+        raise Stopped("the tree no longer holds what this port depends on")
+
+
+def port_delta(root: Path) -> None:
+    with subprocess.Popen(python_tool(root, "scripts/port-delta.py"), stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, text=True, errors="replace") as delta:
+        for line in itertools.islice(delta.stdout, PORT_DELTA_LINES):
+            print(line, end="")
+
+
+def build(root: Path) -> None:
+    require(["conan", "build", root, "-pr:h", root / "profiles" / "revenant-armv7", "-pr:b", "default"],
+            "build failed")
+
+
+def check_symbols(root: Path) -> None:
+    require(["bash", root / "scripts" / "symbol-check.sh"],
+            "the symbol surface moved - check each line against the device")
+
+
+def jsc32(root: Path) -> None:
+    require(python_tool(root, "tests/jsc32/build-and-test.py", "stress"),
+            "the 32-bit engine did not pass its own suites")
+
+
+def host_checks(root: Path) -> None:
+    result = require(python_tool(root, "tests/run-tests.py", "host"), "host checks failed",
+                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    for line in result.stdout.rstrip("\n").split("\n")[-4:]:
+        print(line)
+    if "host tests: conan install failed" in result.stdout:
+        log.warning("WARNING: the ICU tier did not run - the ICU package for this Mac did not install")
+
+
+def device_gate(root: Path) -> None:
+    if not device.reachable(10):
+        raise NoDevice("no device - this integration is unverified and must not be shipped")
+    require(python_tool(root, "scripts/deploy-engine.py"), "deploy failed",
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = subprocess.run(python_tool(root, "tests/device/run.py"), stdout=subprocess.PIPE,
+                            text=True, errors="replace", check=False)
+    for line in result.stdout.splitlines()[-3:]:
+        print(line)
+    if result.returncode:
+        raise Stopped("the device gate failed - read the verdicts above")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument("ref", nargs="?", help="upstream ref to merge into webkit-254, e.g. upstream/main")
+    target.add_argument("--no-merge", action="store_true", help="run the gates on the tree as it is")
+    parser.add_argument("--with-jsc32", action="store_true", help="also build and test 32-bit JavaScriptCore")
+    return parser.parse_args()
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    sys.stdout.reconfigure(line_buffering=True)
+    args = parse_args()
+
+    steps = [
+        (f"merging {args.ref}", functools.partial(merge, ref=args.ref), bool(args.ref)),
+        ("carry manifest", check_carry, True),
+        ("port delta", port_delta, True),
+        ("build", build, True),
+        ("symbols", check_symbols, True),
+        ("32-bit JavaScriptCore", jsc32, args.with_jsc32),
+        ("host checks", host_checks, True),
+        ("device", device_gate, True),
+    ]
+
+    subprocess.run(["git", "-C", str(ROOT / ENGINE), "config", "rerere.enabled", "true"], check=False)
     try:
-        out = subprocess.run(argv, stdout=subprocess.PIPE).stdout
-    except OSError as e:
-        sys.stderr.write("%s: %s\n" % (argv[0], e.strerror))
-        out = b""
-    return out.rstrip(b"\n")
-
-
-def tail_lines(data, count):
-    if not data:
-        return b""
-    return b"".join(data.splitlines(True)[-count:])
-
-
-def command_substitution(data):
-    return data.rstrip(b"\n")
-
-
-def echo_tail(data, count):
-    return tail_lines(command_substitution(data) + b"\n", count)
-
-
-def filter_not_ok(argv):
-    sys.stdout.flush()
-    child = subprocess.Popen(argv, stdout=subprocess.PIPE)
-    for line in child.stdout:
-        if not line.startswith(b"ok"):
-            emit(line if line.endswith(b"\n") else line + b"\n")
-    child.stdout.close()
-    child.wait()
-
-
-def head(argv, count):
-    sys.stdout.flush()
-    child = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    for _ in range(count):
-        line = child.stdout.readline()
-        if not line:
-            break
-        emit(line)
-    child.stdout.close()
-    child.wait()
-
-
-def device_up():
-    return "up" in (device.output(10, "echo up") or "")
-
-
-def main(argv):
-    p = repo_root(sys.argv[0], 1)
-    e = p + "/webkit-254"
-    py = sys.executable
-    with_jsc32, ref = parse_args(argv)
-
-    status(["git", "-C", e, "config", "rerere.enabled", "true"])
-
-    if ref and ref != "--no-merge":
-        step("merging %s" % ref)
-        remote, branch = split_ref(ref)
-        if status(["git", "-C", e, "fetch", "--filter=blob:none", remote,
-                   "refs/heads/%s:refs/remotes/%s" % (branch, ref)]):
-            die("fetch failed")
-        before = captured(["git", "-C", e, "rev-parse", "HEAD"])
-        if status(["git", "-C", e, "merge", "--no-edit", ref]):
-            die("merge conflicts left in webkit-254 - resolve, commit, then rerun with --no-merge")
-        if before == captured(["git", "-C", e, "rev-parse", "HEAD"]):
-            say("already up to date\n")
-
-    step("carry manifest")
-    filter_not_ok([py, p + "/scripts/carry-check.py"])
-    if status([py, p + "/scripts/carry-check.py"], stdout=subprocess.DEVNULL):
-        die("the tree no longer holds what this port depends on")
-
-    step("port delta")
-    head([py, p + "/scripts/port-delta.py"], 14)
-
-    step("build")
-    if status(["conan", "build", p, "-pr:h", p + "/profiles/revenant-armv7", "-pr:b", "default"]):
-        die("build failed")
-
-    step("symbols")
-    if status(["bash", p + "/scripts/symbol-check.sh"]):
-        die("the symbol surface moved - check each line against the device")
-
-    if with_jsc32:
-        step("32-bit JavaScriptCore")
-        if status([py, p + "/tests/jsc32/build-and-test.py", "stress"]):
-            die("the 32-bit engine did not pass its own suites")
-
-    step("host checks")
-    sys.stdout.flush()
-    host = subprocess.run([py, p + "/tests/run-tests.py", "host"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    if host.returncode:
-        die("host checks failed")
-    emit(echo_tail(host.stdout, 4))
-    if b"host tests: conan install failed" in host.stdout:
-        say("WARNING: the ICU tier did not run - the ICU package for this Mac did not install\n")
-
-    step("device")
-    if device_up():
-        if status([py, p + "/scripts/deploy-engine.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL):
-            die("deploy failed")
-        sys.stdout.flush()
-        run = subprocess.run([py, p + "/tests/device/run.py"], stdout=subprocess.PIPE)
-        emit(tail_lines(run.stdout, 3))
-    else:
-        say("no device - this integration is unverified and must not be shipped\n")
+        for title, step, enabled in steps:
+            if enabled:
+                log.info("\n=== %s", title)
+                step(ROOT)
+    except Stopped as stop:
+        print(f"\nSTOPPED: {stop}")
+        return 1
+    except subprocess.CalledProcessError as error:
+        print(f"\nSTOPPED: {' '.join(map(str, error.cmd))} exited with {error.returncode}")
+        return 1
+    except NoDevice as missing:
+        print(missing)
         return 3
 
-    say("\nintegration green\n")
+    print("\nintegration green")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

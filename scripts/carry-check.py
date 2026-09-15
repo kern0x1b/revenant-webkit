@@ -3,171 +3,126 @@
 
     scripts/carry-check.py [manifest]
 """
-import os
+import argparse
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-IFS_WS = b" \t\n"
-
-
-def logical_cwd():
-    pwd = os.environ.get("PWD")
-    if pwd and os.path.isabs(pwd):
-        try:
-            if os.path.samefile(pwd, "."):
-                return pwd
-        except OSError:
-            pass
-    return os.getcwd()
+ROOT = Path(__file__).resolve().parents[1]
+ENGINE = ROOT / "webkit-254"
+MANIFEST = ROOT / "carry-manifest.txt"
+INTEGER = re.compile(r"[+-]?[0-9]+")
 
 
-def repo_root(script, levels):
-    parts = [os.path.dirname(script)] + [".."] * levels
-    return os.path.normpath(os.path.join(logical_cwd(), *parts))
+def warn(message):
+    print("carry-check: " + message, file=sys.stderr)
 
 
-def read_fields(line, count):
-    rest = line.strip(IFS_WS)
-    fields = []
-    for _ in range(count - 1):
-        match = re.match(rb"[^ \t\n]*", rest)
-        token = match.group(0)
-        fields.append(token)
-        rest = rest[len(token):].lstrip(IFS_WS)
-    fields.append(rest)
-    return fields
+def git(*args, check=True):
+    result = subprocess.run(["git", "-C", str(ENGINE), *args],
+                            check=check, capture_output=True, text=True, errors="replace")
+    return result.stdout
 
 
-def lines_of(data):
-    lines = data.split(b"\n")
-    if lines and lines[-1] == b"":
-        lines.pop()
-    return lines
-
-
-def contains_fixed(lines, text):
-    if text == b"":
-        return len(lines) > 0
-    return any(text in line for line in lines)
-
-
-def read_file(path):
-    with open(path, "rb") as f:
-        return f.read()
-
-
-def file_contains(path, text):
+def read_lines(path):
     try:
-        data = read_file(path)
-    except OSError as e:
-        sys.stderr.write("grep: %s: %s\n" % (path, e.strerror))
-        return False
-    return contains_fixed(lines_of(data), text)
+        return path.read_text(errors="replace").splitlines()
+    except OSError as error:
+        warn("cannot read {}: {}".format(path, error.strerror))
+        return None
 
 
-def pref_block(lines, key):
-    out = []
-    inside = False
-    for line in lines:
-        if line == key:
-            inside = True
-            continue
-        if inside and line == b"":
+def contains(lines, text):
+    return lines is not None and any(text in line for line in lines)
+
+
+def preference_block(lines, key):
+    if lines is None or key not in lines:
+        return []
+    block = []
+    for line in lines[lines.index(key) + 1:]:
+        if line == "":
             break
-        if inside:
-            out.append(line)
-    return out
+        block.append(line)
+    return block
 
 
-def pref_keeps(path, key, text):
+def check_file(path, _):
+    if (ENGINE / path).is_file():
+        return True, path
+    return False, "missing: " + path
+
+
+def check_grep(path, text):
+    source = ENGINE / path
+    if source.is_file() and contains(read_lines(source), text):
+        return True, "{} contains {}".format(path, text)
+    return False, "{} no longer contains: {}".format(path, text)
+
+
+def check_pref(path, detail):
+    key, _, text = detail.partition(" ")
+    text = text if text else detail
+    source = ENGINE / path
+    if source.is_file() and contains(preference_block(read_lines(source), key + ":"), text):
+        return True, "{} {} keeps {}".format(path, key, text)
+    return False, "{} {} lost: {}".format(path, key, text)
+
+
+def check_set(path, text):
+    if contains(read_lines(ROOT / path), text):
+        return True, "{} keeps {}".format(path, text)
+    return False, "{} lost: {}".format(path, text)
+
+
+def check_guard(area, floor):
+    count = len(git("grep", "-l", "WEBKIT_IOS6", "--", area, check=False).splitlines())
+    if not INTEGER.fullmatch(floor):
+        warn("the guard floor for {} is not a whole number: {!r}".format(area, floor))
+    elif count >= int(floor):
+        return True, "{} carries the guard in {} files (floor {})".format(area, count, floor)
+    return False, "{} carries the guard in only {} files, floor is {}".format(area, count, floor)
+
+
+CHECKS = {
+    "file": check_file,
+    "grep": check_grep,
+    "pref": check_pref,
+    "set": check_set,
+    "guard": check_guard,
+}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("manifest", nargs="?", help="default: carry-manifest.txt at the repository root")
+    args = parser.parse_args()
+    manifest = Path(args.manifest) if args.manifest else MANIFEST
+
     try:
-        data = read_file(path)
-    except OSError:
-        sys.stderr.write("awk: can't open file %s\n" % path)
-        return False
-    return contains_fixed(pref_block(lines_of(data), key), text)
+        directives = manifest.read_text().splitlines()
+    except OSError as error:
+        warn("cannot read the manifest {}: {}".format(manifest, error.strerror))
+        directives = None
 
+    intact = directives is not None
+    for directive in directives or []:
+        fields = directive.split(None, 2)
+        kind, target, detail = fields + [""] * (3 - len(fields))
+        if kind in ("", "#"):
+            continue
+        check = CHECKS.get(kind)
+        if check:
+            passed, message = check(target, detail)
+        else:
+            passed, message = False, "unknown directive: " + kind
+        print("{:<6} {}".format("ok" if passed else "FAIL", message))
+        intact = intact and passed
 
-def guard_count(engine, area):
-    try:
-        result = subprocess.run(
-            ["git", "-C", engine, "grep", "-l", "WEBKIT_IOS6", "--", area],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    except OSError:
-        return 0
-    return sum(1 for line in result.stdout.split(b"\n") if line != b"")
-
-
-def main():
-    root = repo_root(sys.argv[0], 1)
-    engine = os.path.join(root, "webkit-254")
-    manifest = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != "" else os.path.join(root, "carry-manifest.txt")
-    out = sys.stdout.buffer
-    failed = False
-
-    def report(status, message):
-        nonlocal failed
-        out.write(b"%-6s %s\n" % (status, message))
-        if status == b"FAIL":
-            failed = True
-
-    try:
-        data = read_file(manifest)
-    except OSError as e:
-        sys.stderr.write("%s: %s: %s\n" % (os.path.basename(sys.argv[0]), manifest, e.strerror))
-        data = None
-
-    if data is not None:
-        for raw in lines_of(data):
-            kind, a, b = read_fields(raw, 3)
-            fs_a = os.fsdecode(a)
-            if kind in (b"", b"#"):
-                continue
-            if kind == b"file":
-                if os.path.isfile(engine + "/" + fs_a):
-                    report(b"ok", a)
-                else:
-                    report(b"FAIL", b"missing: " + a)
-            elif kind == b"grep":
-                path = engine + "/" + fs_a
-                if os.path.isfile(path) and file_contains(path, b):
-                    report(b"ok", a + b" contains " + b)
-                else:
-                    report(b"FAIL", a + b" no longer contains: " + b)
-            elif kind == b"pref":
-                key = b.split(b" ", 1)[0]
-                text = b.split(b" ", 1)[1] if b" " in b else b
-                path = engine + "/" + fs_a
-                if os.path.isfile(path) and pref_keeps(path, key + b":", text):
-                    report(b"ok", a + b" " + key + b" keeps " + text)
-                else:
-                    report(b"FAIL", a + b" " + key + b" lost: " + text)
-            elif kind == b"set":
-                if file_contains(root + "/" + fs_a, b):
-                    report(b"ok", a + b" keeps " + b)
-                else:
-                    report(b"FAIL", a + b" lost: " + b)
-            elif kind == b"guard":
-                n = guard_count(engine, fs_a)
-                floor = re.fullmatch(rb"[+-]?[0-9]+", b)
-                if floor is None:
-                    sys.stderr.write("%s: %s: integer expression expected\n" % (os.path.basename(sys.argv[0]), os.fsdecode(b)))
-                if floor is not None and n >= int(b):
-                    report(b"ok", a + b" carries the guard in " + str(n).encode() + b" files (floor " + b + b")")
-                else:
-                    report(b"FAIL", a + b" carries the guard in only " + str(n).encode() + b" files, floor is " + b)
-            else:
-                report(b"FAIL", b"unknown directive: " + kind)
-
-    if data is None:
-        failed = True
-    if failed:
-        out.write(b"CARRY BROKEN - the tree no longer holds what this port depends on\n")
-    else:
-        out.write(b"carry intact\n")
-    out.flush()
-    return 1 if failed else 0
+    print("carry intact" if intact else "CARRY BROKEN - the tree no longer holds what this port depends on")
+    return 0 if intact else 1
 
 
 if __name__ == "__main__":

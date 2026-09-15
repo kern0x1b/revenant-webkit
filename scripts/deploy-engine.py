@@ -4,65 +4,82 @@
     scripts/deploy-engine.py
     ENGINE_BUILD=build-... scripts/deploy-engine.py
 """
+import argparse
+import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-import device  # noqa: E402
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import device
 
-P = device.ROOT
-REV = "/usr/lib/rev-fw"
-SRC = P / "dist" / "rev-sys-fw"
+REMOTE = "/usr/lib/rev-fw"
 FRAMEWORKS = ("JavaScriptCore", "WebCore", "WebKit")
 
-
-def stream_webcore_resources():
-    webcore = SRC / "WebCore.framework"
-    entries = sorted(name for name in os.listdir(str(webcore)) if not name.startswith(".") and name != "WebCore")
-    argv, env = device._authenticated(
-        [*device.ssh_command(), f"cd {REV}/WebCore.framework && tar xzf - && chmod -R 755 . 2>/dev/null"])
-    tar = subprocess.Popen(["tar", "czf", "-", *entries], cwd=str(webcore),
-                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    ssh = subprocess.Popen(argv, env=env, stdin=tar.stdout)
-    tar.stdout.close()
-    ssh.wait()
-    tar.wait()
-    return ssh.returncode or tar.returncode
+log = logging.getLogger("deploy-engine")
 
 
-def main():
-    layout = subprocess.run(["bash", str(P / "scripts" / "layout-sys-frameworks.sh")], stdout=subprocess.DEVNULL)
-    if layout.returncode:
-        return layout.returncode
+def stage_frameworks(root: Path, build: Path) -> Path:
+    staged = root / "dist" / "rev-sys-fw"
+    subprocess.run(["bash", str(root / "scripts" / "layout-sys-frameworks.sh"), str(staged)],
+                   env={**os.environ, "ENGINE_BUILD": str(build)}, stdout=subprocess.DEVNULL, check=True)
+    return staged
 
-    probe = device.run(12, "echo ok")
-    sys.stderr.write(probe.stderr or "")
-    if probe.returncode:
-        print("device unreachable", file=sys.stderr)
-        return 1
 
-    print(f"backing up current engine -> {REV}.bak", flush=True)
-    backup = device.run(30, f"mkdir -p {REV}.bak; for fw in JavaScriptCore WebCore WebKit; do "
-                            f"cp -f {REV}/$fw.framework/$fw {REV}.bak/$fw 2>/dev/null || true; done", capture=False)
-    if backup.returncode:
-        return backup.returncode
-    for fw in FRAMEWORKS:
-        if not device.copy(SRC / f"{fw}.framework" / fw, f"{REV}/{fw}.framework/{fw}", capture=False):
+def back_up_engine() -> None:
+    log.info("backing up current engine -> %s.bak", REMOTE)
+    names = " ".join(FRAMEWORKS)
+    device.run(30, f"mkdir -p {REMOTE}.bak; for fw in {names}; do "
+                   f"cp -f {REMOTE}/$fw.framework/$fw {REMOTE}.bak/$fw 2>/dev/null || true; done",
+               capture=False, check=True)
+
+
+def install_binaries(staged: Path) -> bool:
+    return all(device.copy(staged / f"{framework}.framework" / framework,
+                           f"{REMOTE}/{framework}.framework/{framework}", capture=False)
+               for framework in FRAMEWORKS)
+
+
+def install_webcore_resources(staged: Path) -> int:
+    webcore = staged / "WebCore.framework"
+    if not ((webcore / "modern-media-controls").is_dir() or (webcore / "Info.plist").is_file()):
+        return 0
+    entries = sorted(entry.name for entry in webcore.iterdir()
+                     if not entry.name.startswith(".") and entry.name != "WebCore")
+    return device.pipe_into(["tar", "czf", "-", *entries],
+                            f"cd {REMOTE}/WebCore.framework && tar xzf - && chmod -R 755 . 2>/dev/null",
+                            cwd=webcore)
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    sys.stdout.reconfigure(line_buffering=True)
+    argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter).parse_args()
+    build = Path(os.environ.get("ENGINE_BUILD") or ROOT / "build" / "engine" / "armv7-system")
+
+    try:
+        staged = stage_frameworks(ROOT, build)
+
+        probe = device.run(12, "echo ok")
+        sys.stderr.write(probe.stderr or "")
+        if probe.returncode:
+            log.error("device unreachable")
             return 1
 
-    webcore = SRC / "WebCore.framework"
-    if (webcore / "modern-media-controls").is_dir() or (webcore / "Info.plist").is_file():
-        status = stream_webcore_resources()
+        back_up_engine()
+        if not install_binaries(staged):
+            return 1
+        status = install_webcore_resources(staged)
         if status:
             return status
+        device.run(20, f"chmod 755 {REMOTE}/*/* 2>/dev/null; echo installed", capture=False, check=True)
+    except subprocess.CalledProcessError as error:
+        return error.returncode
 
-    installed = device.run(20, f"chmod 755 {REV}/*/* 2>/dev/null; echo installed", capture=False)
-    if installed.returncode:
-        return installed.returncode
-    print("restarting Mobile Safari (no respring)", flush=True)
-    sys.stdout.write(device.run(15, "killall MobileSafari").stdout or "")
+    log.info("restarting Mobile Safari (no respring)")
+    print(device.run(15, "killall MobileSafari").stdout or "", end="")
     print("done — verify the engine reports AppleWebKit/605")
     return 0
 

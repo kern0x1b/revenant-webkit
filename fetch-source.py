@@ -3,39 +3,33 @@
 
     ./fetch-source.py
 """
-import os
+import argparse
 import subprocess
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+ENGINE = ROOT / "webkit-254"
 
 
-def logical_cwd():
-    pwd = os.environ.get("PWD")
-    if pwd and os.path.isabs(pwd):
-        try:
-            if os.path.samefile(pwd, "."):
-                return pwd
-        except OSError:
-            pass
-    return os.getcwd()
+def run(*args):
+    return subprocess.run(args, cwd=ROOT, check=True, capture_output=True, text=True).stdout
 
 
-def substitution(args):
-    result = subprocess.run(args, stdout=subprocess.PIPE)
-    return result.stdout.rstrip(b"\n")
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.parse_args()
 
-
-def main():
-    root = os.path.normpath(os.path.join(logical_cwd(), os.path.dirname(sys.argv[0])))
-    os.chdir(root)
-    rc = subprocess.call(["git", "submodule", "update", "--init", "--depth", "1", "webkit-254"])
-    if rc != 0:
-        return rc
-    rev = substitution(["git", "-C", "webkit-254", "rev-parse", "--short", "HEAD"])
-    du = substitution(["du", "-sh", "webkit-254"])
-    size = b"\n".join(line.split(b"\t", 1)[0] for line in du.split(b"\n"))
-    out = sys.stdout.buffer
-    out.write(b"webkit-254 at " + rev + b" (" + size + b")\n")
-    out.flush()
+    try:
+        subprocess.run(["git", "submodule", "update", "--init", "--depth", "1", ENGINE.name],
+                       cwd=ROOT, check=True)
+        revision = run("git", "-C", str(ENGINE), "rev-parse", "--short", "HEAD").strip()
+        size = run("du", "-sh", str(ENGINE)).split("\t")[0]
+    except subprocess.CalledProcessError as error:
+        print("fetch-source: {} failed".format(" ".join(error.cmd)), file=sys.stderr)
+        return error.returncode
+    print("{} at {} ({})".format(ENGINE.name, revision, size))
     return 0
 
 
