@@ -3,63 +3,69 @@
 
     scripts/run-app-rev.py [WAIT] [URL]
 """
-import os
-import subprocess
+import argparse
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-import device  # noqa: E402
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
 
-P = device.ROOT
-APP = P / "dist" / "RevWebViewHost.app"
+import device
+
+APP = ROOT / "dist" / "RevWebViewHost.app"
 SCHEME = "revwebviewhost"
+INSTALL = "cd /Applications && tar xzf - && chmod +x /Applications/RevWebViewHost.app/RevWebViewHost"
 
 
-def launch_command(wait, url):
-    return (
-        "\n"
-        "rm -f /tmp/rev-webview-host.log /tmp/rev-url.txt\n"
-        + (f"echo '{url}' > /tmp/rev-url.txt" if url else "") + "\n"
-        "su mobile -c uicache >/dev/null 2>&1\n"
-        "sleep 4\n"
-        f"uiopen {SCHEME}://\n"
-        f"sleep {wait}\n"
-        "echo '--- rev-webview-host.log ---'\n"
-        "cat /tmp/rev-webview-host.log 2>&1\n"
-    )
+def human_size(path):
+    total = sum(entry.stat().st_size for entry in path.rglob("*") if entry.is_file())
+    for unit in ("B", "K", "M", "G"):
+        if total < 1024:
+            return f"{total:.0f}{unit}" if unit == "B" else f"{total:.1f}{unit}"
+        total /= 1024
+    return f"{total:.1f}T"
 
 
-def main(argv):
-    wait = argv[0] if argv and argv[0] else "20"
-    url = argv[1] if len(argv) > 1 else ""
+def launch_script(wait, url):
+    lines = ["rm -f /tmp/rev-webview-host.log /tmp/rev-url.txt"]
+    if url:
+        lines.append(f"echo '{url}' > /tmp/rev-url.txt")
+    lines += [
+        "su mobile -c uicache >/dev/null 2>&1",
+        "sleep 4",
+        f"uiopen {SCHEME}://",
+        f"sleep {wait}",
+        "echo '--- rev-webview-host.log ---'",
+        "cat /tmp/rev-webview-host.log 2>&1",
+    ]
+    return "\n".join(lines)
 
-    print(f"device: {device.HOST}:{device.PORT}", flush=True)
-    for _ in range(3):
+
+def wait_for_phone(attempts=3, pause=5):
+    for _ in range(attempts):
         if "up" in device.output(20, "echo up"):
-            break
-        time.sleep(5)
+            return
+        time.sleep(pause)
 
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("wait", nargs="?", type=int, default=20, help="seconds to let the app run")
+    parser.add_argument("url", nargs="?", default="", help="page the app opens first")
+    args = parser.parse_args()
+
+    print(f"device: {device.HOST}:{device.PORT}")
+    wait_for_phone()
     device.run(40, "killall -9 RevWebViewHost 2>/dev/null; rm -rf /Applications/RevWebViewHost.app")
 
-    size = subprocess.run(["du", "-sh", str(APP)], stdout=subprocess.PIPE, text=True).stdout
-    print(f"copying {size.split(chr(9), 1)[0].rstrip()}", flush=True)
-    argv_ssh, env = device._authenticated(
-        [*device.ssh_command(), "cd /Applications && tar xzf - && chmod +x /Applications/RevWebViewHost.app/RevWebViewHost"])
-    tar = subprocess.Popen(["tar", "-C", str(APP.parent), "-czf", "-", APP.name], stdout=subprocess.PIPE)
-    ssh = subprocess.Popen(argv_ssh, env=env, stdin=tar.stdout, stderr=subprocess.DEVNULL)
-    tar.stdout.close()
-    ssh.wait()
-    tar.wait()
-    if ssh.returncode:
+    print(f"copying {human_size(APP)}", flush=True)
+    if device.pipe_into(["tar", "-czf", "-", APP.name], INSTALL, cwd=APP.parent):
         print("copy failed")
         return 1
 
-    sys.stdout.flush()
-    os.dup2(sys.stdout.fileno(), sys.stderr.fileno())
-    return device.run(int(wait) + 60, launch_command(wait, url), capture=False).returncode
+    return device.run(args.wait + 60, launch_script(args.wait, args.url), capture=False).returncode
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())
