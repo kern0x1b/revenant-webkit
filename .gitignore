@@ -53,3 +53,4 @@ build-254-angle/
 
 # A sweep list is the operator's, never the repository's.
 tests/device/sweep-sites.txt
+build/conan/
