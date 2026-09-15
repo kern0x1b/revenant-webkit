@@ -4,6 +4,7 @@
 #   file  <path>                 the path must exist
 #   grep  <path> <text>          the file must contain that text
 #   guard <dir> <minimum>        at least N files under dir carry WEBKIT_IOS6
+#   pref  <yaml> <key> <text>    the preference's own block in that yaml contains the text
 #   set   <path> <text>          a build setting the port cannot run without
 #
 # A line here exists because losing it silently is worse than failing loudly.
@@ -57,6 +58,43 @@ grep  Source/JavaScriptCore/bytecode/CodeBlock.cpp updateAllLazyValueProfilePred
 
 # ---- what the 32-bit DFG cannot do yet ------------------------------------
 grep  Source/JavaScriptCore/runtime/Options.cpp maximumVarargsForInlining
+
+# ---- port behaviour the trunk merge had to re-carry by hand ---------------
+grep  Source/WebCore/platform/network/cocoa/CookieStorageSessionCocoa.mm isSessionOwnedStorage(cookieStorage)
+grep  Source/WebKitLegacy/mac/WebView/WebView.mm processMemoryCeiling, 0.5, 0.65, std::nullopt, 10_s
+grep  Source/WebKitLegacy/mac/WebView/WebView.mm [WebStorageManager closeIdleLocalStorageDatabases];
+grep  Source/WebCore/platform/graphics/TextMeasurementCache.h #if !defined(WEBKIT_IOS6)
+grep  Source/WebCore/rendering/GlyphDisplayListCache.cpp #if !defined(WEBKIT_IOS6)
+grep  Source/WebCore/platform/graphics/ca/GraphicsLayerCA.cpp cMaxScaledTiledLayerMemorySize = 1024 * 1024 * 12
+grep  Source/WebCore/platform/graphics/ca/GraphicsLayerCA.cpp cMaxTotalBackdropFilterArea = 320 * 480 * 10
+grep  Source/WebCore/rendering/RenderLayerScrollableArea.cpp #elif PLATFORM(IOS_FAMILY) && ENABLE(WEBKIT_OVERFLOW_SCROLLING_CSS_PROPERTY)
+grep  Source/WebCore/page/MemoryRelease.cpp WTF::memoryFootprint() / 1048576.0 >= codeDeletionThresholdMegabytes()
+grep  Source/WebCore/platform/graphics/cg/ImageDecoderCG.cpp WEBKIT_IOS6_TRANSIENT_IMAGE_CACHE
+grep  Source/WebCore/platform/graphics/BitmapImageDescriptor.cpp #if !USE(CG) || defined(WEBKIT_IOS6)
+grep  Source/JavaScriptCore/runtime/OptionsList.h v(Unsigned, mediumHeapSize, WEBKIT_IOS6_MEDIUM_HEAP_SIZE
+grep  Source/WebCore/page/Quirks.cpp applicationNameMatchingFrozenVersion
+grep  Source/WebCore/platform/graphics/PixelBufferConversion.cpp convertImagePixelsAcrossSRGBAndLinearSRGB
+grep  Source/WebCore/platform/graphics/cg/ImageBufferCGBitmapBackend.cpp ImageBufferCGBitmapBackend::transformToColorSpace
+grep  Source/cmake/OptionsCocoa.cmake add_library(OpenGL::GLES INTERFACE IMPORTED)
+grep  Source/ThirdParty/ANGLE/PlatformIOS.cmake list(REMOVE_ITEM ANGLE_DEFINITIONS ANGLE_ENABLE_METAL)
+grep  Source/WebCore/dom/Document.cpp if (styleScope().blocksRenderingBeforeBody())
+grep  Source/WebCore/page/LocalFrameViewLayoutContext.cpp extern "C" int g_webkitIOS6PendingDrawWork;
+grep  Source/WebKitLegacy/mac/DOM/DOM.mm NSClassFromString(@"UIFont")
+grep  Source/JavaScriptCore/dfg/DFGCommon.cpp const PipelineTuning& pipelineTuning()
+grep  Source/JavaScriptCore/dfg/DFGSlowPathGenerator.h Vector<SilentRegisterSavePlan, silentRegisterSavePlanInlineCapacity> m_plans;
+grep  Source/WebCore/rendering/RenderBoxModelObjectInlines.h padding.isKnownZero() ? 0_lu
+grep  Source/WebCore/layout/formattingContexts/inline/InlineItemsBuilder.cpp textSpacingCanNotAffectWidth
+grep  Source/WebCore/layout/integration/flex/FlexIntegrationUtils.cpp flexItemHasPercentHeightDescendants(flexItem) && flexLayoutState().hasFlexItemCompletedLayout(flexItem)
+grep  Source/WebCore/css/parser/CSSTokenizerInputStream.h unsigned countWhile(Predicate predicate) const
+grep  Source/WebCore/css/parser/CSSParserFastPaths.cpp parseExactDecimal(characters)
+grep  Source/WebCore/css/CSSValuePool.cpp new (m_integerValues[i].get()) CSSPrimitiveValue(CSSValue::StaticCSSValue, i, CSSUnitType::Integer);
+grep  Source/WebCore/css/CSSValue.h first.ptr() == second.ptr() || first.get().equals(second)
+grep  Source/WebCore/animation/KeyframeEffectStack.cpp Vector<WeakPtr<KeyframeEffect>, 4> effectsSnapshot;
+grep  Source/JavaScriptCore/runtime/JSObject.cpp clearArray(storage->m_vector + vectorLength, availableVectorLength - vectorLength);
+
+# ---- preference defaults upstream's defaultValue rewrite silently reset ---
+pref  Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml SpeculationRulesPrefetchEnabled default: false
+pref  Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml InlineMediaPlaybackRequiresPlaysInlineAttribute defaultValue: false
 
 # ---- the WebKit1 API UIKit links by name ----------------------------------
 file  Source/WebKitLegacy/mac/WebView/WebView.mm
