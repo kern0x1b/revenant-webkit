@@ -7,6 +7,8 @@ import os
 
 class LibWebPConan(ConanFile):
     name = "libwebp"
+    user = "ios6"
+    channel = "stable"
     description = "WebP image codec"
     license = "BSD-3-Clause"
     homepage = "https://chromium.googlesource.com/webm/libwebp"

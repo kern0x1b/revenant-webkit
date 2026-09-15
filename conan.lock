@@ -1,20 +1,20 @@
 {
     "version": "0.5",
     "requires": [
-        "woff2/1.0.2#e78b7db944c84183b73e069c0803b3e4%1789475416.483598",
-        "openssl-ios6/3.0.15#8f9a97dc934e3a3d718bb301a5eb4af0%1789475082.764905",
-        "libxslt/1.1.43#183b5f58b57c133f08de8ca2ea19cdef%1789475985.830855",
-        "libwebp/1.4.0#e84cf43fd58353939abd3799eab6c6ca%1789474435.9999192",
-        "libpsl/0.23.3#0da464b80dc18cdcc9813a94f2bf209a%1789475580.364244",
-        "libcxx-armv7/21.1.0#84f2aa980238b4cac583a25b92663415%1789474936.4883661",
-        "icu/74.2#6a0c627016c92fac25a0cdbef065a447%1789474962.83049",
-        "brotli/1.1.0#3f631ef77008f7b5eb388780116371a3%1764862343.045"
+        "woff2/1.0.2@ios6/stable#96fac1c46134ae3ffaf8765e753a0764%1789481277.167691",
+        "openssl/3.0.15@ios6/stable#9644e9acfa94375549e5dffa144dd0e5%1789487267.576513",
+        "libxslt/1.1.43@ios6/stable#d11dda8fe26a506cefeae2a5defa2713%1789488778.159431",
+        "libwebp/1.4.0@ios6/stable#7d6f336ebc9845c730b3fb7d872776d9%1789481277.1308742",
+        "libpsl/0.23.3@ios6/stable#47307ae3ad7e5dccb2e52c20ba5ad9d3%1789488778.164918",
+        "libcxx/21.1.0@ios6/stable#9b197c7bb9254ed7e39e48d30059ff72%1789481277.162252",
+        "icu/74.2@ios6/stable#07cbe1abea35dd3985d43c6df7c6cf8a%1789486977.313092",
+        "brotli/1.1.0@ios6/stable#45087e5e9a848adf12951285469015db%1789481277.125658"
     ],
     "build_requires": [
-        "ld64-armv7/956.6#0c2467fd3af838a8f957a787b6b4f1ac%1789472158.0880058"
+        "ld64/956.6@ios6/stable#48d7c9b304979150b0aa94190670e63c%1789489782.5778718"
     ],
     "python_requires": [
-        "ios6-base/1.0#1f98415972e5480730de4ebeaeafe744%1789472595.271331"
+        "ios6-base/1.0@ios6/stable#f1e326174b2da6022688affcda0d222e%1789486977.2844312"
     ],
     "config_requires": []
 }

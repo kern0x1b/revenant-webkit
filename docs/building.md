@@ -4,8 +4,10 @@ Everything targets **armv7 with a 6.0 deployment target**, built with an **iOS 1
 SDK** — the newest SDK that still emits armv7 and still accepts that deployment
 target. Current clang compiles C++23 for a 2011 phone; only the SDK is old.
 
-Host requirements: Xcode's toolchain, `cmake`, `ninja`, `ldid` (ad-hoc signing),
-and [Theos](https://theos.dev) for the packages.
+Host requirements: `conan`, `cmake`, `ninja`, `ldid` (ad-hoc signing), a current
+`llvm`, and [Theos](https://theos.dev) for the SDK and the packages. Xcode is not
+needed and is not installed here - the Command Line Tools carry the compiler and
+its runtime, theos carries the SDK, and the linker is a package built from source.
 
 Theos keeps its SDKs in `$THEOS/sdks`, which is where every script looks by
 default. Point `IOS_SDK` somewhere else if yours lives elsewhere:
@@ -26,20 +28,55 @@ apply.
 
 ## 2. The libraries iOS 6 cannot supply
 
-Each script builds one dependency for armv7 into `third_party/`, and each is worth
-running alone when only it changed:
+They are declared, not scripted. `conanfile.py` names them and `conan.lock` pins
+the exact recipe and binary of each; `recipes/` holds the recipe for every one,
+and each names a git URL and a commit rather than vendoring a copy:
 
-| Script | Builds | Why the system copy will not do |
-| --- | --- | --- |
-| `scripts/build-libcxx.sh` | libc++, libc++abi | iOS 6 ships a 2012 libc++; C++23 needs a current one |
-| `scripts/build-icu.sh` | ICU | the system ICU predates WebKit's minimum, and text segmentation with it has no zero-width joiner |
-| `scripts/build-openssl.sh` | OpenSSL | TLS 1.2/1.3 and Web Crypto |
-| `scripts/build-libpsl.sh` | libpsl | public-suffix lookups this CFNetwork does not do |
-| `scripts/build-libwebp.sh` | libwebp | this ImageIO cannot decode WebP |
-| `scripts/build-libxslt.sh` | libxslt | XSLT |
-| `scripts/build-woff2.sh` | woff2 | web fonts in the format the web serves them |
-| `scripts/build-compat.sh` | `libios6compat.a` | the symbols this OS predates — see [compatibility.md](compatibility.md) |
-| `scripts/check-cacert.sh` | nothing — it verifies | the trust store the standalone application carries, against the hash this project reviewed; `--upstream` says whether curl serves the same extract today |
+| Package | Why the system copy will not do |
+| --- | --- |
+| `libcxx/21.1.0@ios6/stable` | iOS 6 ships a 2012 libc++; C++23 needs a current one |
+| `icu/74.2@ios6/stable` | the system ICU predates WebKit's minimum, and text segmentation with it has no zero-width joiner |
+| `openssl/3.0.15@ios6/stable` | TLS 1.2/1.3 and Web Crypto |
+| `libpsl/0.23.3@ios6/stable` | public-suffix lookups this CFNetwork does not do |
+| `libwebp/1.4.0@ios6/stable` | this ImageIO cannot decode WebP |
+| `libxslt/1.1.43@ios6/stable` | XSLT |
+| `woff2/1.0.2@ios6/stable` | web fonts in the format the web serves them |
+| `brotli/1.1.0@ios6/stable` | what woff2 decompresses with |
+
+`@ios6/stable` is not decoration. ConanCenter publishes packages under these
+same names, Conan asks remotes in the order they were registered, and a wrong
+order does not fail - it quietly builds against a recipe that cannot
+cross-compile for armv7. The namespace makes a bare `icu/74.2` unresolvable
+from these indexes, so a reference that forgets it is an error instead.
+
+Register the two indexes once, the toolchain's and this repository's:
+
+```sh
+conan config install <ios6-toolchain>/config
+conan ios6-remote ios6 <ios6-toolchain>
+conan ios6-remote revenant .
+```
+
+Every script that needs a library sources `scripts/deps.sh`, which runs `conan
+install` and loads `build/conan/ios6-deps.env`. That file is written by the
+`ios6-base` generator straight from the dependency graph - one
+`IOS6_HOST_<NAME>=path` line per library and `IOS6_BUILD_<NAME>=path` per build
+tool, so `IOS6_BUILD_LD64` is the linker - and it reads the same from a shell
+(`.`) and from make (`include`). No script names a version, an architecture or
+a folder layout; change a version in `conanfile.py` and everything follows.
+Building the engine builds whatever is missing and reuses whatever is not.
+
+`libios6compat.a` holds only this port's own stubs. It used to carry copies of
+OpenSSL's and libpsl's objects, and because it comes first on the link line
+those copies - not the packages - were what the engine actually linked. The
+engine now links both packages directly.
+
+Two pieces are still built by hand, because neither is a third-party library:
+
+| Script | Builds |
+| --- | --- |
+| `scripts/build-compat.sh` | `libios6compat.a` - the symbols this OS predates, see [compatibility.md](compatibility.md) |
+| `scripts/check-cacert.sh` | nothing - it verifies the trust store the standalone application carries against the hash this project reviewed; `--upstream` says whether curl serves the same extract today |
 
 ## 3. The engine
 
@@ -233,16 +270,17 @@ really about.
 clang emits those slots as local labels, so only hand-written assembly can
 produce one. OpenSSL's ARM generator does, for the capability word every
 NEON-dispatching module reads, and a single such object in an archive kills the
-link whether or not anything references it. `scripts/build-openssl.sh` patches
+link whether or not anything references it. The `openssl` recipe patches
 the generator - the ios32 branch of `$comm` in `crypto/perlasm/arm-xlate.pl` -
 to emit a plain data word instead. Same address, same label name, no GOT atom.
 Eight objects were affected; all of them link now, with the assembly kept.
 
 **Reach.** WebCore's `__text` is about 25MB. A Thumb branch reaches 16MB, and
 the call stubs are placed after all text, so code in the low third cannot reach
-a stub at all. This is not a regression to be waited out: the classic linker,
-ld64-956.6, fails identically, so no older Xcode fixes it. It is the port's own
-size finally crossing a hardware limit.
+a stub at all. Apple's current linker gives up there. ld64-956.6 does not: it
+inserts branch islands that bridge the distance, and it is what links the
+engine. It was once recorded here as failing the same way; that came from
+appending the test flags to the wrong command in a `&&` chain, and was wrong.
 
 Things that do not work, so nobody tries them twice: `-ld_classic` is ignored
 and the binary is gone; `-branch_island_region_size` governs island regions
@@ -256,14 +294,15 @@ outlive any macOS release:
 
 - the compiler: any recent LLVM, Homebrew's `llvm` is enough - `armv7-apple-ios6.0`
   is a supported target;
-- the linker and the binary utilities: `cctools-port` (cctools 1030.6.3,
-  ld64 956.6), which builds on macOS, supports armv7, reads `.tbd` stubs through
+- the linker: the `ld64` package from ios6-toolchain - ld64 956.6 built from
+  `cctools-port`, which supports armv7, reads `.tbd` stubs through
   `apple-libtapi`, and does LTO through the same LLVM;
 - the SDK: `iPhoneOS13.7.sdk`, which theos already carries and which has never
   depended on Xcode.
 
-Two snags when building those: `apple-libtapi` calls `get_darwin_linker_version`,
-a CMake helper its vendored LLVM does not ship, so guard the call and set
-`HOST_LINK_VERSION` by hand; and cctools' bundled `llvm-c/lto.h` wants headers
-from a newer LLVM, so configure it with `CPPFLAGS=-I$(brew --prefix llvm)/include`.
+The `ld64` recipe carries the two snags in building it: `apple-libtapi` calls
+`get_darwin_linker_version`, a CMake helper its vendored LLVM does not ship, so
+the call is guarded and `HOST_LINK_VERSION` set by hand; and cctools' bundled
+`llvm-c/lto.h` wants headers from a newer LLVM, so it is configured against
+Homebrew's.
 

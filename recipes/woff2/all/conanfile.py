@@ -7,6 +7,8 @@ import os
 
 class Woff2Conan(ConanFile):
     name = "woff2"
+    user = "ios6"
+    channel = "stable"
     description = "WOFF2 font decoder"
     license = "MIT"
     homepage = "https://github.com/google/woff2"
@@ -14,8 +16,8 @@ class Woff2Conan(ConanFile):
     settings = "os", "arch", "compiler", "build_type"
 
     def requirements(self):
-        self.requires("brotli/1.1.0", transitive_headers=True, transitive_libs=True)
-        self.requires("libcxx-armv7/21.1.0")
+        self.requires("brotli/1.1.0@ios6/stable", transitive_headers=True, transitive_libs=True)
+        self.requires("libcxx/21.1.0@ios6/stable")
 
     def layout(self):
         cmake_layout(self)
@@ -36,7 +38,7 @@ class Woff2Conan(ConanFile):
         tc.cache_variables["CANONICAL_PREFIXES"] = True
         tc.preprocessor_definitions["WOFF2_EXTERNAL_BROTLI"] = "1"
         tc.extra_cflags.append(f"-I{brotli.includedirs[0]}")
-        libcxx = self.dependencies["libcxx-armv7"].cpp_info
+        libcxx = self.dependencies["libcxx"].cpp_info
         tc.extra_cxxflags += [f"-I{brotli.includedirs[0]}", "-nostdinc++",
                               f"-isystem{libcxx.includedirs[0]}",
                               "-D_LIBCPP_DISABLE_AVAILABILITY"]

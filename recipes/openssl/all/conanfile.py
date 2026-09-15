@@ -5,8 +5,10 @@ from conan.tools.scm import Git
 import os
 
 
-class OpenSSLIos6Conan(ConanFile):
-    name = "openssl-ios6"
+class OpenSSLConan(ConanFile):
+    name = "openssl"
+    user = "ios6"
+    channel = "stable"
     description = "OpenSSL for armv7 / iOS 6, with the ARM assembly kept"
     license = "Apache-2.0"
     homepage = "https://www.openssl.org"
@@ -46,17 +48,17 @@ class OpenSSLIos6Conan(ConanFile):
         sdk = self.conf.get("tools.apple:sdk_path")
         target = f"{self.settings.arch}-apple-ios{self.settings.os.version}"
         xcrun = XCRun(self)
-        flags = f"-target {target} -isysroot {sdk} -O2 -DBROKEN_CLANG_ATOMICS"
         env = {
             "CC": xcrun.cc,
-            "CFLAGS": flags,
+            "CFLAGS": f"-target {target} -isysroot {sdk} -O2 -DBROKEN_CLANG_ATOMICS",
             "LDFLAGS": f"-target {target} -isysroot {sdk}",
+            "SOURCE_DATE_EPOCH": Git(self, self.source_folder).run("log -1 --format=%ct"),
         }
         with chdir(self, self.source_folder):
             exports = " ".join(f'{k}="{v}"' for k, v in env.items())
-            self.run(f"{exports} ./Configure ios-cross --prefix={self.package_folder}"
+            self.run(f"{exports} ./Configure ios-cross"
                      " no-shared no-tests no-ui-console no-engine no-async")
-            self.run(f"make -j{os.cpu_count()} build_libs")
+            self.run(f"{exports} make -j{os.cpu_count()} build_libs")
 
     def package(self):
         copy(self, "LICENSE.txt", self.source_folder, os.path.join(self.package_folder, "licenses"))

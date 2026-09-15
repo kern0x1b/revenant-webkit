@@ -1,7 +1,7 @@
 # Cross-compile modern WebKit trunk for armv7 / iOS 6.
-# libc\+\+ headers come from the current Xcode SDK because trunk needs C++23;
-# the C library and frameworks come from the iOS 10.3 SDK, which still ships
-# armv7 slices and accepts a 6.0 deployment target.
+# libc++ headers come from the libcxx package because trunk needs C++23; the C
+# library and frameworks come from the iOS 13.7 SDK, which still ships armv7
+# slices and accepts a 6.0 deployment target.
 set(CMAKE_SYSTEM_NAME Darwin)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 # The SDK is remembered in the cache, not read from the environment each time.
@@ -23,7 +23,7 @@ set(CMAKE_OSX_ARCHITECTURES armv7)
 set(CMAKE_OSX_DEPLOYMENT_TARGET 6.0)
 # Xcode is not required to build this port: the Command Line Tools carry the
 # same clang and the same compiler-rt, theos carries the SDK, and the linker
-# and binary utilities are built by scripts/build-linker.sh. DEVELOPER_DIR
+# comes from the ld64 package. DEVELOPER_DIR
 # selects which of the two is used; whichever it is, the compilers live in one
 # of these two places.
 if (DEFINED ENV{DEVELOPER_DIR})
@@ -41,10 +41,12 @@ set(CMAKE_C_COMPILER ${TOOLCHAIN_BIN}/clang)
 set(CMAKE_CXX_COMPILER ${TOOLCHAIN_BIN}/clang++)
 
 set(SDK6 ${IOS6_SDK})
-set(CXX21 ${CMAKE_CURRENT_LIST_DIR}/../third_party/libcxx-armv7/include/c++/v1)
+if (WEBKIT_IOS6_LIBCXX_DIR)
+    set(CXX21 "-isystem ${WEBKIT_IOS6_LIBCXX_DIR}/include/c++/v1")
+endif ()
 set(COMMON "-target armv7-apple-ios6.0 -isysroot ${SDK6}")
 set(CMAKE_C_FLAGS_INIT "${COMMON} -DWEBKIT_IOS6_NO_READLINE")
-set(CMAKE_CXX_FLAGS_INIT "${COMMON} -nostdinc++ -isystem ${CXX21} -D_LIBCPP_DISABLE_AVAILABILITY -DWEBKIT_IOS6_NO_READLINE")
+set(CMAKE_CXX_FLAGS_INIT "${COMMON} -nostdinc++ ${CXX21} -D_LIBCPP_DISABLE_AVAILABILITY -DWEBKIT_IOS6_NO_READLINE")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "${COMMON}")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${COMMON}")
 

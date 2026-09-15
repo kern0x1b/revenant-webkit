@@ -21,9 +21,9 @@ export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"
 
 There is no single build script; run the step that changed (they are slow):
 
-- the libraries iOS 6 predates: `scripts/build-libcxx.sh`, `build-icu.sh`,
-  `build-openssl.sh`, `build-libpsl.sh`, `build-libwebp.sh`, `build-libxslt.sh`,
-  `build-woff2.sh`
+- the libraries iOS 6 predates: declared in `conanfile.py`, pinned in
+  `conan.lock`, built from the recipes in `recipes/`. `configure-engine.sh` runs
+  `conan install` itself, so there is nothing to run by hand.
 - `scripts/build-compat.sh` → `libios6compat.a`
 - `scripts/configure-engine.sh` then `ninja -C build-254-lto`
 

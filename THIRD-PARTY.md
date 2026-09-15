@@ -1,10 +1,10 @@
 # Third-party code, and where each piece stands
 
 This repository contains no third-party source. Every dependency below is
-fetched from its own upstream by a script in `scripts/`, into `third_party/`,
-which is not tracked here. The engine is a git submodule pointing at a fork of
-WebKit, so its code and its licenses live in that repository rather than this
-one.
+declared in `conanfile.py`, pinned in `conan.lock`, and built by a recipe that
+names the upstream git commit it fetches; nothing is vendored. The engine is a
+git submodule pointing at a fork of WebKit, so its code and its licenses live in
+that repository rather than this one.
 
 The point of this file is that a reader can tell, without building anything,
 exactly what this project links against and under what terms.
@@ -18,20 +18,36 @@ exactly what this project links against and under what terms.
 
 ## Libraries this operating system cannot supply
 
-Each is downloaded by the script named beside it, at the version named beside
-it, and built for armv7. None is redistributed here.
+Each is fetched by the recipe named beside it, at the version named beside it,
+and built for armv7. Each package carries its upstream license file under
+`licenses/`. None is redistributed here.
 
 | Component | Version | License | Fetched by |
 | --- | --- | --- | --- |
-| libc++, libc++abi, libunwind | llvm-project checkout | Apache-2.0 with the LLVM exception | `scripts/build-libcxx.sh` |
-| ICU | 74.2 | Unicode license (ICU) | `scripts/build-icu.sh` |
-| OpenSSL | 3.0.15 | Apache-2.0 | `scripts/build-openssl.sh` |
-| libpsl | 0.23.3 | MIT; the Public Suffix List data it carries is MPL-2.0 | `scripts/build-libpsl.sh` |
-| libwebp | 1.4.0 | BSD-3-Clause | `scripts/build-libwebp.sh` |
-| libxslt | 1.1.43 | MIT | `scripts/build-libxslt.sh` |
-| woff2 | 1.0.2 | MIT | `scripts/build-woff2.sh` |
-| brotli | 1.1.0 | MIT | `scripts/build-woff2.sh` |
+| libc++, libc++abi | 21.1.0 | Apache-2.0 with the LLVM exception | `libcxx` recipe (ios6-toolchain) |
+| ICU | 74.2 | Unicode license (ICU) | `recipes/icu` |
+| OpenSSL | 3.0.15 | Apache-2.0 | `recipes/openssl` |
+| libpsl | 0.23.3 | MIT; the Public Suffix List data it carries is MPL-2.0 | `recipes/libpsl` |
+| libwebp | 1.4.0 | BSD-3-Clause | `recipes/libwebp` |
+| libxslt | 1.1.43 | MIT | `recipes/libxslt` |
+| woff2 | 1.0.2 | MIT | `recipes/woff2` |
+| brotli | 1.1.0 | MIT | `recipes/brotli` |
 | wasm3 | checkout under `third_party/wasm3` | MIT | cloned; `packaging/compat/Makefile` builds it |
+
+## Tools that build it
+
+These run on the build machine and are linked into nothing that reaches the
+phone.
+
+| Component | Version | License | Fetched by |
+| --- | --- | --- | --- |
+| ld64, from cctools-port | 956.6 | Apple Public Source License 2.0, `cctools/ld64/APPLE_LICENSE` | `ld64` recipe (ios6-toolchain) |
+| apple-libtapi, which ld64 loads to read the SDK's `.tbd` stubs | as pinned in the recipe | Apache-2.0 with the LLVM exception (`src/LICENSE.txt`), plus the University of Illinois/NCSA licenses its tapi and LLVM parts carry | `ld64` recipe (ios6-toolchain) |
+
+The `ld64` package holds the linker, `libtapi.dylib` and those license files,
+and nothing else. cctools-port builds a whole toolchain beside the linker - its
+assembler among it, which is GPL-2.0 - but none of that is used here, so none of
+it is packaged.
 
 ## The one third-party file that is in this repository
 

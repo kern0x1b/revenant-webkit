@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -eu
-P=$(cd "$(dirname "$0")/.." && pwd); L=$P/third_party/libcxx-armv7; I=$P/third_party/icu-armv7; X=$P/third_party/libxslt-armv7; SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
+P=$(cd "$(dirname "$0")/.." && pwd)
+. "$P/scripts/deps.sh"
+L=$IOS6_HOST_LIBCXX; I=$IOS6_HOST_ICU; X=$IOS6_HOST_LIBXSLT; O=$IOS6_HOST_OPENSSL; PSL=$IOS6_HOST_LIBPSL
+LDDIR=$IOS6_BUILD_LD64/bin
 S=$P/webkit-254; B=$P/build-254-rev
 CXXF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -nostdinc++ -isystem $L/include/c++/v1 -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_dispatch_compat.h -include $P/compat/stubs/ios6_class_prefix.h -D_LIBCPP_DISABLE_AVAILABILITY -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
 CF="-flto=thin -mllvm -hot-cold-split=false -target armv7-apple-ios6.0 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=neon -isysroot $SDK -isystem $X/include -isystem $P/compat/stubs -include $P/compat/stubs/ios6_class_prefix.h -DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
@@ -10,10 +13,13 @@ python3 $P/tools/prefix-exports.py $P/compat/stubs/ios6_class_prefix.h \
 
 rm -rf $B && mkdir -p $B
 cmake -S $S -B $B -G Ninja \
+  -DCMAKE_MAKE_PROGRAM=$(command -v ninja) \
+  -DCMAKE_OSX_SYSROOT=$SDK \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
   -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
   -DCMAKE_TOOLCHAIN_FILE=$P/scripts/ios6-armv7-trunk.cmake \
   -DPORT=IOS -DCMAKE_BUILD_TYPE=Release -DDEVELOPER_MODE=OFF \
+  -DWEBKIT_IOS6_CRYPTO_LIB=$O/lib/libcrypto.a \
   -DSWIFT_REQUIRED=OFF -DWEBKIT_IOS6_COMPAT_LIB=$P/compat/libios6compat.a -DWEBKIT_IOS6_EXPORTS=$P/compat/WebKitLegacy-iOS-rev.exp -DWEBKIT_IOS6_LIBCXX_DIR=$L -DWEBKIT_NO_AVAILABILITY_OVERLAY=ON \
   -DENABLE_WEBKIT_LEGACY=ON -DENABLE_WEBKIT=OFF \
   -DENABLE_TOUCH_EVENTS=ON -DENABLE_IOS_TOUCH_EVENTS=OFF \
@@ -34,7 +40,9 @@ cmake -S $S -B $B -G Ninja \
   -DENABLE_IMAGE_DIFF=OFF \
   -DICU_UC_LIBRARY=$I/lib/libicuuc.a -DICU_I18N_LIBRARY=$I/lib/libicui18n.a \
   -DICU_DATA_LIBRARY=$I/lib/libicudata.a -DICU_INCLUDE_DIR=$I/include \
-  -DCMAKE_SHARED_LINKER_FLAGS="-flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0 -L$X/lib" \
+  -DCMAKE_SHARED_LINKER_FLAGS="-B$LDDIR -flto=thin -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0 -L$X/lib -L$PSL/lib -lpsl" \
+  -DCMAKE_EXE_LINKER_FLAGS="-B$LDDIR -L$PSL/lib -lpsl -Wl,-rpath,@executable_path/Frameworks" \
+  -DCMAKE_MODULE_LINKER_FLAGS="-B$LDDIR -L$PSL/lib -lpsl" \
   -DCMAKE_CXX_FLAGS="$CXXF" -DCMAKE_C_FLAGS="$CF" \
   -DCMAKE_OBJCXX_FLAGS="$CXXF -DWEBKIT_IOS6_OBJC_EXTRAS" -DCMAKE_OBJC_FLAGS="$CF -DWEBKIT_IOS6_OBJC_EXTRAS" \
   -DBROWSERENGINECORE_LIBRARY=BROWSERENGINECORE_LIBRARY-NOTFOUND \

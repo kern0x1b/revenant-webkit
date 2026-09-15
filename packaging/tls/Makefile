@@ -1,11 +1,18 @@
 # rev-TLS.dylib - the TLS this substitution speaks. The loader inserts it, so it
 # secures every https connection the browser makes; app/tls-openssl.c records why
 # the system's own TLS is not enough on this release. OpenSSL is linked in
-# statically from third_party/openssl-armv7.
-include $(dir $(lastword $(MAKEFILE_LIST)))../common.mk
+# statically from the openssl package.
+TLS_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
+include $(TLS_DIR)../common.mk
 include $(THEOS)/makefiles/common.mk
 
-OPENSSL = ../../third_party/openssl-armv7
+IOS6_DEPS := $(TLS_DIR)../../build/conan/ios6-deps.env
+ifeq ($(wildcard $(IOS6_DEPS)),)
+$(error $(IOS6_DEPS) is missing. Run scripts/configure-engine.sh, or bash scripts/deps.sh)
+endif
+include $(IOS6_DEPS)
+
+OPENSSL = $(IOS6_HOST_OPENSSL)
 
 LIBRARY_NAME = rev-TLS
 rev-TLS_FILES = ../../app/tls-openssl.c

@@ -8,6 +8,8 @@ import os
 
 class LibXsltConan(ConanFile):
     name = "libxslt"
+    user = "ios6"
+    channel = "stable"
     description = "XSLT and EXSLT, built against the libxml2 the SDK already ships"
     license = "MIT"
     homepage = "https://gitlab.gnome.org/GNOME/libxslt"

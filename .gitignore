@@ -5,12 +5,12 @@ webkit-603/
 webkit-trunk/
 webkit-trunk-jit/
 
-# Dependencies built from source by the build-*.sh scripts.
+# Sources cloned outside the package graph, such as wasm3.
 third_party
 third_party/
 
-# Build trees. Every one of these is reproducible from configure-*.sh plus
-# build-*.sh, and together they are several gigabytes.
+# Build trees. Every one of these is reproducible from configure-*.sh and the
+# packages it installs, and together they are several gigabytes.
 /build/
 build-254*/
 build-cocoa/

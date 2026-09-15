@@ -7,6 +7,8 @@ import os
 
 class BrotliConan(ConanFile):
     name = "brotli"
+    user = "ios6"
+    channel = "stable"
     description = "Brotli compression format"
     license = "MIT"
     homepage = "https://github.com/google/brotli"

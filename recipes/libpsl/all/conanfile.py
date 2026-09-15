@@ -8,6 +8,8 @@ import os
 
 class LibPslConan(ConanFile):
     name = "libpsl"
+    user = "ios6"
+    channel = "stable"
     description = "Public Suffix List library"
     license = "MIT"
     homepage = "https://github.com/rockdaboot/libpsl"
@@ -33,13 +35,17 @@ class LibPslConan(ConanFile):
         with chdir(self, self.source_folder):
             self.run("./autogen.sh" if os.path.exists(
                 os.path.join(self.source_folder, "autogen.sh")) else "true")
+        suffixes = os.path.join(self.source_folder, "list", "public_suffix_list.dat")
+        committed = int(Git(self, os.path.dirname(suffixes)).run(
+            "log -1 --format=%ct -- public_suffix_list.dat"))
+        os.utime(suffixes, (committed, committed))
         autotools = Autotools(self)
         autotools.configure()
         autotools.make()
 
     def package(self):
         copy(self, "COPYING", self.source_folder, os.path.join(self.package_folder, "licenses"))
-        copy(self, "libpsl.h", os.path.join(self.source_folder, "include"),
+        copy(self, "libpsl.h", os.path.join(self.build_folder, "include"),
              os.path.join(self.package_folder, "include"))
         copy(self, "*.a", self.build_folder, os.path.join(self.package_folder, "lib"), keep_path=False)
 

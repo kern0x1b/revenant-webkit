@@ -2,15 +2,17 @@
 
 Run before every deploy: `tests/run-tests.sh`
 
-    tests/run-tests.sh host      ICU data checks on this Mac, a few seconds
+    tests/run-tests.sh host      ICU data checks on this Mac, seconds once ICU is built
     tests/run-tests.sh device    JavaScript batteries under jsc on the iPhone
     tests/run-tests.sh all       both (default)
 
 ## host
 
 `icu-sanity` opens the resource bundles, the time zone enumeration and every
-character encoding the engine hands to ICU, against the trimmed data package in
-`third_party/icu/source/data/in/icudt74l.dat`.
+character encoding the engine hands to ICU, against the same trimmed data the
+phone ships. `tests/host/conanfile.py` asks for the `icu` package that
+`conan.lock` pins and builds it for this Mac with the recipe's own data filter,
+so the first run builds ICU once and every later run reuses it.
 
 The encoding list is not maintained by hand. `gen-required-encodings.sh` reads
 it out of `TextCodecICU.cpp`, so it tracks the engine: everything else is
@@ -33,7 +35,8 @@ The same fault takes two seconds to find here.
 ## device
 
 `tests/js/*.js` run under `jsc` on the phone with the freshly built engine.
-The runner syncs `jsc` and any framework whose size differs, so the batteries
+The engine comes from `ENGINE_BUILD`, `build-254-lto` unless set. The runner
+syncs `jsc` and any framework whose size differs, so the batteries
 never run against a stale engine, and it pins the connection to the iPhone's
 UDID through iproxy so a connected iPad cannot answer instead.
 

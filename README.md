@@ -142,7 +142,7 @@ sequence, and why each piece exists, is in **[docs/building.md](docs/building.md
 
 | Step | Builds |
 | --- | --- |
-| `scripts/build-libcxx.sh`, `build-icu.sh`, `build-openssl.sh`, `build-libpsl.sh`, `build-libwebp.sh`, `build-libxslt.sh`, `build-woff2.sh` | the libraries iOS 6 predates |
+| `conanfile.py`, `conan.lock`, `recipes/` | the libraries iOS 6 predates, declared and pinned rather than scripted |
 | `scripts/build-compat.sh` | `libios6compat.a`, the symbols iOS 6 lacks |
 | `scripts/configure-engine.sh` then `ninja -C build-254-lto` | the engine |
 

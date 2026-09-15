@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -eu
 P=$(cd "$(dirname "$0")/.." && pwd)
+. "$P/scripts/deps.sh"
 B=$P/build-254-rev
-SDK=${IOS_SDK:-${THEOS:-$HOME/theos}/sdks/iPhoneOS13.7.sdk}
 TC=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain
 [ -x "$TC/usr/bin/clang" ] || TC=$(xcode-select -p)
 
@@ -20,8 +20,8 @@ rm -rf "$APP" && mkdir -p "$APP/Frameworks"
     -Wl,-rpath,@executable_path/Frameworks -Wl,-dead_strip \
     "$P/app/rev-webview-host.m" "$P/app/ModernTLSURLProtocol.m" \
     "$P/app/WebKitUIKitDelegate.m" \
-    -I"$P/third_party/openssl-armv7/include" \
-    "$P/third_party/openssl-armv7/lib/libssl.a" "$P/third_party/openssl-armv7/lib/libcrypto.a" -lz \
+    -I"$IOS6_HOST_OPENSSL/include" \
+    "$IOS6_HOST_OPENSSL/lib/libssl.a" "$IOS6_HOST_OPENSSL/lib/libcrypto.a" -lz \
     -o "$APP/$APP_NAME"
 
 for fw in JavaScriptCore WebCore WebKitLegacy; do
@@ -29,7 +29,7 @@ for fw in JavaScriptCore WebCore WebKitLegacy; do
 done
 for lib in libc++.1.0.dylib libc++abi.1.0.dylib; do
     base=$(echo "$lib" | sed "s/\.1\.0\./.1./")
-    cp "$P/third_party/libcxx-armv7/lib/$lib" "$APP/Frameworks/$base"
+    cp "$IOS6_HOST_LIBCXX/lib/$lib" "$APP/Frameworks/$base"
 done
 
 SYS_JSC=/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore
