@@ -17,7 +17,7 @@ class Woff2Conan(ConanFile):
 
     def requirements(self):
         self.requires("brotli/1.1.0@ios6/stable", transitive_headers=True, transitive_libs=True)
-        self.requires("libcxx/21.1.0@ios6/stable")
+        self.requires("libcxx/21.1.0@ios6/stable", transitive_headers=True, transitive_libs=True)
 
     def layout(self):
         cmake_layout(self)
