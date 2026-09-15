@@ -1,22 +1,22 @@
 {
     "version": "0.5",
     "requires": [
-        "woff2/1.0.2@ios6/stable#c2bfc53c328e7970d17a6b20b988ecd3%1789507194.204066",
-        "wasm3/cci.20260905@ios6/stable#c5b68df366499bb68f12e1b2e51db0ae%1789507194.4204748",
-        "openssl/3.0.15@ios6/stable#9644e9acfa94375549e5dffa144dd0e5%1789487267.576513",
-        "libxslt/1.1.45@ios6/stable#ace9ea98977a9d92430e96856ae772de%1789507193.898828",
-        "libxml2/2.15.4@ios6/stable#abf34c10a27e85c21454f8ee9a341042%1789507193.3684108",
-        "libwebp/1.4.0@ios6/stable#7d6f336ebc9845c730b3fb7d872776d9%1789481277.1308742",
-        "libpsl/0.23.3@ios6/stable#47307ae3ad7e5dccb2e52c20ba5ad9d3%1789488778.164918",
-        "libcxx/21.1.0@ios6/stable#6a219db9cec1f643371607f85abfd39b%1789507193.664792",
-        "icu/74.2@ios6/stable#3c48c678c6c43d7a817c41818356fde8%1789507193.518069",
-        "brotli/1.1.0@ios6/stable#45087e5e9a848adf12951285469015db%1789481277.125658"
+        "woff2/1.0.2@revenant/stable#f4d583f4620e1f787d4878d477a2db49%1789509752.051264",
+        "wasm3/cci.20260905@revenant/stable#f2727ca4b9b013ce5d058a636146626d%1789509752.209435",
+        "openssl/3.0.15@revenant/stable#b03fdf6d71ae67d3433786fa7b61d8f4%1789509750.868754",
+        "libxslt/1.1.45@revenant/stable#a5285c798b70a95c570931e3bde5d8c2%1789509751.703255",
+        "libxml2/2.15.4@revenant/stable#8580afb20610ee7482ba957dbd2f1874%1789509751.360856",
+        "libwebp/1.4.0@revenant/stable#32b9069334e095af257fb107ac4b7e99%1789509751.211023",
+        "libpsl/0.23.3@revenant/stable#b70e7ebc199977d9c97dc0ae10999db7%1789509751.8934631",
+        "libcxx/21.1.0@ios6/stable#6a219db9cec1f643371607f85abfd39b%1789509751.675828",
+        "icu/74.2@revenant/stable#899cdef8e1e53b54f808fcd3a1df9704%1789509751.5190341",
+        "brotli/1.1.0@revenant/stable#3d7ab81f4b1a60b303545f138cc4bec4%1789509751.058458"
     ],
     "build_requires": [
-        "ld64/956.6@ios6/stable#48d7c9b304979150b0aa94190670e63c%1789489782.5778718"
+        "ld64/956.6@ios6/stable#48d7c9b304979150b0aa94190670e63c%1789509751.026528"
     ],
     "python_requires": [
-        "ios6-base/1.0@ios6/stable#3e7c954814bf9876fdf57ac5940590bd%1789503721.840698"
+        "ios6-base/1.0@ios6/stable#3e7c954814bf9876fdf57ac5940590bd%1789509750.609118"
     ],
     "config_requires": []
 }

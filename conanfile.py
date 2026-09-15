@@ -37,16 +37,16 @@ class RevenantWebKit(ConanFile):
     _webcore_left_out = ("WebCore", "Headers", "PrivateHeaders", "Modules", "_CodeSignature")
 
     def requirements(self):
-        self.requires("openssl/3.0.15@ios6/stable")
-        self.requires("brotli/1.1.0@ios6/stable")
-        self.requires("libwebp/1.4.0@ios6/stable")
-        self.requires("libxml2/2.15.4@ios6/stable")
-        self.requires("libxslt/1.1.45@ios6/stable")
-        self.requires("libpsl/0.23.3@ios6/stable")
-        self.requires("icu/74.2@ios6/stable")
-        self.requires("woff2/1.0.2@ios6/stable")
+        self.requires("openssl/3.0.15@revenant/stable")
+        self.requires("brotli/1.1.0@revenant/stable")
+        self.requires("libwebp/1.4.0@revenant/stable")
+        self.requires("libxml2/2.15.4@revenant/stable")
+        self.requires("libxslt/1.1.45@revenant/stable")
+        self.requires("libpsl/0.23.3@revenant/stable")
+        self.requires("icu/74.2@revenant/stable")
+        self.requires("woff2/1.0.2@revenant/stable")
         self.requires("libcxx/21.1.0@ios6/stable")
-        self.requires("wasm3/cci.20260905@ios6/stable")
+        self.requires("wasm3/cci.20260905@revenant/stable")
 
     def layout(self):
         variant = "prefixed" if self.options.prefixed else "system"

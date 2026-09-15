@@ -7,7 +7,7 @@ import os
 
 class LibXml2Conan(ConanFile):
     name = "libxml2"
-    user = "ios6"
+    user = "revenant"
     channel = "stable"
     description = "XML parser and toolkit, linked into the engine instead of the 2010 copy iOS 6 ships"
     license = "MIT"
@@ -20,7 +20,7 @@ class LibXml2Conan(ConanFile):
         self.settings.rm_safe("compiler.libcxx")
 
     def requirements(self):
-        self.requires("icu/74.2@ios6/stable")
+        self.requires("icu/74.2@revenant/stable")
 
     def layout(self):
         cmake_layout(self, src_folder="src")

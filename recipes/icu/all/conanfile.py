@@ -9,7 +9,7 @@ import json
 
 class IcuConan(ConanFile):
     name = "icu"
-    user = "ios6"
+    user = "revenant"
     channel = "stable"
     description = "ICU for armv7 / iOS 6, and for the Mac that tests its data"
     license = "Unicode-3.0"

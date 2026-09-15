@@ -7,7 +7,7 @@ import os
 
 class Woff2Conan(ConanFile):
     name = "woff2"
-    user = "ios6"
+    user = "revenant"
     channel = "stable"
     description = "WOFF2 font decoder"
     license = "MIT"
@@ -16,7 +16,7 @@ class Woff2Conan(ConanFile):
     settings = "os", "arch", "compiler", "build_type"
 
     def requirements(self):
-        self.requires("brotli/1.1.0@ios6/stable", transitive_headers=True, transitive_libs=True)
+        self.requires("brotli/1.1.0@revenant/stable", transitive_headers=True, transitive_libs=True)
         self.requires("libcxx/21.1.0@ios6/stable", transitive_headers=True, transitive_libs=True)
 
     def layout(self):

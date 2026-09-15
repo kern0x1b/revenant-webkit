@@ -7,7 +7,7 @@ import os
 
 class LibWebPConan(ConanFile):
     name = "libwebp"
-    user = "ios6"
+    user = "revenant"
     channel = "stable"
     description = "WebP image codec"
     license = "BSD-3-Clause"

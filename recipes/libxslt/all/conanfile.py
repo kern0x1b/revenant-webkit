@@ -7,7 +7,7 @@ import os
 
 class LibXsltConan(ConanFile):
     name = "libxslt"
-    user = "ios6"
+    user = "revenant"
     channel = "stable"
     description = "XSLT and EXSLT, built against the libxml2 package"
     license = "MIT"
@@ -20,7 +20,7 @@ class LibXsltConan(ConanFile):
         self.settings.rm_safe("compiler.libcxx")
 
     def requirements(self):
-        self.requires("libxml2/2.15.4@ios6/stable", transitive_headers=True)
+        self.requires("libxml2/2.15.4@revenant/stable", transitive_headers=True)
 
     def layout(self):
         cmake_layout(self, src_folder="src")

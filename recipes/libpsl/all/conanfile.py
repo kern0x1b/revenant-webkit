@@ -8,7 +8,7 @@ import os
 
 class LibPslConan(ConanFile):
     name = "libpsl"
-    user = "ios6"
+    user = "revenant"
     channel = "stable"
     description = "Public Suffix List library"
     license = "MIT"

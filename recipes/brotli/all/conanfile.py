@@ -7,7 +7,7 @@ import os
 
 class BrotliConan(ConanFile):
     name = "brotli"
-    user = "ios6"
+    user = "revenant"
     channel = "stable"
     description = "Brotli compression format"
     license = "MIT"

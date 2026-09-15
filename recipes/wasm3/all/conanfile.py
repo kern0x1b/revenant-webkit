@@ -7,7 +7,7 @@ import os
 
 class Wasm3Conan(ConanFile):
     name = "wasm3"
-    user = "ios6"
+    user = "revenant"
     channel = "stable"
     description = "WebAssembly interpreter"
     license = "MIT"

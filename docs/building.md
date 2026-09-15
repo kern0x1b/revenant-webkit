@@ -35,20 +35,25 @@ and each names a git URL and a commit rather than vendoring a copy:
 | Package | Why the system copy will not do |
 | --- | --- |
 | `libcxx/21.1.0@ios6/stable` | iOS 6 ships a 2012 libc++; C++23 needs a current one |
-| `icu/74.2@ios6/stable` | the system ICU predates WebKit's minimum, and text segmentation with it has no zero-width joiner |
-| `openssl/3.0.15@ios6/stable` | TLS 1.2/1.3 and Web Crypto |
-| `libpsl/0.23.3@ios6/stable` | public-suffix lookups this CFNetwork does not do |
-| `libwebp/1.4.0@ios6/stable` | this ImageIO cannot decode WebP |
-| `libxml2/2.15.4@ios6/stable` | the system copy is 2.7.8 from 2010, older than the API libxslt and the SDK headers expect |
-| `libxslt/1.1.45@ios6/stable` | XSLT; the SDK has no libxslt headers or armv7 library |
-| `woff2/1.0.2@ios6/stable` | web fonts in the format the web serves them |
-| `brotli/1.1.0@ios6/stable` | what woff2 decompresses with |
+| `icu/74.2@revenant/stable` | the system ICU predates WebKit's minimum, and text segmentation with it has no zero-width joiner |
+| `openssl/3.0.15@revenant/stable` | TLS 1.2/1.3 and Web Crypto |
+| `libpsl/0.23.3@revenant/stable` | public-suffix lookups this CFNetwork does not do |
+| `libwebp/1.4.0@revenant/stable` | this ImageIO cannot decode WebP |
+| `libxml2/2.15.4@revenant/stable` | the system copy is 2.7.8 from 2010, older than the API libxslt and the SDK headers expect |
+| `libxslt/1.1.45@revenant/stable` | XSLT; the SDK has no libxslt headers or armv7 library |
+| `woff2/1.0.2@revenant/stable` | web fonts in the format the web serves them |
+| `brotli/1.1.0@revenant/stable` | what woff2 decompresses with |
 
-`@ios6/stable` is not decoration. ConanCenter publishes packages under these
-same names, Conan asks remotes in the order they were registered, and a wrong
-order does not fail - it quietly builds against a recipe that cannot
+The user and channel are not decoration. ConanCenter publishes packages under
+these same names, Conan asks remotes in the order they were registered, and a
+wrong order does not fail - it quietly builds against a recipe that cannot
 cross-compile for armv7. The namespace makes a bare `icu/74.2` unresolvable
 from these indexes, so a reference that forgets it is an error instead.
+
+`@ios6/stable` belongs to what ios6-toolchain serves and every port shares.
+The libraries this port builds for itself are `@revenant/stable`: another port
+on the same machine builds its own OpenSSL with its own choices, and two recipes
+behind one reference overwrite each other's packages in the shared cache.
 
 The target comes from ios6-toolchain's shared `ios6-armv7` profile, which says
 only what is true of armv7 on iOS 6. What is this port's own - C++23, and

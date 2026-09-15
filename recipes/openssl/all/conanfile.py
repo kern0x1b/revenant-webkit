@@ -7,7 +7,7 @@ import os
 
 class OpenSSLConan(ConanFile):
     name = "openssl"
-    user = "ios6"
+    user = "revenant"
     channel = "stable"
     description = "OpenSSL for armv7 / iOS 6, with the ARM assembly kept"
     license = "Apache-2.0"
