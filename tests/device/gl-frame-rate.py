@@ -3,6 +3,7 @@
 
     tests/device/gl-frame-rate.py [HOST]
 """
+import argparse
 import os
 import sys
 import time
@@ -12,8 +13,10 @@ import harness
 device = harness.device
 
 
-def main(argv):
-    host = argv[0] if argv and argv[0] else harness.host_address()
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("host", nargs="?", help="address the phone reaches this Mac on; default: this Mac's en0")
+    host = parser.parse_args().host or harness.host_address()
     port = int(os.environ.get("TEST_PORT") or 8899)
 
     with harness.PageServer(port) as server:
@@ -28,4 +31,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

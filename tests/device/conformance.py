@@ -4,6 +4,7 @@
     tests/device/conformance.py conformance/rendering/culling.html [more...]
     WEBGL_TESTS=/path/to/sdk/tests HOST_IP=... TEST_PORT=8905 tests/device/conformance.py ...
 """
+import argparse
 import os
 import shutil
 import sys
@@ -15,18 +16,22 @@ import harness
 device = harness.device
 
 
-def main(argv):
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("tests", nargs="*", help="test pages relative to the suite, e.g. conformance/rendering/culling.html")
+    names = parser.parse_args().tests
+
     tests_root = Path(os.environ.get("WEBGL_TESTS") or str(Path.home() / "Git/tools/webgl-conformance/sdk/tests"))
     if not (tests_root / "conformance").is_dir():
         print(f"no conformance suite at {tests_root} - see the header of this script", file=sys.stderr)
         return 2
-    if not argv:
+    if not names:
         print("name at least one test, e.g. conformance/rendering/culling.html", file=sys.stderr)
         return 2
 
     host = os.environ.get("HOST_IP") or harness.host_address()
     port = int(os.environ.get("TEST_PORT") or 8905)
-    tests = ",".join(argv)
+    tests = ",".join(names)
 
     runner = tests_root / "conformance-runner.html"
     shutil.copy(str(harness.TESTS / "conformance-runner.html"), str(runner))
@@ -47,4 +52,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())
