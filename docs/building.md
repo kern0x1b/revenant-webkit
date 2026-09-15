@@ -13,6 +13,11 @@ and `strip`, `otool`, `nm` and `install_name_tool` are found through them. The
 Python that runs WebKit's generators and the check scripts is the one Conan runs
 in; nothing is taken from `PATH`.
 
+The first build of `ld64` on a machine also needs an LLVM, because cctools'
+configure runs `llvm-config` to find `libLTO`; ios6-toolchain reads the path
+from `LLVM_PREFIX` once, so `export LLVM_PREFIX="$(brew --prefix llvm)"` before
+it. Afterwards the package is in the Conan cache and nothing asks again.
+
 The SDK reaches the build as `tools.apple:sdk_path`, which ios6-toolchain's
 `ios6-armv7` profile sets from `IOS_SDK`, or `~/theos/sdks/iPhoneOS13.7.sdk`
 when that is unset. Only an SDK somewhere else needs the variable:
