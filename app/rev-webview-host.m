@@ -93,7 +93,10 @@ static NSString *startPage(void)
         encoding:NSUTF8StringEncoding error:NULL];
     configured = [configured stringByTrimmingCharactersInSet:
         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    return [configured length] ? configured : @"https://example.com/";
+    if ([configured length])
+        return configured;
+    NSString *bundled = [[NSBundle mainBundle] pathForResource:@"start" ofType:@"html"];
+    return bundled ? [[NSURL fileURLWithPath:bundled] absoluteString] : @"about:blank";
 }
 
 @interface WebContentScrollView : UIScrollView

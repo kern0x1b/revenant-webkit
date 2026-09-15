@@ -254,9 +254,15 @@ class RevenantWebKit(ConanFile):
         self.run(command, stdout=output)
         return output.getvalue()
 
+    def _install_name(self, binary):
+        listing = self._output(f'"{self._tool("otool")}" -D "{binary}"').splitlines()
+        return listing[1].strip() if len(listing) > 1 else None
+
     def _dylib_references(self, binary):
         listing = self._output(f'"{self._tool("otool")}" -L "{binary}"')
-        return [match.group(1) for match in re.finditer(r"^\t(\S+) \(compatibility version", listing, re.M)][1:]
+        references = [match.group(1) for match in re.finditer(r"^\t(\S+) \(compatibility version", listing, re.M)]
+        identity = self._install_name(binary)
+        return [reference for reference in references if reference != identity]
 
     def _compatibility_version(self, binary):
         commands = self._output(f'"{self._tool("otool")}" -l "{binary}"').split("Load command")
@@ -376,22 +382,10 @@ class RevenantWebKit(ConanFile):
         rmdir(self, app)
         mkdir(self, frameworks)
 
-        linker = os.path.join(self.dependencies.build["ld64"].package_folder, "bin")
-        sources = " ".join(f'"{os.path.join(root, "app", source)}"'
-                           for source in ("rev-webview-host.m", "ModernTLSURLProtocol.m", "WebKitUIKitDelegate.m"))
-        system_frameworks = " ".join(f"-framework {framework}" for framework in
-                                     ("UIKit", "Foundation", "QuartzCore", "CoreGraphics", "ImageIO", "MobileCoreServices"))
-        self.run(f'"{XCRun(self).cc}" -target armv7-apple-ios{self.settings.os.version} -isysroot "{self._sdk}" '
-                 f'-fno-objc-arc -O0 -g -B"{linker}" '
-                 f'-include "{os.path.join(root, "compat", "stubs", "ios6_class_prefix.h")}" '
-                 f'-I"{os.path.join(self.build_folder, "WebKitLegacy", "Headers")}" '
-                 f'-I"{os.path.join(self.build_folder, "WebCore.framework", "PrivateHeaders")}" '
-                 f'-I"{os.path.join(self.build_folder, "WTF", "Headers")}" -F"{self.build_folder}" '
-                 f'{system_frameworks} -framework WebKitLegacy '
-                 f'-Wl,-rpath,@executable_path/Frameworks -Wl,-dead_strip {sources} '
-                 f'-I"{self._include_dir("openssl")}" "{self._library("openssl", "ssl")}" '
-                 f'"{self._library("openssl", "crypto")}" -lz '
-                 f'-o "{os.path.join(app, name)}"')
+        self._cmake_project(os.path.join(root, "app"), os.path.join(self.build_folder, "app"),
+                            ENGINE_BUILD=self.build_folder,
+                            CLASS_PREFIX_HEADER=os.path.join(root, "compat", "stubs", "ios6_class_prefix.h"))
+        self.run(f'cmake --install "{os.path.join(self.build_folder, "app")}" --prefix "{app}"')
 
         bundled = {}
         for framework in self._system_frameworks:
@@ -421,7 +415,6 @@ class RevenantWebKit(ConanFile):
             if unresolved:
                 raise ConanException(f"{binary} still depends on {', '.join(unresolved)}")
 
-        shutil.copy2(os.path.join(root, "app", "cacert.pem"), app)
         with open(os.path.join(app, "Info.plist"), "wb") as info:
             plistlib.dump({
                 "CFBundleName": name,
