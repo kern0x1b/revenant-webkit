@@ -22,6 +22,7 @@ unreliable here, and that made a flaky runner look like a flaky engine.
 | `image-draw-cost.html` | what six hundred cropped draws of one decoded image cost, in milliseconds - the price of purgeable decoded images |
 | `svg-image-filters.html` | a filter inside an SVG loaded through `<img>`: saturate in linear light, saturate in sRGB, and three exactness checks |
 | `web-platform.html` | the APIs a page written this decade reaches for, including WebAssembly running a module and WebGL drawing a triangle - see below |
+| `websocket.html` | a `ws://` and a `wss://` connection to this runner's own server fail cleanly instead of taking the browser down - opening one reaches CFNetwork calls this system may not have |
 
 Composition can only be measured with a font that has the sequences to compose,
 which the font iOS 6 shipped in 2013 does not: it predates skin tone modifiers
@@ -31,7 +32,7 @@ without a newer emoji font fails it and the three composition checks together,
 and the page says why. Grapheme rules and `font-weight` need nothing from the
 font.
 
-Today: **55 pass, 0 fail**.
+Today: **57 pass, 0 fail**.
 
 Memory is measured separately, over repeated cold runs, by the harness in the
 session notes rather than from here: dirty pages are a property of a process's

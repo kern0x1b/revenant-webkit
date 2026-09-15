@@ -43,7 +43,7 @@ device_ready() {
 DEVICE_DIR=/tmp/jscrun
 
 sync_engine() {
-    local built="${ENGINE_BUILD:-$root/build-254-lto}"
+    local built="${ENGINE_BUILD:-$root/build/engine/armv7-system}"
     . "$root/scripts/deps.sh" > "$root/build/deps-install.log" 2>&1 \
         || { echo "device tests: conan install failed, see $root/build/deps-install.log" >&2; return 1; }
     [ -f "$built/jsc" ] || (cd "$built" && ninja jsc > /dev/null 2>&1)

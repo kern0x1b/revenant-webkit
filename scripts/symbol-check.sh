@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 P=$(cd "$(dirname "$0")/.." && pwd)
-B=${BUILD:-$P/build-254-lto}
+B=${BUILD:-$P/build/engine/armv7-system}
 PIN=$P/carry-symbols.txt
 FW="JavaScriptCore WebCore WebKitLegacy"
 

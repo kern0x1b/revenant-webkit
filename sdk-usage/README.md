@@ -19,7 +19,7 @@ all, whether named directly or reached through another header.
 
 | Consumer | Files it reads | Beyond the ones above it |
 | --- | --- | --- |
-| the engine (`configure-engine.sh`, all three frameworks and `jsc`) | 1637 - 1586 headers, 51 stubs | |
+| the engine (`conanfile.py`, all three frameworks and `jsc`) | 1637 - 1586 headers, 51 stubs | |
 | `libios6compat.a` | 1021 headers | none |
 | the tweak dylibs (`packaging/`) | 4 headers, 11 stubs | `usr/include/AvailabilityVersions.h` |
 | the libraries in `recipes/` and `libcxx` | 339 headers, 7 stubs | 25 headers, mostly `usr/include` and `libxml2` |
@@ -45,7 +45,7 @@ the Command Line Tools' linker and use it. Signing is `/usr/bin/codesign` and
 ## Not measured in this pass
 
 The prefixed engine and the standalone application
-(`configure-engine-rev.sh`, `build-app-rev.sh`) were not built for it.
+(`-o prefixed=True`, `build-app-rev.sh`) were not built for it.
 
 ## Measuring again
 
@@ -58,7 +58,7 @@ the list:
     # rebuild what is being measured, with ccache out of the way
 
     python3 <ios6-toolchain>/tools/sdk-usage.py --sdk "$IOS_SDK" \
-        --ninja build-254-lto --headers /tmp/headers.txt --links /tmp/links.txt \
+        --ninja build/engine/armv7-system --headers /tmp/headers.txt --links /tmp/links.txt \
         --out sdk-usage/iPhoneOS13.7.sdk.txt
 
 ccache replays a compile without running the compiler, so a cached compile logs

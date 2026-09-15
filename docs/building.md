@@ -65,7 +65,7 @@ conan ios6-remote revenant .
 ```
 
 Every script that needs a library sources `scripts/deps.sh`, which runs `conan
-install` and loads `build/conan/armv7/ios6-deps.env`. That file is written by the
+install` and loads `build/engine/armv7-system/conan/ios6-deps.env`. That file is written by the
 `ios6-base` generator straight from the dependency graph - one
 `IOS6_HOST_<NAME>=path` line per library and `IOS6_BUILD_<NAME>=path` per build
 tool, so `IOS6_BUILD_LD64` is the linker - and it reads the same from a shell
@@ -78,30 +78,36 @@ OpenSSL's and libpsl's objects, and because it comes first on the link line
 those copies - not the packages - were what the engine actually linked. The
 engine now links both packages directly.
 
-Two pieces are still built by hand, because neither is a third-party library:
+`libios6compat.a` - the symbols this OS predates, see
+[compatibility.md](compatibility.md) - is this port's own code, built by the
+engine's recipe from `compat/CMakeLists.txt` before the engine itself.
 
-| Script | Builds |
-| --- | --- |
-| `scripts/build-compat.sh` | `libios6compat.a` - the symbols this OS predates, see [compatibility.md](compatibility.md) |
-| `scripts/check-cacert.sh` | nothing - it verifies the trust store the standalone application carries against the hash this project reviewed; `--upstream` says whether curl serves the same extract today |
+`scripts/check-cacert.sh` builds nothing: it verifies the trust store the
+standalone application carries against the hash this project reviewed, and with
+`--upstream` says whether curl serves the same extract today.
 
 ## 3. The engine
 
 ```sh
-scripts/configure-engine.sh          # CMake configure; each flag carries why it is set
-ninja -C build-254-lto
+conan build . -pr:h profiles/revenant-armv7 -pr:b default
 ```
 
-Three things about these scripts are worth knowing before reading them, because
-they explain choices that look arbitrary otherwise.
+`conanfile.py` is the whole build: it installs the libraries, builds
+`libios6compat.a`, writes the CMake toolchain and cache - every path taken from
+the dependency graph, the linker from the `ld64` package - and runs CMake and
+Ninja. The build lands in `build/engine/armv7-system`. Why each CMake setting has
+the value it has is in [engine-configuration.md](engine-configuration.md).
+
+Three things about this build are worth knowing, because they explain choices
+that look arbitrary otherwise.
 
 **The engine is built without a class prefix.** The prefix exists so this engine
 can sit in a process beside the system one. When a process takes our frameworks
 through `DYLD_FRAMEWORK_PATH` the system engine is never loaded, there is
 nothing to collide with, and UIKit needs the classes under their real names - it
-links `_OBJC_CLASS_$_WebView`, not a prefixed spelling. `configure-engine.sh`
-therefore configures the unprefixed build, and `configure-engine-rev.sh` the
-prefixed one for the standalone application.
+links `_OBJC_CLASS_$_WebView`, not a prefixed spelling. The recipe therefore
+builds the unprefixed engine by default; `-o prefixed=True` builds the prefixed
+one for the standalone application.
 
 **`layout-sys-frameworks.sh` arranges that build as the system frameworks a
 process expects**, into a standalone directory rather than an application
@@ -112,17 +118,35 @@ Mobile Safari.
 defines.** A stub that shadows a real definition links cleanly and then fails at
 runtime: `WebCoreWebThreadLock` is a function pointer in WTF and was a function
 here, which turned a call into a store into `__TEXT` and a bus error.
-`build-compat.sh` ends with an `audit` step that checks for exactly that.
+`tools/compat-audit.py` checks for exactly that:
 
-`build-254-lto/` and `dist/` are reproducible and gitignored.
+```sh
+python3 tools/compat-audit.py --compat build/engine/armv7-system/compat/libios6compat.a \
+    --engine-build build/engine/armv7-system --icu "$IOS6_HOST_ICU"
+```
+
+**Every import has to exist on the phone.** The SDK the engine compiles against
+is years newer than the system it runs on, so a call can link cleanly against a
+function iOS 6 never had. Nothing fails at load: the import is bound lazily, and
+the process dies the first time the call is made. A plain `ws://` WebSocket did
+exactly that. `tools/ios6-imports-check.py` compares every non-weak import of the
+laid-out frameworks with what the phone's own shared cache exports:
+
+```sh
+bash -c '. tools/device.sh && device_fetch /System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7 build/'
+python3 tools/ios6-imports-check.py --cache build/dyld_shared_cache_armv7 --dist dist/rev-sys-fw
+```
+
+`build/` and `dist/` are reproducible and gitignored.
 
 **A change to a WebCore header means a full `ninja`.** A partial build leaves
 WebKit and WebKitLegacy compiled against the old class size, and the result loads
 and then behaves wrongly — empty text in the interface, and a silent death with no
 crash log. This has cost more than one debugging session.
 
-`scripts/configure-engine-rev.sh` configures the same source with the class prefix
-applied, into `build-254-rev`, for a build that has to coexist with the system
+`conan build . -pr:h profiles/revenant-armv7 -pr:b default -o prefixed=True`
+builds the same source with the class prefix applied, into
+`build/engine/armv7-prefixed`, for a build that has to coexist with the system
 engine in one process. The shipped build is the unprefixed one; see
 [architecture.md](architecture.md#two-webkits-in-one-process).
 

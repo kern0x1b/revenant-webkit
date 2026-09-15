@@ -101,10 +101,13 @@ file  Source/WebKitLegacy/mac/WebView/WebView.mm
 file  Source/WebKitLegacy/ios/WebCoreSupport/WebChromeClientIOS.mm
 grep  Source/WebCore/platform/ios/wak/WAKWindow.h _windowRef
 
+# ---- CFNetwork calls this system does not have -----------------------------
+grep  Source/WebKitLegacy/WebCoreSupport/SocketStreamHandleImplCFNet.cpp UNUSED_PARAM(sessionID)
+
 # ---- the build settings the device depends on -----------------------------
-set   scripts/configure-engine.sh -DENABLE_JIT=ON
-set   scripts/configure-engine.sh -DENABLE_C_LOOP=OFF
-set   scripts/configure-engine.sh -DENABLE_DFG_JIT=ON
+set   conanfile.py "ENABLE_JIT": "ON"
+set   conanfile.py "ENABLE_C_LOOP": "OFF"
+set   conanfile.py "ENABLE_DFG_JIT": "ON"
 
 # ---- the port's own notes -------------------------------------------------
 file  PORTING-IOS6.md

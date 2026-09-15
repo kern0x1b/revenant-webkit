@@ -19,19 +19,22 @@ export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"
 ./fetch-source.sh     # webkit-254, a submodule on the ios6-armv7 branch
 ```
 
-There is no single build script; run the step that changed (they are slow):
+One command builds the libraries iOS 6 predates (declared in `conanfile.py`,
+pinned in `conan.lock`), `libios6compat.a` and the engine:
 
-- the libraries iOS 6 predates: declared in `conanfile.py`, pinned in
-  `conan.lock`, built from the recipes in `recipes/`. `configure-engine.sh` runs
-  `conan install` itself, so there is nothing to run by hand.
-- `scripts/build-compat.sh` → `libios6compat.a`
-- `scripts/configure-engine.sh` then `ninja -C build-254-lto`
+```sh
+conan build . -pr:h profiles/revenant-armv7 -pr:b default
+```
+
+It builds into `build/engine/armv7-system`; `-o prefixed=True` builds the
+standalone application's engine into `build/engine/armv7-prefixed`. Unchanged
+libraries come from the Conan cache and unchanged sources from ccache.
 
 A change to a WebCore header means a full `ninja` — a partial build leaves the
 other frameworks on the old class size, and the result loads and misbehaves with
 no crash log. `docs/building.md` has the whole sequence.
 
-`build-254-lto/` and `dist/` are gitignored and reproducible.
+`build/` and `dist/` are gitignored and reproducible.
 
 ## Safari-substitution artifacts
 

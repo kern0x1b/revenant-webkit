@@ -26,4 +26,7 @@ for line in sys.stdin:
 
 print('----')
 print('%d passed, %d failed' % (passed, failed))
+if not passed and not failed:
+    print('no verdicts could be read from the log')
+    sys.exit(1)
 sys.exit(1 if failed else 0)

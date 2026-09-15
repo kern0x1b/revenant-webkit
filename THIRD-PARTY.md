@@ -32,7 +32,7 @@ and built for armv7. Each package carries its upstream license file under
 | libxslt | 1.1.43 | MIT | `recipes/libxslt` |
 | woff2 | 1.0.2 | MIT | `recipes/woff2` |
 | brotli | 1.1.0 | MIT | `recipes/brotli` |
-| wasm3 | checkout under `third_party/wasm3` | MIT | cloned; `packaging/compat/Makefile` builds it |
+| wasm3 | commit 40e42cc of 2026-09-05 (`cci.20260905`) | MIT | `recipes/wasm3` |
 
 ## Tools that build it
 
