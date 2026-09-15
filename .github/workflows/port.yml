@@ -23,18 +23,22 @@ jobs:
           repository: kern0x1b/ios6-toolchain
           path: ios6-toolchain
 
-      - name: Install the host tools
-        run: brew install conan ninja
+      - uses: conan-io/setup-conan@v1.4.0
+        with:
+          version: 2.32.0
+          cache_packages: true
 
       - name: Register the toolchain and the port's recipes
         run: |
-          conan profile detect --force
           conan config install "$GITHUB_WORKSPACE/ios6-toolchain/config"
           conan ios6-remote ios6 "$GITHUB_WORKSPACE/ios6-toolchain"
           conan ios6-remote revenant "$PWD"
 
       - name: Every Python file compiles
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
+
+      - name: The application's trust store is the reviewed one
+        run: scripts/check-cacert.py
 
       - name: The engine at the pinned commit, as far as the carry manifest reads it
         run: |

@@ -1,29 +1,10 @@
-# Upstream checkouts. Only webkit-254 is tracked, as a real git submodule
-# pointing at the main branch of kern0x1b/WebKit — see .gitmodules.
-# The others are older checkouts that stay untracked.
-webkit-603/
-webkit-trunk/
-webkit-trunk-jit/
-
 # Build trees. Every one of these is reproducible from conan build and the
 # packages it installs, and together they are several gigabytes.
 /build/
-build-254*/
-build-cocoa/
-build-icu-armv7/
-build-icu-host/
-build-jit/
-build-jsc/
 build-jsc32/
-build-jsc32base/
-build-jsc32c/
-build-jsc32pure/
-build-libcxx/
-build-trunk/
+**/test_package/build*/
+**/test_package/CMakeUserPresets.json
 
-# Products: the staged application and object files.
-dist/
-out/
 *.log
 *.o
 *.a
@@ -32,6 +13,7 @@ out/
 *.tar.gz
 
 .DS_Store
+__pycache__/
 # The device's address and password. device.env.example is the tracked template;
 # every other variant, including hand-kept backups, is personal.
 device.env*
@@ -39,15 +21,7 @@ device.env*
 
 # Local device screenshots captured during work — may show device content
 .claude/screenshots/
-.theos/
-packaging/obj/
-# Theos leaves a .stamp beside sources it reaches through a relative path.
-packaging/**/.stamp
 sweep-shots/
-build-254-angle/
 
 # A sweep list is the operator's, never the repository's.
 tests/device/sweep-sites.txt
-build/conan/
-**/test_package/build*/
-**/test_package/CMakeUserPresets.json

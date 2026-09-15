@@ -4,16 +4,29 @@ Everything targets **armv7 with a 6.0 deployment target**, built with an **iOS 1
 SDK** — the newest SDK that still emits armv7 and still accepts that deployment
 target. Current clang compiles C++23 for a 2011 phone; only the SDK is old.
 
-Host requirements: `conan`, `cmake`, `ninja`, `ldid` (ad-hoc signing), a current
-`llvm`, and [Theos](https://theos.dev) for the SDK and the packages. Xcode is not
-needed and is not installed here - the Command Line Tools carry the compiler and
-its runtime, theos carries the SDK, and the linker is a package built from source.
+Host requirements: `conan`, the Command Line Tools, and `iPhoneOS13.7.sdk` from
+[theos/sdks](https://github.com/theos/sdks). Conan itself installs the rest:
+`cmake` and `ninja` from ConanCenter, `ldid` (ad-hoc signing) and the `ld64`
+linker from ios6-toolchain. Xcode is not needed and is not installed here, and
+neither is Theos - the Command Line Tools carry the compiler and its runtime,
+and `strip`, `otool`, `nm` and `install_name_tool` are found through them. The
+Python that runs WebKit's generators and the check scripts is the one Conan runs
+in; nothing is taken from `PATH`.
 
-Theos keeps its SDKs in `$THEOS/sdks`, which is where every script looks by
-default. Point `IOS_SDK` somewhere else if yours lives elsewhere:
+The SDK reaches the build as `tools.apple:sdk_path`, which ios6-toolchain's
+`ios6-armv7` profile sets from `IOS_SDK`, or `~/theos/sdks/iPhoneOS13.7.sdk`
+when that is unset. Only an SDK somewhere else needs the variable:
 
 ```sh
-export IOS_SDK="$HOME/theos/sdks/iPhoneOS13.7.sdk"
+export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"
+```
+
+ccache is not picked up on its own. To use it, set the compiler launchers in
+your own `global.conf` or profile; `compat/`, `platform/` and the engine all
+build with the same generated `conan_toolchain.cmake`, so this covers all three:
+
+```
+tools.cmake.cmaketoolchain:extra_variables={"CMAKE_C_COMPILER_LAUNCHER": "ccache", "CMAKE_CXX_COMPILER_LAUNCHER": "ccache", "CMAKE_OBJC_COMPILER_LAUNCHER": "ccache", "CMAKE_OBJCXX_COMPILER_LAUNCHER": "ccache"}
 ```
 
 ## 1. The engine source
@@ -35,20 +48,25 @@ and each names a git URL and a commit rather than vendoring a copy:
 | Package | Why the system copy will not do |
 | --- | --- |
 | `libcxx/21.1.0@ios6/stable` | iOS 6 ships a 2012 libc++; C++23 needs a current one |
-| `icu/74.2@ios6/stable` | the system ICU predates WebKit's minimum, and text segmentation with it has no zero-width joiner |
-| `openssl/3.0.15@ios6/stable` | TLS 1.2/1.3 and Web Crypto |
-| `libpsl/0.23.3@ios6/stable` | public-suffix lookups this CFNetwork does not do |
-| `libwebp/1.4.0@ios6/stable` | this ImageIO cannot decode WebP |
-| `libxml2/2.15.4@ios6/stable` | the system copy is 2.7.8 from 2010, older than the API libxslt and the SDK headers expect |
-| `libxslt/1.1.45@ios6/stable` | XSLT; the SDK has no libxslt headers or armv7 library |
-| `woff2/1.0.2@ios6/stable` | web fonts in the format the web serves them |
-| `brotli/1.1.0@ios6/stable` | what woff2 decompresses with |
+| `icu/74.2@revenant/stable` | the system ICU predates WebKit's minimum, and text segmentation with it has no zero-width joiner |
+| `openssl/3.0.15@revenant/stable` | TLS 1.2/1.3 and Web Crypto |
+| `libpsl/0.23.3@revenant/stable` | public-suffix lookups this CFNetwork does not do |
+| `libwebp/1.4.0@revenant/stable` | this ImageIO cannot decode WebP |
+| `libxml2/2.15.4@revenant/stable` | the system copy is 2.7.8 from 2010, older than the API libxslt and the SDK headers expect |
+| `libxslt/1.1.45@revenant/stable` | XSLT; the SDK has no libxslt headers or armv7 library |
+| `woff2/1.0.2@revenant/stable` | web fonts in the format the web serves them |
+| `brotli/1.1.0@revenant/stable` | what woff2 decompresses with |
 
-`@ios6/stable` is not decoration. ConanCenter publishes packages under these
-same names, Conan asks remotes in the order they were registered, and a wrong
-order does not fail - it quietly builds against a recipe that cannot
+The user and channel are not decoration. ConanCenter publishes packages under
+these same names, Conan asks remotes in the order they were registered, and a
+wrong order does not fail - it quietly builds against a recipe that cannot
 cross-compile for armv7. The namespace makes a bare `icu/74.2` unresolvable
 from these indexes, so a reference that forgets it is an error instead.
+
+`@ios6/stable` belongs to what ios6-toolchain serves and every port shares.
+The libraries this port builds for itself are `@revenant/stable`: another port
+on the same machine builds its own OpenSSL with its own choices, and two recipes
+behind one reference overwrite each other's packages in the shared cache.
 
 The target comes from ios6-toolchain's shared `ios6-armv7` profile, which says
 only what is true of armv7 on iOS 6. What is this port's own - C++23, and
@@ -68,8 +86,8 @@ conan ios6-remote revenant .
 `conan build` writes `build/engine/armv7-system/conan/ios6-deps.env` through the
 `ios6-base` generator, straight from the dependency graph - one
 `IOS6_HOST_<NAME>=path` line per library and `IOS6_BUILD_<NAME>=path` per build
-tool, so `IOS6_BUILD_LD64` is the linker. The packaging makefiles `include` it;
-nothing names a version, an architecture or a folder layout. Change a version in
+tool, so `IOS6_BUILD_LD64` is the linker. Nothing names a version, an
+architecture or a folder layout. Change a version in
 `conanfile.py` and everything follows. Building builds whatever is missing and
 reuses whatever is not.
 
@@ -89,7 +107,7 @@ standalone application carries against the hash this project reviewed, and with
 ## 3. The engine
 
 ```sh
-conan build . -pr:h profiles/revenant-armv7 -pr:b default
+conan build . -pr:h profiles/revenant-armv7 -pr:b default --build=missing
 ```
 
 `conanfile.py` is the whole build, the way a Gradle or Maven build file is: it
@@ -102,12 +120,15 @@ the steps in the order that fails cheapest first:
 3. WebKitLegacy exports exactly the symbols its export list names
 4. `tools/compat-audit.py` - no stub shadows a definition WebKit has
 5. `tools/symbol-check.py` - the symbol surface matches `carry-symbols.txt`
-6. the frameworks laid out as the iOS 6 system frameworks they replace
-7. `tools/ios6-imports-check.py`, when the phone's shared cache is configured
-8. the `.deb`
+6. `platform/` through CMake - the loader, the compat and TLS dylibs and the
+   Settings bundle - stripped and signed
+7. the frameworks laid out as the iOS 6 system frameworks they replace, beside
+   the C++ runtime and everything from step 6, as the whole device filesystem
+   tree in `build/engine/armv7-system/stage`
+8. `tools/ios6-imports-check.py`, when the phone's shared cache is configured
 
-The version of that package is `version` in `conanfile.py` and nowhere else.
-Everything lands in `build/engine/armv7-system`. Why each CMake setting has the
+Everything lands in `build/engine/armv7-system`. The `.deb` is a separate step,
+described in [the package](#4-the-package). Why each CMake setting has the
 value it has is in [engine-configuration.md](engine-configuration.md).
 
 A change to any recipe here or in ios6-toolchain changes its revision, and
@@ -136,7 +157,7 @@ builds the unprefixed engine by default; `-o prefixed=True` builds the prefixed
 one for the standalone application.
 
 **The recipe arranges that build as the system frameworks a process expects**,
-into `build/engine/armv7-system/rev-sys-fw` rather than an application bundle,
+into `build/engine/armv7-system/stage/usr/lib/rev-fw` rather than an application bundle,
 which is what makes `DYLD_FRAMEWORK_PATH` substitution possible for Mobile
 Safari: `WebKitLegacy` becomes `WebKit.framework`, every framework takes the
 install name of the iOS 6 framework it stands in for (`JavaScriptCore` is a
@@ -171,7 +192,8 @@ conan build . -pr:h profiles/revenant-armv7 -pr:b default \
 
 `build/` is reproducible and gitignored.
 
-**A change to a WebCore header means a full `ninja`.** A partial build leaves
+**A change to a WebCore header means a full build - `conan build`, which builds
+everything.** A partial build leaves
 WebKit and WebKitLegacy compiled against the old class size, and the result loads
 and then behaves wrongly — empty text in the interface, and a silent death with no
 crash log. This has cost more than one debugging session.
@@ -184,21 +206,28 @@ engine in one process. The shipped build is the unprefixed one; see
 
 ## 4. The package
 
-The last step of `conan build` hands the laid-out frameworks and the version to
-Theos, which builds everything around the engine from `packaging/` and packs it
-into `build/engine/armv7-system/packages/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
-To release a new version, change `version` in `conanfile.py` and build.
-`packaging/control` carries no version of its own, and the packaging makefile
-refuses to run without the version and the frameworks the recipe passes it.
+```sh
+conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default
+```
+
+`conan build` has already built everything around the engine - `platform/CMakeLists.txt`
+builds `RevSafari.dylib`, `rev-safari-compat.dylib`, `rev-TLS.dylib` and
+`RevPrefs.bundle` - and laid it out with the engine in
+`build/engine/armv7-system/stage`. `conan export-pkg` runs the recipe's
+`package()`, which copies that tree into `<package folder>/root` and writes
+`<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb` with
+ios6-base's `DebianPackage`: `debian-binary`, `control.tar.gz` and
+`data.tar.lzma`, the same members `dpkg-deb` writes. To release a new version,
+change `version` in `conanfile.py` and build. `packaging/` holds only
+`packaging/control`, which carries no version of its own, and
+`packaging/DEBIAN/postinst`.
 
 One `.deb` carries the loader and its MobileSubstrate filter, the compatibility
 and hook dylib, the TLS library, the Settings bundle with its PreferenceLoader
-entry, and the engine frameworks.
+entry, the C++ runtime and the engine frameworks.
 
-Two settings in `packaging/common.mk` and `packaging/compat/Makefile` are not
-optional, and each says why where it is set: modules are off, because this SDK
-still ships `mach-o/module.map` under its deprecated name; and the compat dylib is
-built without `_FORTIFY_SOURCE` and without libc++, because the `__*_chk` symbols
+Two settings in `platform/CMakeLists.txt` are not optional: the compat dylib is
+built without `_FORTIFY_SOURCE` and without libc++ (`-nostdlib++`), because the `__*_chk` symbols
 are linkage this release never had and the engine carries its own C++ runtime — a
 second one in the same process is a crash waiting to happen.
 
@@ -214,7 +243,7 @@ scripts/deploy-engine.py    # engine only: stage, back up, push to /usr/lib/rev-
 For everything else, install the package the way any tweak is installed:
 
 ```sh
-tools/device.py copy build/engine/armv7-system/packages/*.deb /tmp/rev.deb
+tools/device.py copy "<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb" /tmp/rev.deb
 tools/device.py run dpkg -i /tmp/rev.deb
 ```
 
@@ -239,7 +268,8 @@ scripts/run-app-rev.py 20
 
 The prefixed build ends in `build/engine/armv7-prefixed/RevWebViewHost.app`,
 the engine and the C++ runtime bundled inside it and its version taken from
-`conanfile.py`. The runner installs it, opens it through its
+`conanfile.py`; `conan export-pkg` with the same option puts it in
+`<package folder>/RevWebViewHost.app`. The runner installs it, opens it through its
 `revwebviewhost:` scheme and brings back the log. It needs the device
 credentials in `tools/device.env`, as everything under `tools/` does.
 
@@ -280,17 +310,16 @@ Four things this file had to learn, for anyone embedding it:
 
 A dylib can compile clean and still be refused by dyld, silently. The build's
 imports check covers what it links against; two things it cannot see are worth
-looking at in the package itself:
+looking at in the staged tree the package is made from:
 
 ```sh
-dpkg-deb -x build/engine/armv7-system/packages/*.deb /tmp/rev-deb
-otool -L /tmp/rev-deb/usr/lib/rev-safari-compat.dylib
-otool -l /tmp/rev-deb/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib | grep LC_ENCRYPTION_INFO
+otool -L build/engine/armv7-system/stage/usr/lib/rev-safari-compat.dylib
+otool -l build/engine/armv7-system/stage/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib | grep LC_ENCRYPTION_INFO
 ```
 
 The second must print nothing. Apple's linker from Xcode 27 writes that load
 command into armv7 dylibs, and iOS 6 then never starts the app the tweak is
-injected into; the packaging links through ld64 for exactly this reason.
+injected into; the tweak dylibs link through ld64 for exactly this reason.
 
 - The loader links only `libSystem` and `CoreFoundation`, with install name
   `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib`.
@@ -368,8 +397,8 @@ outlive any macOS release:
 - the linker: the `ld64` package from ios6-toolchain - ld64 956.6 built from
   `cctools-port`, which supports armv7, reads `.tbd` stubs through
   `apple-libtapi`, and does LTO through the same LLVM;
-- the SDK: `iPhoneOS13.7.sdk`, which theos already carries and which has never
-  depended on Xcode.
+- the SDK: `iPhoneOS13.7.sdk` from theos/sdks, which has never depended on
+  Xcode.
 
 The `ld64` recipe carries the two snags in building it: `apple-libtapi` calls
 `get_darwin_linker_version`, a CMake helper its vendored LLVM does not ship, so

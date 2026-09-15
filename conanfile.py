@@ -2,6 +2,7 @@ import os
 import plistlib
 import re
 import shutil
+import sys
 from io import StringIO
 
 from conan import ConanFile
@@ -24,7 +25,7 @@ class RevenantWebKit(ConanFile):
     python_requires = "ios6-base/1.0@ios6/stable"
     python_requires_extend = "ios6-base.Ios6Port"
 
-    _cmake_packages = ("icu", "libcxx", "libxml2", "libxslt")
+    _cmake_packages = ("icu", "libcxx", "libxml2", "libxslt", "openssl", "wasm3")
     _system_frameworks = {
         "JavaScriptCore": ("JavaScriptCore", "/System/Library/PrivateFrameworks/JavaScriptCore.framework/JavaScriptCore"),
         "WebCore": ("WebCore", "/System/Library/PrivateFrameworks/WebCore.framework/WebCore"),
@@ -35,18 +36,24 @@ class RevenantWebKit(ConanFile):
         "libc++abi.1.0.dylib": "librev-c++abi.1.dylib",
     }
     _webcore_left_out = ("WebCore", "Headers", "PrivateHeaders", "Modules", "_CodeSignature")
+    _engine_location = "usr/lib/rev-fw"
 
     def requirements(self):
-        self.requires("openssl/3.0.15@ios6/stable")
-        self.requires("brotli/1.1.0@ios6/stable")
-        self.requires("libwebp/1.4.0@ios6/stable")
-        self.requires("libxml2/2.15.4@ios6/stable")
-        self.requires("libxslt/1.1.45@ios6/stable")
-        self.requires("libpsl/0.23.3@ios6/stable")
-        self.requires("icu/74.2@ios6/stable")
-        self.requires("woff2/1.0.2@ios6/stable")
+        self.requires("openssl/3.0.15@revenant/stable")
+        self.requires("brotli/1.1.0@revenant/stable")
+        self.requires("libwebp/1.4.0@revenant/stable")
+        self.requires("libxml2/2.15.4@revenant/stable")
+        self.requires("libxslt/1.1.45@revenant/stable")
+        self.requires("libpsl/0.23.3@revenant/stable")
+        self.requires("icu/74.2@revenant/stable")
+        self.requires("woff2/1.0.2@revenant/stable")
         self.requires("libcxx/21.1.0@ios6/stable")
-        self.requires("wasm3/cci.20260905@ios6/stable")
+        self.requires("wasm3/cci.20260905@revenant/stable")
+
+    def build_requirements(self):
+        self.tool_requires("cmake/4.4.3")
+        self.tool_requires("ninja/1.13.2")
+        self.tool_requires("ldid/2.1.5@ios6/stable")
 
     def layout(self):
         variant = "prefixed" if self.options.prefixed else "system"
@@ -56,6 +63,29 @@ class RevenantWebKit(ConanFile):
 
     def _dependency(self, name):
         return self.dependencies[name].package_folder
+
+    def _cpp_info(self, name):
+        return self.dependencies[name].cpp_info.aggregated_components()
+
+    def _include_dir(self, name):
+        return self._cpp_info(name).includedirs[0]
+
+    def _library(self, dependency, library):
+        info = self._cpp_info(dependency)
+        if library not in info.libs:
+            raise ConanException(f"{dependency} does not provide {library}; it provides {', '.join(info.libs)}")
+        for folder in info.libdirs:
+            path = os.path.join(folder, f"lib{library}.a")
+            if os.path.isfile(path):
+                return path
+        raise ConanException(f"{dependency} declares {library} but no lib{library}.a is in {', '.join(info.libdirs)}")
+
+    @property
+    def _sdk(self):
+        sdk = self.conf.get("tools.apple:sdk_path", check_type=str)
+        if not sdk:
+            raise ConanException("tools.apple:sdk_path is not set; install with the port's profile")
+        return sdk
 
     @property
     def _compat_library(self):
@@ -69,31 +99,35 @@ class RevenantWebKit(ConanFile):
 
     @property
     def _stage(self):
-        return os.path.join(self.build_folder, "rev-sys-fw")
+        return os.path.join(self.build_folder, "stage")
+
+    @property
+    def _application(self):
+        return os.path.join(self.build_folder, "RevWebViewHost.app")
 
     def generate(self):
         super().generate()
         root = self.recipe_folder
-        sdk = self.conf.get("tools.apple:sdk_path", check_type=str)
-        if not sdk:
-            raise ConanException("tools.apple:sdk_path is not set; install with the port's profile")
-        libcxx, xslt, ssl, webp, brotli, woff2, psl = (
-            self._dependency(n) for n in ("libcxx", "libxslt", "openssl", "libwebp", "brotli", "woff2", "libpsl"))
-        linker = os.path.join(self.dependencies.build["ld64"].package_folder, "bin")
+        sdk = self._sdk
+        libcxx = self._include_dir("libcxx")
         stubs = os.path.join(root, "compat", "stubs")
         prefix_header = "ios6_class_prefix.h" if self.options.prefixed else "ios6_class_names.h"
         target = f"armv7-apple-ios{self.settings.os.version}"
         tuning = " ".join(self.conf.get("tools.build:cxxflags", default=[], check_type=list))
         defines = "-DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
         common = f"-flto=thin -mllvm -hot-cold-split=false -target {target} {tuning} -isysroot {sdk}"
-        cxx_flags = (f"{common} -nostdinc++ -isystem {libcxx}/include/c++/v1 "
+        cxx_flags = (f"{common} -nostdinc++ -isystem {libcxx} "
                      f"-isystem {stubs} -include {stubs}/ios6_dispatch_compat.h -include {stubs}/{prefix_header} "
                      f"-D_LIBCPP_DISABLE_AVAILABILITY {defines}")
         c_flags = f"{common} -isystem {stubs} -include {stubs}/{prefix_header} {defines}"
+        linker = os.path.join(self.dependencies.build["ld64"].package_folder, "bin")
+        link_libraries = " ".join((self._library("brotli", "brotlidec"), self._library("brotli", "brotlicommon"),
+                                   self._library("libpsl", "psl")))
+        link_folders = " ".join(f"-L{folder}" for name in ("libxslt", "woff2") for folder in self._cpp_info(name).libdirs)
 
         if self.options.prefixed:
             os.makedirs(self.build_folder, exist_ok=True)
-            self.run(f'python3 "{root}/tools/prefix-exports.py" "{stubs}/ios6_class_prefix.h" '
+            self.run(f'"{sys.executable}" "{root}/tools/prefix-exports.py" "{stubs}/ios6_class_prefix.h" '
                      f'"{self.source_folder}/Source/WebKitLegacy/WebKitLegacy-iOS.exp" "{self._exports}"')
 
         self.conf.define("tools.cmake.cmaketoolchain:user_toolchain",
@@ -101,36 +135,33 @@ class RevenantWebKit(ConanFile):
         tc = CMakeToolchain(self)
         tc.blocks.remove("apple_system")
         variables = tc.cache_variables
-        launcher = shutil.which("ccache")
-        if launcher:
-            for language in ("C", "CXX", "OBJC", "OBJCXX"):
-                variables[f"CMAKE_{language}_COMPILER_LAUNCHER"] = launcher
         variables.update({
             "IOS6_SDK": sdk,
+            "IOS6_DEPLOYMENT_TARGET": str(self.settings.os.version),
             "CMAKE_OSX_SYSROOT": sdk,
             "CMAKE_OSX_DEPLOYMENT_TARGET": str(self.settings.os.version),
             "CMAKE_BUILD_TYPE": "Release",
             "CMAKE_PROJECT_WebKit_INCLUDE": os.path.join(root, "scripts", "ios6-conan-targets.cmake"),
             "PORT": "Cocoa",
             "DEVELOPER_MODE": "OFF",
-            "PYTHON_EXECUTABLE": shutil.which("python3"),
+            "PYTHON_EXECUTABLE": sys.executable,
             "SWIFT_REQUIRED": "OFF",
-            "WEBKIT_IOS6_CRYPTO_LIB": f"{ssl}/lib/libcrypto.a",
+            "WEBKIT_IOS6_CRYPTO_LIB": self._library("openssl", "crypto"),
             "WEBKIT_IOS6_COMPAT_LIB": self._compat_library,
             "WEBKIT_IOS6_EXPORTS": self._exports,
-            "WEBKIT_IOS6_LIBCXX_DIR": libcxx,
+            "WEBKIT_IOS6_LIBCXX_DIR": self._dependency("libcxx"),
             "WEBKIT_IOS6_SIZE_OPTIMIZED": "ON",
             "WEBKIT_NO_AVAILABILITY_OVERLAY": "ON",
             "CMAKE_DISABLE_PRECOMPILE_HEADERS": "OFF",
             "USE_WEBP": "ON",
-            "WebP_INCLUDE_DIR": f"{webp}/include",
-            "WebP_LIBRARY": f"{webp}/lib/libwebp.a",
-            "WebP_DEMUX_LIBRARY": f"{webp}/lib/libwebpdemux.a",
+            "WebP_INCLUDE_DIR": self._include_dir("libwebp"),
+            "WebP_LIBRARY": self._library("libwebp", "webp"),
+            "WebP_DEMUX_LIBRARY": self._library("libwebp", "webpdemux"),
             "USE_WOFF2": "ON",
-            "WOFF2_INCLUDE_DIR": f"{woff2}/include",
-            "WOFF2_DEC_INCLUDE_DIR": f"{woff2}/include",
-            "WOFF2_LIBRARY": f"{woff2}/lib/libwoff2common.a",
-            "WOFF2_DEC_LIBRARY": f"{woff2}/lib/libwoff2dec.a",
+            "WOFF2_INCLUDE_DIR": self._include_dir("woff2"),
+            "WOFF2_DEC_INCLUDE_DIR": self._include_dir("woff2"),
+            "WOFF2_LIBRARY": self._library("woff2", "woff2common"),
+            "WOFF2_DEC_LIBRARY": self._library("woff2", "woff2dec"),
             "ENABLE_WEBKIT_LEGACY": "ON",
             "ENABLE_WEBKIT": "OFF",
             "ENABLE_TOUCH_EVENTS": "ON",
@@ -184,10 +215,10 @@ class RevenantWebKit(ConanFile):
             "CMAKE_OBJCXX_FLAGS": f"{cxx_flags} -DWEBKIT_IOS6_OBJC_EXTRAS",
             "CMAKE_OBJC_FLAGS": f"{c_flags} -DWEBKIT_IOS6_OBJC_EXTRAS",
             "CMAKE_SHARED_LINKER_FLAGS": (f"-B{linker} -flto=thin -Wl,-compatibility_version,1.0.0 "
-                                          f"-Wl,-current_version,1.0.0 -L{xslt}/lib -L{woff2}/lib -L{brotli}/lib "
-                                          f"-lbrotlidec -lbrotlicommon -L{psl}/lib -lpsl"),
-            "CMAKE_EXE_LINKER_FLAGS": f"-B{linker} -L{psl}/lib -lpsl -Wl,-rpath,@executable_path/Frameworks",
-            "CMAKE_MODULE_LINKER_FLAGS": f"-B{linker} -L{psl}/lib -lpsl",
+                                          f"-Wl,-current_version,1.0.0 {link_folders} {link_libraries}"),
+            "CMAKE_EXE_LINKER_FLAGS": (f"-B{linker} {self._library('libpsl', 'psl')} "
+                                       "-Wl,-rpath,@executable_path/Frameworks"),
+            "CMAKE_MODULE_LINKER_FLAGS": f"-B{linker} {self._library('libpsl', 'psl')}",
         })
         if self.options.prefixed:
             variables.update({"ENABLE_MEDIA_STREAM": "OFF", "ENABLE_NOTIFICATIONS": "OFF", "ENABLE_WEBGL": "OFF"})
@@ -204,26 +235,18 @@ class RevenantWebKit(ConanFile):
         environment.vars(self, scope="build").save_script("ccache_basedir")
 
     def _tool(self, name):
-        path = shutil.which(name)
-        if not path:
-            raise ConanException(f"{name} is not on PATH; the package cannot be finished without it")
-        return path
+        return XCRun(self).find(name)
 
     def _python(self, script, *arguments):
         quoted = " ".join(f'"{argument}"' for argument in arguments)
-        self.run(f'python3 "{os.path.join(self.recipe_folder, script)}" {quoted}')
+        self.run(f'"{sys.executable}" "{os.path.join(self.recipe_folder, script)}" {quoted}')
 
-    def _build_compat(self):
-        folder = os.path.dirname(self._compat_library)
-        psl = self._dependency("libpsl")
-        launcher = shutil.which("ccache")
-        launchers = " ".join(f"-DCMAKE_{language}_COMPILER_LAUNCHER={launcher}"
-                             for language in ("C", "CXX", "OBJC")) if launcher else ""
-        self.run(f'cmake -S "{self.recipe_folder}/compat" -B "{folder}" -G Ninja {launchers} '
-                 f'-DCMAKE_TOOLCHAIN_FILE="{self.recipe_folder}/scripts/ios6-armv7-trunk.cmake" '
-                 f'-DIOS6_SDK="{self.conf.get("tools.apple:sdk_path", check_type=str)}" '
-                 f'-DWEBKIT_IOS6_LIBCXX_DIR="{self._dependency("libcxx")}" '
-                 f'-DLIBPSL_INCLUDE_DIR="{psl}/include"')
+    def _cmake_project(self, source, folder, **definitions):
+        toolchain = os.path.join(self.generators_folder, "conan_toolchain.cmake")
+        values = " ".join(f'-D{name}="{value}"' for name, value in definitions.items())
+        self.run(f'cmake -S "{source}" -B "{folder}" -G Ninja -DCMAKE_BUILD_TYPE=Release '
+                 f'-DCMAKE_TOOLCHAIN_FILE="{toolchain}" -DIOS6_SDK="{self._sdk}" '
+                 f'-DIOS6_DEPLOYMENT_TARGET="{self.settings.os.version}" {values}')
         self.run(f'cmake --build "{folder}"')
 
     def _output(self, command):
@@ -232,11 +255,11 @@ class RevenantWebKit(ConanFile):
         return output.getvalue()
 
     def _dylib_references(self, binary):
-        listing = self._output(f'otool -L "{binary}"')
+        listing = self._output(f'"{self._tool("otool")}" -L "{binary}"')
         return [match.group(1) for match in re.finditer(r"^\t(\S+) \(compatibility version", listing, re.M)][1:]
 
     def _compatibility_version(self, binary):
-        commands = self._output(f'otool -l "{binary}"').split("Load command")
+        commands = self._output(f'"{self._tool("otool")}" -l "{binary}"').split("Load command")
         identity = next((block for block in commands if "cmd LC_ID_DYLIB" in block), "")
         match = re.search(r"compatibility version (\S+)", identity)
         return match.group(1) if match else None
@@ -245,25 +268,52 @@ class RevenantWebKit(ConanFile):
         binary = os.path.join(self.build_folder, "WebKitLegacy.framework", "WebKitLegacy")
         with open(self._exports) as listing:
             listed = {line.strip() for line in listing if line.strip() and not line.lstrip().startswith("#")}
-        exported = set(self._output(f'nm -gUj "{binary}"').split())
+        exported = set(self._output(f'"{self._tool("nm")}" -gUj "{binary}"').split())
         missing, unlisted = sorted(listed - exported), sorted(exported - listed)
         if missing or unlisted:
             raise ConanException(f"WebKitLegacy was not linked with {self._exports}: "
                                  f"{len(missing)} listed symbols not exported (first: {missing[:3]}), "
                                  f"{len(unlisted)} exported symbols not listed (first: {unlisted[:3]})")
 
-    def _lay_out_frameworks(self):
-        stage = self._stage
-        rmdir(self, stage)
+    def _store_binary_plists(self, root):
+        for folder, _, names in os.walk(root):
+            for name in names:
+                if not name.endswith(".plist"):
+                    continue
+                path = os.path.join(folder, name)
+                with open(path, "rb") as source:
+                    content = plistlib.load(source)
+                with open(path, "wb") as target:
+                    plistlib.dump(content, target, fmt=plistlib.FMT_BINARY)
+
+    def _check_no_encryption_info(self, root):
+        otool = self._tool("otool")
+        stamped = []
+        for folder, _, names in os.walk(root):
+            for name in names:
+                path = os.path.join(folder, name)
+                if os.path.islink(path):
+                    continue
+                with open(path, "rb") as candidate:
+                    if candidate.read(4) not in (b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe"):
+                        continue
+                if "LC_ENCRYPTION_INFO" in self._output(f'"{otool}" -l "{path}"'):
+                    stamped.append(os.path.relpath(path, root))
+        if stamped:
+            raise ConanException("linked by a linker that stamps LC_ENCRYPTION_INFO, which iOS 6 refuses "
+                                 f"in a library it loads: {', '.join(stamped)}")
+
+    def _lay_out_frameworks(self, stage):
+        engine = os.path.join(stage, self._engine_location)
         installed = {}
         for built, (name, system_path) in self._system_frameworks.items():
-            destination = os.path.join(stage, f"{name}.framework", name)
+            destination = os.path.join(engine, f"{name}.framework", name)
             mkdir(self, os.path.dirname(destination))
             shutil.copy2(os.path.join(self.build_folder, f"{built}.framework", built), destination)
             installed[destination] = system_path
 
         webcore = os.path.join(self.build_folder, "WebCore.framework")
-        staged_webcore = os.path.join(stage, "WebCore.framework")
+        staged_webcore = os.path.join(engine, "WebCore.framework")
         for entry in sorted(os.listdir(webcore)):
             if entry in self._webcore_left_out:
                 continue
@@ -279,9 +329,9 @@ class RevenantWebKit(ConanFile):
             for pattern in ("*.svg", "*.png"):
                 copy(self, pattern, os.path.join(controls, "iOS"), controls)
 
-        runtime = os.path.join(self._dependency("libcxx"), "lib")
+        runtime = self._cpp_info("libcxx").libdirs[0]
         for built, name in self._runtime.items():
-            destination = os.path.join(stage, name)
+            destination = os.path.join(stage, "usr", "lib", name)
             shutil.copy2(os.path.join(runtime, built), destination)
             installed[destination] = f"/usr/lib/{name}"
 
@@ -297,38 +347,41 @@ class RevenantWebKit(ConanFile):
             if unresolved:
                 raise ConanException(f"{binary} still depends on {', '.join(unresolved)}")
 
-        strip, ldid = self._tool("strip"), self._tool("ldid")
+        strip = self._tool("strip")
         for binary in installed:
             if not binary.endswith(".dylib"):
                 if self._compatibility_version(binary) != "1.0.0":
                     raise ConanException(f"{binary} does not declare compatibility version 1.0.0, "
                                          "which the system's clients of this framework recorded")
                 self.run(f'"{strip}" -S -x "{binary}"')
-            self.run(f'"{ldid}" -S "{binary}"')
-        return stage
+            self.run(f'ldid -S "{binary}"')
 
-    def _package(self, stage):
-        packages = os.path.join(self.build_folder, "packages")
-        rmdir(self, packages)
-        self.run(f'make -C "{os.path.join(self.recipe_folder, "packaging")}" package FINALPACKAGE=1 '
-                 f'PACKAGE_VERSION={self.version} ENGINE_STAGE="{stage}" THEOS_PACKAGE_DIR="{packages}"')
+    def _build_platform(self, stage):
+        folder = os.path.join(self.build_folder, "platform")
+        self._cmake_project(os.path.join(self.recipe_folder, "platform"), folder)
+        self.run(f'cmake --install "{folder}" --prefix "{stage}"')
+        strip = self._tool("strip")
+        for binary in ("Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib",
+                       "usr/lib/rev-safari-compat.dylib", "usr/lib/rev-TLS.dylib",
+                       "Library/PreferenceBundles/RevPrefs.bundle/RevPrefs"):
+            path = os.path.join(stage, binary)
+            self.run(f'"{strip}" -x "{path}"')
+            self.run(f'ldid -S "{path}"')
 
     def _build_standalone_app(self):
         name = "RevWebViewHost"
         root = self.recipe_folder
-        app = os.path.join(self.build_folder, f"{name}.app")
+        app = self._application
         frameworks = os.path.join(app, "Frameworks")
         rmdir(self, app)
         mkdir(self, frameworks)
 
-        sdk = self.conf.get("tools.apple:sdk_path", check_type=str)
-        ssl = self._dependency("openssl")
         linker = os.path.join(self.dependencies.build["ld64"].package_folder, "bin")
         sources = " ".join(f'"{os.path.join(root, "app", source)}"'
                            for source in ("rev-webview-host.m", "ModernTLSURLProtocol.m", "WebKitUIKitDelegate.m"))
         system_frameworks = " ".join(f"-framework {framework}" for framework in
                                      ("UIKit", "Foundation", "QuartzCore", "CoreGraphics", "ImageIO", "MobileCoreServices"))
-        self.run(f'"{XCRun(self).cc}" -target armv7-apple-ios{self.settings.os.version} -isysroot "{sdk}" '
+        self.run(f'"{XCRun(self).cc}" -target armv7-apple-ios{self.settings.os.version} -isysroot "{self._sdk}" '
                  f'-fno-objc-arc -O0 -g -B"{linker}" '
                  f'-include "{os.path.join(root, "compat", "stubs", "ios6_class_prefix.h")}" '
                  f'-I"{os.path.join(self.build_folder, "WebKitLegacy", "Headers")}" '
@@ -336,7 +389,8 @@ class RevenantWebKit(ConanFile):
                  f'-I"{os.path.join(self.build_folder, "WTF", "Headers")}" -F"{self.build_folder}" '
                  f'{system_frameworks} -framework WebKitLegacy '
                  f'-Wl,-rpath,@executable_path/Frameworks -Wl,-dead_strip {sources} '
-                 f'-I"{ssl}/include" "{ssl}/lib/libssl.a" "{ssl}/lib/libcrypto.a" -lz '
+                 f'-I"{self._include_dir("openssl")}" "{self._library("openssl", "ssl")}" '
+                 f'"{self._library("openssl", "crypto")}" -lz '
                  f'-o "{os.path.join(app, name)}"')
 
         bundled = {}
@@ -345,7 +399,7 @@ class RevenantWebKit(ConanFile):
             shutil.copytree(os.path.join(self.build_folder, f"{framework}.framework"),
                             os.path.dirname(destination), symlinks=True)
             bundled[destination] = f"@executable_path/Frameworks/{framework}.framework/{framework}"
-        runtime = os.path.join(self._dependency("libcxx"), "lib")
+        runtime = self._cpp_info("libcxx").libdirs[0]
         for built in self._runtime:
             library = built.replace(".1.0.", ".1.")
             destination = os.path.join(frameworks, library)
@@ -385,15 +439,15 @@ class RevenantWebKit(ConanFile):
                                       "CFBundleURLSchemes": ["revwebviewhost"]}],
             }, info)
 
-        ldid = self._tool("ldid")
         for binary in bundled:
-            self.run(f'"{ldid}" -S "{binary}"')
-        self.run(f'"{ldid}" -S"{os.path.join(root, "app", "entitlements.xml")}" "{os.path.join(app, name)}"')
-        return app
+            self.run(f'ldid -S "{binary}"')
+        self.run(f'ldid -S"{os.path.join(root, "app", "entitlements.xml")}" "{os.path.join(app, name)}"')
 
     def build(self):
         self._python("scripts/carry-check.py")
-        self._build_compat()
+        self._cmake_project(os.path.join(self.recipe_folder, "compat"), os.path.dirname(self._compat_library),
+                            WEBKIT_IOS6_LIBCXX_DIR=self._dependency("libcxx"),
+                            LIBPSL_INCLUDE_DIR=self._include_dir("libpsl"))
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
@@ -404,8 +458,26 @@ class RevenantWebKit(ConanFile):
             self._build_standalone_app()
             return
         self._python("tools/symbol-check.py", "--build", self.build_folder)
-        stage = self._lay_out_frameworks()
+        stage = self._stage
+        rmdir(self, stage)
+        self._build_platform(stage)
+        self._lay_out_frameworks(stage)
+        self._store_binary_plists(stage)
+        self._check_no_encryption_info(stage)
         dyld_cache = self.conf.get("user.ios6:dyld_shared_cache", check_type=str)
         if dyld_cache:
-            self._python("tools/ios6-imports-check.py", "--cache", dyld_cache, "--dist", stage)
-        self._package(stage)
+            self._python("tools/ios6-imports-check.py", "--cache", dyld_cache,
+                         "--dist", os.path.join(stage, self._engine_location))
+
+    def package(self):
+        copy(self, "LICENSE", self.recipe_folder, os.path.join(self.package_folder, "licenses"))
+        copy(self, "THIRD-PARTY.md", self.recipe_folder, os.path.join(self.package_folder, "licenses"))
+        if self.options.prefixed:
+            shutil.copytree(self._application, os.path.join(self.package_folder, os.path.basename(self._application)),
+                            symlinks=True)
+            return
+        shutil.copytree(self._stage, os.path.join(self.package_folder, "root"), symlinks=True)
+        packaging = os.path.join(self.recipe_folder, "packaging")
+        self.python_requires["ios6-base"].module.DebianPackage(
+            self, os.path.join(packaging, "control"), self._stage, os.path.join(packaging, "DEBIAN")
+        ).write(os.path.join(self.package_folder, "deb"))

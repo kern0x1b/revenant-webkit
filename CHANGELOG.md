@@ -221,6 +221,16 @@ Dates are the day the change was measured on the device, not the day it compiled
   the function; it does not say which pointer was bad.
 
 ### Changed
+- **The port's own libraries are `@revenant/stable`.** `@ios6/stable` is left to
+  what ios6-toolchain serves: `ld64`, `libcxx`, `ldid` and `ios6-base`.
+- **Theos is gone from the build.** The tweak, the compat and TLS dylibs and the
+  Settings bundle are built by CMake from `platform/`, and the `.deb` is written
+  by `conan export-pkg` through ios6-base. `packaging/` keeps only `control` and
+  `DEBIAN/postinst`.
+- **cmake, ninja and ldid come from Conan**, not from `PATH`.
+- **Unused files removed.**
+- **CI is pinned to Conan 2.32.0** through `conan-io/setup-conan`.
+
 - **Font feature tags are translated instead of dropped.** `font-feature-settings`
   and every `font-variant-*` were discarded, because features are addressed by
   OpenType tag only from iOS 8 and handing this CoreText a tag-keyed dictionary

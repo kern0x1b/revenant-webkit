@@ -4,7 +4,7 @@ Measured, not guessed: every compile and every link of every piece this port
 builds was run with the compiler and the linker reporting each file they opened,
 and the lists here are what came back. They are paths, not Apple's files. Nothing
 of Apple's is committed to this repository or redistributed by it; the SDK
-itself comes from theos.
+itself comes from [theos/sdks](https://github.com/theos/sdks).
 
 | File | SDK | Paths |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ all, whether named directly or reached through another header.
 | --- | --- | --- |
 | the engine (`conanfile.py`, all three frameworks and `jsc`) | 1637 - 1586 headers, 51 stubs | |
 | `libios6compat.a` | 1021 headers | none |
-| the tweak dylibs (`packaging/`) | 4 headers, 11 stubs | `usr/include/AvailabilityVersions.h` |
+| the tweak dylibs (`platform/`) | 4 headers, 11 stubs | `usr/include/AvailabilityVersions.h` |
 | the libraries in `recipes/` and `libcxx` | 339 headers, 7 stubs | 25 headers, mostly `usr/include` and `libxml2` |
 
 ## macOS
@@ -65,6 +65,5 @@ the list:
 ccache replays a compile without running the compiler, so a cached compile logs
 nothing; `--ninja` reads the engine's includes from ninja's dependency log
 instead, which ccache does keep. The linker is always really run, so link traces
-need no special care - except that the tweak dylibs are linked by the Command
-Line Tools' linker, which does not honour `LD_TRACE_*`; measure them once with
-`ADDITIONAL_LDFLAGS=-B<ld64 bin>` and throw those objects away.
+need no special care: everything armv7, the tweak dylibs included, links through
+the `ld64` package with `-B` from the profile.
