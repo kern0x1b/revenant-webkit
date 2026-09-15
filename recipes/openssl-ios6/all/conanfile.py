@@ -1,5 +1,6 @@
 from conan import ConanFile
 from conan.tools.files import copy, replace_in_file, chdir
+from conan.tools.apple import XCRun
 from conan.tools.scm import Git
 import os
 
@@ -44,9 +45,10 @@ class OpenSSLIos6Conan(ConanFile):
     def build(self):
         sdk = self.conf.get("tools.apple:sdk_path")
         target = f"{self.settings.arch}-apple-ios{self.settings.os.version}"
+        xcrun = XCRun(self)
         flags = f"-target {target} -isysroot {sdk} -O2 -DBROKEN_CLANG_ATOMICS"
         env = {
-            "CC": "clang",
+            "CC": xcrun.cc,
             "CFLAGS": flags,
             "LDFLAGS": f"-target {target} -isysroot {sdk}",
         }

@@ -1,0 +1,4 @@
+sources:
+  "0.23.3":
+    url: "https://github.com/rockdaboot/libpsl.git"
+    commit: "c486db8d221cbac55f87508d4da4db4497760997"

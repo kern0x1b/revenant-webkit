@@ -12,3 +12,8 @@ class RevenantWebKit(ConanFile):
     def requirements(self):
         self.requires("openssl-ios6/3.0.15")
         self.requires("brotli/1.1.0")
+        self.requires("libwebp/1.4.0")
+        self.requires("libxslt/1.1.43")
+        self.requires("libpsl/0.23.3")
+        self.requires("icu/74.2")
+        self.requires("libcxx-armv7/21.1.0")

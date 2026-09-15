@@ -1,0 +1,4 @@
+sources:
+  "74.2":
+    url: "https://github.com/unicode-org/icu.git"
+    commit: "2d029329c82c7792b985024b2bdab5fc7278fbc8"

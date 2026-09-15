@@ -1,0 +1,4 @@
+sources:
+  "1.4.0":
+    url: "https://chromium.googlesource.com/webm/libwebp"
+    commit: "845d5476a866141ba35ac133f856fa62f0b7445f"
