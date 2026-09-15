@@ -298,11 +298,8 @@ class RevenantWebKit(ConanFile):
         for folder, _, names in os.walk(root):
             for name in names:
                 path = os.path.join(folder, name)
-                if os.path.islink(path):
+                if not self._is_macho(path):
                     continue
-                with open(path, "rb") as candidate:
-                    if candidate.read(4) not in (b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe"):
-                        continue
                 if "LC_ENCRYPTION_INFO" in self._output(f'"{otool}" -l "{path}"'):
                     stamped.append(os.path.relpath(path, root))
         if stamped:
@@ -362,17 +359,24 @@ class RevenantWebKit(ConanFile):
                 self.run(f'"{strip}" -S -x "{binary}"')
             self.run(f'ldid -S "{binary}"')
 
+    @staticmethod
+    def _is_macho(path):
+        if os.path.islink(path) or not os.path.isfile(path):
+            return False
+        with open(path, "rb") as candidate:
+            return candidate.read(4) in (b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
+
     def _build_platform(self, stage):
         folder = os.path.join(self.build_folder, "platform")
         self._cmake_project(os.path.join(self.recipe_folder, "platform"), folder)
         self.run(f'cmake --install "{folder}" --prefix "{stage}"')
+        with open(os.path.join(folder, "install_manifest.txt")) as manifest:
+            installed = [line.strip() for line in manifest if line.strip()]
         strip = self._tool("strip")
-        for binary in ("Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib",
-                       "usr/lib/rev-safari-compat.dylib", "usr/lib/rev-TLS.dylib",
-                       "Library/PreferenceBundles/RevPrefs.bundle/RevPrefs"):
-            path = os.path.join(stage, binary)
-            self.run(f'"{strip}" -x "{path}"')
-            self.run(f'ldid -S "{path}"')
+        for path in installed:
+            if self._is_macho(path):
+                self.run(f'"{strip}" -x "{path}"')
+                self.run(f'ldid -S "{path}"')
 
     def _build_standalone_app(self):
         name = "RevWebViewHost"
