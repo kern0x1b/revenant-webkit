@@ -104,10 +104,12 @@ def host_checks(root: Path) -> None:
 def device_gate(root: Path) -> None:
     if not device.reachable(10):
         raise NoDevice("no device - this integration is unverified and must not be shipped")
-    require(python_tool(root, "scripts/deploy-engine.py"), "deploy failed",
+    require(["conan", "config", "install", root / "conan"], "installing the port's conan commands failed",
+            stdout=subprocess.DEVNULL)
+    require(["conan", "revenant:deploy", "--root", root], "deploy failed",
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    result = subprocess.run(python_tool(root, "tests/device/run.py"), stdout=subprocess.PIPE,
-                            text=True, errors="replace", check=False)
+    result = subprocess.run(["conan", "revenant:test-device", "--root", str(root), "--tier", "gate"],
+                            stdout=subprocess.PIPE, text=True, errors="replace", check=False)
     for line in result.stdout.splitlines()[-3:]:
         print(line)
     if result.returncode:

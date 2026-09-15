@@ -89,6 +89,6 @@ CMake from `platform/CMakeLists.txt` like the dylibs beside it — that writes t
   `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`, engine
   frameworks included; `packaging/` holds only the `control` file and the
   `DEBIAN/postinst` script. The version is `version` in `conanfile.py`.
-- Deploy: `dpkg -i` that package through `tools/device.py`; `scripts/deploy-engine.py` for the engine alone.
+- Deploy: `dpkg -i` that package through `tools/device.py`; `conan revenant:deploy` for the engine alone.
 - Documentation: `docs/` (`architecture.md`, `network.md`, `compatibility.md`, `building.md`, `memory-and-caches.md`).
 - Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.

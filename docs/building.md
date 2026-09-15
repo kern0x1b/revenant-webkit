@@ -81,7 +81,14 @@ Register the two indexes once, the toolchain's and this repository's:
 conan config install <ios6-toolchain>/config
 conan ios6-remote ios6 <ios6-toolchain>
 conan ios6-remote revenant .
+conan config install conan
 ```
+
+The last line installs this repository's own commands, `revenant:deploy`,
+`revenant:run-app` and `revenant:test-device`, which take the phone's address
+from `tools/device.env` or from `user.revenant:device_host` and the
+configuration beside it. `conan config install` copies them, so run it again
+after changing anything under `conan/`.
 
 `conan build` writes `build/engine/armv7-system/conan/ios6-deps.env` through the
 `ios6-base` generator, straight from the dependency graph - one
@@ -237,7 +244,7 @@ Copy `device.env.example` to `device.env` and fill in the address and password;
 neither is in the repository.
 
 ```sh
-scripts/deploy-engine.py    # engine only: stage, back up, push to /usr/lib/rev-fw, respring
+conan revenant:deploy    # engine only: back up, push the staged frameworks, restart Safari
 ```
 
 For everything else, install the package the way any tweak is installed:
@@ -263,7 +270,7 @@ this engine, because it drives its view through the *system* WebCore's
 
 ```sh
 conan build . -pr:h profiles/revenant-armv7 -pr:b default -o prefixed=True
-scripts/run-app-rev.py 20
+conan revenant:run-app --wait 20
 ```
 
 The prefixed build ends in `build/engine/armv7-prefixed/RevWebViewHost.app`,

@@ -22,8 +22,16 @@ Scripts import it instead of building SSH option strings of their own.
 the way any tweak is installed:
 
 ```sh
-tools/device.py copy build/engine/armv7-system/packages/*.deb /tmp/rev.deb
+conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default
+deb="$(conan cache path revenant-webkit/<version>:<package id>)/deb"
+tools/device.py copy "$deb"/space.kern0x1b.rev_*_iphoneos-arm.deb /tmp/rev.deb
 tools/device.py run 120 "dpkg -i /tmp/rev.deb"
+```
+
+For the engine alone, without rebuilding the package:
+
+```sh
+conan revenant:deploy
 ```
 
 Its postinst restarts Mobile Safari and Preferences; no respring is needed. The
