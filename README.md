@@ -108,9 +108,9 @@ first. Three artifacts do this:
 
 | Artifact | On device | Built by | Role |
 | --- | --- | --- | --- |
-| **Loader** | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `packaging/loader` (Theos) | Reads the enabled-apps preference and re-execs an enabled app with the engine's `DYLD_*` set. Skips SpringBoard. |
+| **Loader** | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `RevSafari` in `platform/CMakeLists.txt` | Reads the enabled-apps preference and re-execs an enabled app with the engine's `DYLD_*` set. Skips SpringBoard. |
 | **Engine** | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `conan build` from `conanfile.py`, which also lays it out under the system's names | The WebKit build itself. |
-| **Compat / hooks** | `/usr/lib/rev-safari-compat.dylib` | `packaging/compat` (Theos) | The ABI symbols iOS 6 predates, plus the bookmarks start page, WebAssembly, and preference reads. Inserted by the loader. |
+| **Compat / hooks** | `/usr/lib/rev-safari-compat.dylib` | `rev-safari-compat` in `platform/CMakeLists.txt` | The ABI symbols iOS 6 predates, plus the bookmarks start page, WebAssembly, and preference reads. Inserted by the loader. |
 
 The loader and the compat dylib are two different files with two different jobs —
 overwriting one with the other drops Safari back to the system engine.
@@ -125,38 +125,38 @@ overwriting one with the other drops Safari back to the system engine.
 **Build host** (macOS)
 
 - The Command Line Tools and an **iOS 13.7 SDK** — the newest SDK that still
-  emits armv7 and accepts a 6.0 deployment target. theos carries it; point
-  `IOS_SDK` elsewhere only if yours lives elsewhere. Xcode is not needed.
-- `conan`, `cmake`, `ninja`, `ccache` and **`ldid`** (for ad-hoc signing), and
-  [ios6-toolchain](https://github.com/kern0x1b/ios6-toolchain) installed with
-  `conan config install`.
+  emits armv7 and accepts a 6.0 deployment target, from
+  [theos/sdks](https://github.com/theos/sdks). The build looks for it in
+  `~/theos/sdks/iPhoneOS13.7.sdk`; set `IOS_SDK` only if yours lives elsewhere.
+  Xcode is not needed, and neither is Theos.
+- `conan`, and [ios6-toolchain](https://github.com/kern0x1b/ios6-toolchain)
+  installed with `conan config install`. Conan itself installs `cmake`, `ninja`,
+  `ldid` and the `ld64` linker.
 
 ## Build
 
 ```sh
-export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"   # any SDK that still emits armv7
-
 ./fetch-source.py          # the engine, a git submodule on the fork's main branch
 ```
 
-Then the libraries this OS cannot supply, the engine, and the package. Each step
-is one script and each is worth running alone when only it changed — the whole
+Then the libraries this OS cannot supply, the engine, and the package. The whole
 sequence, and why each piece exists, is in **[docs/building.md](docs/building.md)**:
 
 | Step | Builds |
 | --- | --- |
-| `conan build . -pr:h profiles/revenant-armv7 -pr:b default` | the libraries iOS 6 predates, `libios6compat.a` and the engine, into `build/engine/armv7-system` |
+| `conan build . -pr:h profiles/revenant-armv7 -pr:b default --build=missing` | the libraries iOS 6 predates, `libios6compat.a`, the engine and everything around it, laid out as the device filesystem in `build/engine/armv7-system/stage` |
+| `conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default` | the `.deb` |
 
-A change to a WebCore header means a full `ninja`: a partial build leaves the
-other frameworks compiled against the old class size, and the result loads and
-then misbehaves with no crash to read.
+A change to a WebCore header means a full build, which `conan build` is: a
+partial build leaves the other frameworks compiled against the old class size,
+and the result loads and then misbehaves with no crash to read.
 
 ### The Safari substitution, as a package
 
-The same `conan build` finishes it: the engine laid out as the system frameworks
-it replaces, and everything that goes on the device around it built by
-[Theos](https://theos.dev) from `packaging/`, into
-`build/engine/armv7-system/packages/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
+`conan build` lays out the engine as the system frameworks it replaces, and
+builds everything that goes on the device around it with CMake from
+`platform/`. `conan export-pkg` packs that tree into
+`<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
 The version is `version` in `conanfile.py` - change it there and build.
 
 One `.deb` carries all of it: the loader and its MobileSubstrate filter, the
@@ -168,9 +168,7 @@ is installed:
 dpkg -i space.kern0x1b.rev_*_iphoneos-arm.deb
 ```
 
-Two settings in `packaging/common.mk` and `packaging/compat/Makefile` are not
-optional, and each says why where it is set: modules are off, because this SDK
-still ships `mach-o/module.map` under its deprecated name; and the compat dylib
+Two settings in `platform/CMakeLists.txt` are not optional: the compat dylib
 is built without `_FORTIFY_SOURCE` and without libc++, because the `__*_chk`
 symbols are linkage this release never had, and the engine carries its own C++
 runtime — a second one in the same process is a crash waiting to happen.
@@ -188,8 +186,9 @@ Then build and install the package, which carries the loader, the compatibility
 dylib, the TLS dylib and the Settings pane, and can be removed again:
 
 ```sh
-conan build . -pr:h profiles/revenant-armv7 -pr:b default
-tools/device.py copy build/engine/armv7-system/packages/*.deb /tmp/rev.deb
+conan build . -pr:h profiles/revenant-armv7 -pr:b default --build=missing
+conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default
+tools/device.py copy "<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb" /tmp/rev.deb
 tools/device.py run 120 "dpkg -i /tmp/rev.deb"
 ```
 
@@ -226,15 +225,16 @@ reads:
 ## Repository layout
 
 ```
-app/            The TLS bridge, the WebAssembly bridge, and the embeddable host for the web view
+app/            The standalone application: the embeddable host for the web view
 compat/         Symbols iOS 6 does not have, built into libios6compat.a
 docs/           Documentation and the screenshots in this README
-packaging/      Theos: the loader, compat dylib, TLS dylib, Settings bundle, engine layout
-platform/
-  safari/       The Safari substitution: the loader and the compat/hooks source
+packaging/      The package's control file and DEBIAN scripts
+platform/       The tweak, compat and TLS dylibs and the Settings bundle, built with CMake
+  safari/       The Safari substitution: the loader, the compat/hooks, WebAssembly and TLS sources
   prefs/        The RevWebKit Settings PreferenceBundle
   device/       What is installed on the phone beside the engine
-scripts/        The build and deploy, one step per script
+recipes/        Conan recipes for the libraries iOS 6 cannot supply
+scripts/        The check scripts and CMake toolchain files the recipe uses, and maintenance and device helpers
 tests/          The numeric device suite, host tests, and JS conformance checks
 tools/          Diagnostic instruments, on the host and on the device
 webkit-254/     The engine, a git submodule on the fork's main branch
@@ -298,8 +298,8 @@ BSD-2-Clause - and this port's changes to it are commits on the `main`
 branch of the `webkit-254` submodule, under those same terms.
 
 Nothing third-party is vendored here. Every library this operating system
-cannot supply is fetched from its own upstream by a script, at a pinned version,
-into an untracked directory. [THIRD-PARTY.md](THIRD-PARTY.md) lists each one,
-its version, its license, and the script that fetches it - and what this project
+cannot supply is fetched from its own upstream by a Conan recipe under
+`recipes/`, at a pinned version. [THIRD-PARTY.md](THIRD-PARTY.md) lists each one,
+its version, its license, and the recipe that fetches it - and what this project
 deliberately does not carry, including anybody else's fonts, pages or test
 suites.

@@ -6,12 +6,10 @@ description: Build the WebKit engine and the Safari-substitution artifacts (load
 # Building Revenant WebKit
 
 Everything targets **armv7, iOS 6.0 deployment**, built with an **iOS 13.7 SDK**
-(the newest SDK that still emits armv7). Point `IOS_SDK` at it. `cmake`, `ninja`
-and `ldid` must be on `PATH`.
-
-```sh
-export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"
-```
+(the newest SDK that still emits armv7), from https://github.com/theos/sdks. The
+profile finds it at `~/theos/sdks/iPhoneOS13.7.sdk`; set `IOS_SDK` only if it
+lives elsewhere. `cmake`, `ninja`, `ldid` and `ld64` come from Conan, not `PATH`;
+Theos is not used.
 
 ## Engine
 
@@ -23,14 +21,17 @@ One command builds the libraries iOS 6 predates (declared in `conanfile.py`,
 pinned in `conan.lock`), `libios6compat.a` and the engine:
 
 ```sh
-conan build . -pr:h profiles/revenant-armv7 -pr:b default
+conan build . -pr:h profiles/revenant-armv7 -pr:b default --build=missing
 ```
 
 It builds into `build/engine/armv7-system`; `-o prefixed=True` builds the
 standalone application's engine into `build/engine/armv7-prefixed`. Unchanged
-libraries come from the Conan cache and unchanged sources from ccache.
+libraries come from the Conan cache. ccache is used only when set as the
+compiler launcher through `tools.cmake.cmaketoolchain:extra_variables`
+(`CMAKE_<LANG>_COMPILER_LAUNCHER` for C, CXX, OBJC and OBJCXX) in one's own
+`global.conf` or profile.
 
-A change to a WebCore header means a full `ninja` — a partial build leaves the
+A change to a WebCore header means a full `conan build` — a partial build leaves the
 other frameworks on the old class size, and the result loads and misbehaves with
 no crash log. `docs/building.md` has the whole sequence.
 
@@ -39,11 +40,18 @@ no crash log. `docs/building.md` has the whole sequence.
 ## Safari-substitution artifacts
 
 The same `conan build` finishes them: after the engine it runs the carry,
-compat and symbol checks, lays the frameworks out as
-`build/engine/armv7-system/rev-sys-fw` (-> `/usr/lib/rev-fw`), and packs loader,
-compat, TLS, prefs and engine into
-`build/engine/armv7-system/packages/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
-The version is `version` in `conanfile.py`. Every binary is signed with `ldid -S`.
+compat and symbol checks, builds loader, compat, TLS and prefs with CMake from
+`platform/`, and lays everything out as the device filesystem in
+`build/engine/armv7-system/stage` (frameworks in `stage/usr/lib/rev-fw`). Every
+binary is stripped and signed with `ldid -S`.
+
+```sh
+conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default
+```
+
+packs that stage into
+`<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
+The version is `version` in `conanfile.py`.
 
 Add `-c user.ios6:dyld_shared_cache=<path>` with a copy of the phone's
 `dyld_shared_cache_armv7` to have the build refuse imports iOS 6 does not export.
@@ -54,8 +62,8 @@ A dylib can compile clean and still refuse to load on iOS 6 (dyld gives up
 silently). Before deploying:
 
 ```sh
-otool -L dist/rev-safari-compat.dylib     # dependencies must match the on-device working copy
-nm -u dist/rev-safari-compat.dylib | c++filt | less   # undefined symbols sanity
+otool -L build/engine/armv7-system/stage/usr/lib/rev-safari-compat.dylib     # dependencies must match the on-device working copy
+nm -u build/engine/armv7-system/stage/usr/lib/rev-safari-compat.dylib | c++filt | less   # undefined symbols sanity
 ```
 
 - The **loader** (`RevSafari.dylib`) links only `libSystem` + `CoreFoundation`,

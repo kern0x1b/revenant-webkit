@@ -7,9 +7,11 @@ offered, none of which this system speaks. The certificate side is fine, the
 device already trusts ISRG Root X1 and X2; the connection never gets that far.
 
 So the port brings its own protocol, over OpenSSL built for armv7, in two
-places. Both are in `app/`, and both ship in the compat package.
+places. `platform/safari/tls-openssl.c` becomes `rev-TLS.dylib`, which the
+Safari package installs and the loader inserts; `app/ModernTLSURLProtocol.m` is
+compiled into the standalone application.
 
-| | `app/tls-openssl.c` | `app/ModernTLSURLProtocol.m` |
+| | `platform/safari/tls-openssl.c` | `app/ModernTLSURLProtocol.m` |
 | --- | --- | --- |
 | Takes over | the 25 SecureTransport entry points CFNetwork imports | every request that goes through `NSURLConnection` |
 | Leaves alone | the socket, its timeouts and proxy handling, the `SecTrust` evaluation — all still CFNetwork's | nothing above the socket: the exchange is made here and handed back as an ordinary `NSURLResponse` |

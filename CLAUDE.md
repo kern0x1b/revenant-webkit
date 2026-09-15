@@ -24,9 +24,9 @@ A loader is injected into the launching app, sets `DYLD_FRAMEWORK_PATH` /
 
 | Source | Built to | On device | Job |
 | --- | --- | --- | --- |
-| `platform/safari/rev-safari-tweak.c` | `dist/RevSafari.dylib` | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | The **loader**: reads `InjectedApps`, re-execs enabled apps, skips SpringBoard. |
-| `platform/safari/safari-compat.mm` | `dist/rev-safari-compat.dylib` | `/usr/lib/rev-safari-compat.dylib` | **Compat + hooks**: iOS 6 ABI stubs, bookmarks start page, WebAssembly, preference reads. Inserted by the loader. |
-| the engine build | `build/engine/armv7-system/rev-sys-fw` | `/usr/lib/rev-fw/*.framework` | The WebKit engine itself. |
+| `platform/safari/rev-safari-tweak.c` | `build/engine/armv7-system/stage/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | The **loader**: reads `InjectedApps`, re-execs enabled apps, skips SpringBoard. |
+| `platform/safari/safari-compat.mm` | `build/engine/armv7-system/stage/usr/lib/rev-safari-compat.dylib` | `/usr/lib/rev-safari-compat.dylib` | **Compat + hooks**: iOS 6 ABI stubs, bookmarks start page, WebAssembly, preference reads. Inserted by the loader. |
+| the engine build | `build/engine/armv7-system/stage/usr/lib/rev-fw` | `/usr/lib/rev-fw/*.framework` | The WebKit engine itself. |
 
 **The loader and the compat dylib are different files.** Deploying the compat
 dylib over `RevSafari.dylib` (or vice versa) drops Safari to the system engine —
@@ -34,8 +34,8 @@ this has happened. The package puts each in its own place.
 
 ## The Settings pane
 
-`platform/prefs/` builds `RevPrefs.bundle` — a native PreferenceBundle (no Theos)
-that writes the `space.kern0x1b.rev` preferences domain the engine reads
+`platform/prefs/` builds `RevPrefs.bundle` — a native PreferenceBundle, built by
+CMake from `platform/CMakeLists.txt` like the dylibs beside it — that writes the `space.kern0x1b.rev` preferences domain the engine reads
 (`NewTabStartPage`, `CustomURLEnabled`, `CustomURL`, `InjectedApps`). System
 `PSListController` cells are loaded from `platform/prefs/Resources/Root.plist`.
 
@@ -47,7 +47,8 @@ that writes the `space.kern0x1b.rev` preferences domain the engine reads
   those two frameworks read that type with the old layout. The symptom is not a
   crash log: the engine initialises cleanly, Safari's chrome draws with no text at
   all, and the process disappears with no REVCRASH line and no crash report. After
-  any header change run plain `ninja`, then deploy.
+  any header change run the full `conan build`, which builds everything, then
+  deploy.
 - **Load-time undefined symbols.** A dylib that links clean (`ninja`/`clang`
   exit 0) can still fail to load on iOS 6, silently — dyld gives up and, for the
   Safari case, Safari falls back to the system engine. After building an injected
@@ -78,16 +79,16 @@ that writes the `space.kern0x1b.rev` preferences domain the engine reads
   placeholders in scripts and docs.
 - **Commit messages:** plain imperative subject describing the change. No AI or
   tool attribution.
-- **Build artifacts** (`dist/`, `build/`, `build-254*/`, `*.dylib`, `*.a`, `*.log`) are
+- **Build artifacts** (`build/`, `*.dylib`, `*.a`, `*.log`) are
   gitignored and reproducible from the recipe — do not commit them.
 
 ## Where to look
 
-- Build: `conan build . -pr:h profiles/revenant-armv7 -pr:b default` (add `-o prefixed=True` for the standalone application's engine); see `docs/building.md`.
-- Package: the same `conan build` ends in
-  `build/engine/armv7-system/packages/*.deb`, engine frameworks included;
-  `packaging/` holds the Theos makefiles it drives. The version is `version` in
-  `conanfile.py`.
+- Build: `conan build . -pr:h profiles/revenant-armv7 -pr:b default --build=missing` (add `-o prefixed=True` for the standalone application's engine); see `docs/building.md`. It ends with the device filesystem tree in `build/engine/armv7-system/stage`.
+- Package: `conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default` writes
+  `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`, engine
+  frameworks included; `packaging/` holds only the `control` file and the
+  `DEBIAN/postinst` script. The version is `version` in `conanfile.py`.
 - Deploy: `dpkg -i` that package through `tools/device.py`; `scripts/deploy-engine.py` for the engine alone.
 - Documentation: `docs/` (`architecture.md`, `network.md`, `compatibility.md`, `building.md`, `memory-and-caches.md`).
 - Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.

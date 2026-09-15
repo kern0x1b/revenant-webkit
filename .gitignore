@@ -13,6 +13,7 @@ build-jsc32/
 *.tar.gz
 
 .DS_Store
+__pycache__/
 # The device's address and password. device.env.example is the tracked template;
 # every other variant, including hand-kept backups, is personal.
 device.env*
@@ -21,10 +22,6 @@ device.env*
 # Local device screenshots captured during work — may show device content
 .claude/screenshots/
 sweep-shots/
-.theos/
-packaging/obj/
-# Theos leaves a .stamp beside sources it reaches through a relative path.
-packaging/**/.stamp
 
 # A sweep list is the operator's, never the repository's.
 tests/device/sweep-sites.txt

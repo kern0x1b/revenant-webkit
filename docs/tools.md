@@ -31,7 +31,7 @@ They are all built the same way, against the iOS SDK the port uses, for armv7:
 ```sh
 clang -target armv7-apple-ios6.0 -isysroot "$IOS_SDK" -O2 -fno-objc-arc \
     -framework Foundation -framework OpenGLES \
-    tools/<name>.m -o dist/<name>
+    tools/<name>.m -o build/probes/<name>
 ```
 
 Add `-framework CoreVideo` for anything that touches `CVOpenGLESTextureCache`
@@ -44,7 +44,7 @@ pointed at the engine's C++ runtime or it traps at load with nothing printed:
 
 ```sh
 install_name_tool -change @executable_path/Frameworks/libc++.1.dylib \
-    /usr/lib/librev-c++.1.dylib dist/angle-eagl-probe
+    /usr/lib/librev-c++.1.dylib build/probes/angle-eagl-probe
 ```
 
 Copy it over with `scp` on the device port and run it over ssh; `tools/device.py`

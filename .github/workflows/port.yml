@@ -28,9 +28,6 @@ jobs:
           version: 2.32.0
           cache_packages: true
 
-      - name: Install the host tools
-        run: brew install ninja
-
       - name: Register the toolchain and the port's recipes
         run: |
           conan config install "$GITHUB_WORKSPACE/ios6-toolchain/config"
