@@ -8,6 +8,7 @@ set(CMAKE_MACOSX_BUNDLE OFF)
 
 foreach(tool revmem revpid revtouch raise-memory-limit)
     add_executable(${tool} tools/${tool}.c)
+    install(TARGETS ${tool} RUNTIME DESTINATION bin)
 endforeach()
 
 target_link_libraries(revtouch PRIVATE "-framework IOKit" "-framework CoreFoundation")

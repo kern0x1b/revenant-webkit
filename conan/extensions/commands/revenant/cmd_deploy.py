@@ -7,47 +7,49 @@ from conan.errors import ConanException
 
 import revenant_checkout
 
-REMOTE = "/usr/lib/rev-fw"
-FRAMEWORKS = ("JavaScriptCore", "WebCore", "WebKit")
+
+def frameworks_of(staged: Path):
+    return sorted(path.stem for path in staged.glob(f"*{revenant_checkout.FRAMEWORK}"))
 
 
-def back_up_engine(device, out):
-    out.info(f"backing up current engine -> {REMOTE}.bak")
-    names = " ".join(FRAMEWORKS)
-    device.run(30, f"mkdir -p {REMOTE}.bak; for fw in {names}; do "
-                   f"cp -f {REMOTE}/$fw.framework/$fw {REMOTE}.bak/$fw 2>/dev/null || true; done",
+def back_up_engine(device, remote: str, frameworks, out):
+    out.info(f"backing up current engine -> {remote}.bak")
+    names = " ".join(frameworks)
+    device.run(30, f"mkdir -p {remote}.bak; for fw in {names}; do "
+                   f"cp -f {remote}/$fw{revenant_checkout.FRAMEWORK}/$fw {remote}.bak/$fw 2>/dev/null || true; done",
                capture=False, check=True)
 
 
-def install_binaries(device, staged: Path, out):
-    for framework in FRAMEWORKS:
+def install_binaries(device, staged: Path, remote: str, frameworks, out):
+    for framework in frameworks:
         out.info(f"installing {framework}")
-        if not device.copy(staged / f"{framework}.framework" / framework,
-                           f"{REMOTE}/{framework}.framework/{framework}", capture=False):
+        bundle = f"{framework}{revenant_checkout.FRAMEWORK}"
+        if not device.copy(staged / bundle / framework, f"{remote}/{bundle}/{framework}", capture=False):
             raise ConanException(f"copying {framework} to the phone failed")
 
 
-def install_webcore_resources(device, staged: Path, out):
-    webcore = staged / "WebCore.framework"
-    if not ((webcore / "modern-media-controls").is_dir() or (webcore / "Info.plist").is_file()):
-        return
-    entries = sorted(entry.name for entry in webcore.iterdir()
-                     if not entry.name.startswith(".") and entry.name != "WebCore")
-    out.info(f"installing WebCore resources ({len(entries)} entries)")
-    status = device.pipe_into(["tar", "czf", "-", *entries],
-                              f"cd {REMOTE}/WebCore.framework && tar xzf - && chmod -R 755 . 2>/dev/null",
-                              cwd=webcore)
-    if status:
-        raise ConanException(f"streaming WebCore resources to the phone failed (exit {status})")
+def install_resources(device, staged: Path, remote: str, frameworks, out):
+    for framework in frameworks:
+        bundle = staged / f"{framework}{revenant_checkout.FRAMEWORK}"
+        entries = sorted(entry.name for entry in bundle.iterdir()
+                         if not entry.name.startswith(".") and entry.name != framework)
+        if not entries:
+            continue
+        out.info(f"installing {framework} resources ({len(entries)} entries)")
+        status = device.pipe_into(["tar", "czf", "-", *entries],
+                                  f"cd {remote}/{bundle.name} && tar xzf - && chmod -R 755 . 2>/dev/null",
+                                  cwd=bundle)
+        if status:
+            raise ConanException(f"streaming {framework} resources to the phone failed (exit {status})")
 
 
 @conan_command(group="Revenant")
 def deploy(conan_api, parser, *args):
     """
-    Install the built engine frameworks into /usr/lib/rev-fw on the phone and restart Mobile Safari.
+    Install the built engine frameworks where the package puts them on the phone and restart Mobile Safari.
     """
     revenant_checkout.add_root_argument(parser)
-    parser.add_argument("--build", help="engine build folder whose stage holds usr/lib/rev-fw; "
+    parser.add_argument("--build", help="engine build folder whose stage holds the laid-out frameworks; "
                                         "default: build/engine/armv7-system of the checkout")
     parsed = parser.parse_args(*args)
 
@@ -57,8 +59,10 @@ def deploy(conan_api, parser, *args):
         staged = revenant_checkout.frameworks_in(Path(parsed.build).expanduser().resolve(), root)
     else:
         staged = revenant_checkout.staged_frameworks(root)
+    remote = revenant_checkout.device_location(staged)
+    frameworks = frameworks_of(staged)
     device = revenant_checkout.device_module(root, conan_api)
-    out.info(f"deploying {staged} to {device.HOST}:{device.PORT}")
+    out.info(f"deploying {staged} to {device.HOST}:{device.PORT} {remote}")
 
     probe = device.run(12, "echo ok")
     if probe.returncode:
@@ -66,10 +70,10 @@ def deploy(conan_api, parser, *args):
                              f"{(probe.stderr or '').strip() or f'exit {probe.returncode}'}")
 
     try:
-        back_up_engine(device, out)
-        install_binaries(device, staged, out)
-        install_webcore_resources(device, staged, out)
-        device.run(20, f"chmod 755 {REMOTE}/*/* 2>/dev/null; echo installed", capture=False, check=True)
+        back_up_engine(device, remote, frameworks, out)
+        install_binaries(device, staged, remote, frameworks, out)
+        install_resources(device, staged, remote, frameworks, out)
+        device.run(20, f"chmod 755 {remote}/*/* 2>/dev/null; echo installed", capture=False, check=True)
     except subprocess.CalledProcessError as error:
         raise ConanException(f"remote step failed (exit {error.returncode}): {error.cmd}") from error
 

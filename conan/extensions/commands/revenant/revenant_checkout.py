@@ -69,6 +69,10 @@ def device_module(root: Path, conan_api):
     return device
 
 
+STAGE = "stage"
+FRAMEWORK = ".framework"
+
+
 def engine_build(root: Path, variant: str) -> Path:
     build = root / "build" / "engine" / f"armv7-{variant}"
     if not build.is_dir():
@@ -82,10 +86,18 @@ def staged_frameworks(root: Path) -> Path:
 
 
 def frameworks_in(build: Path, root: Path) -> Path:
-    staged = build / "stage" / "usr" / "lib" / "rev-fw"
-    if not (staged / "WebCore.framework" / "WebCore").is_file():
-        raise ConanException(f"{staged} holds no laid-out frameworks - run conan build at {root} first")
-    return staged
+    stage = build / STAGE
+    laid_out = [path for path in stage.glob(f"**/*{FRAMEWORK}") if (path / path.stem).is_file()] if stage.is_dir() else []
+    if not laid_out:
+        raise ConanException(f"{stage} holds no laid-out frameworks - run conan build at {root} first")
+    return min(laid_out, key=lambda path: len(path.parts)).parent
+
+
+def device_location(staged: Path) -> str:
+    for parent in staged.parents:
+        if parent.name == STAGE:
+            return "/" + str(staged.relative_to(parent))
+    raise ConanException(f"{staged} is not inside a {STAGE} tree, so where it belongs on the phone is unknown")
 
 
 def standalone_app(root: Path) -> Path:
