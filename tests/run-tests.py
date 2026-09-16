@@ -85,16 +85,6 @@ def ios_sdk() -> str:
     return os.environ.get("IOS_SDK") or f"{theos}/sdks/iPhoneOS13.7.sdk"
 
 
-def host_libraries(root: Path) -> dict:
-    output = root / "build" / "host-tests"
-    output.mkdir(parents=True, exist_ok=True)
-    return install_dependencies(
-        ["conan", "install", root / "tests" / "host", "-pr:h", "default", "-pr:b", "default",
-         "--build=missing", f"--lockfile={root / 'conan.lock'}", "--lockfile-partial",
-         f"--output-folder={output}"],
-        output / "conan-install.log", output / "ios6-deps.env", ("IOS6_HOST_ICU",))
-
-
 def recipe_and_profile(root: Path) -> tuple:
     for tree in engine_builds(root, "system"):
         written = tree / "charon"
@@ -140,13 +130,13 @@ def print_last_lines(argv: list, count: int) -> bool:
     return result.returncode == 0
 
 
-def run_host_tests(root: Path) -> int:
+def run_host_tests(root: Path, packages: dict) -> int:
     speak()
-    try:
-        icu = Path(host_libraries(root)["IOS6_HOST_ICU"])
-    except DependencyInstallError as error:
-        log.error("host tests: %s", error)
+    if "icu" not in packages:
+        log.error("host tests: the tier installed %s and none of them is icu",
+                  ", ".join(sorted(packages)) or "nothing")
         return 1
+    icu = Path(packages["icu"])
 
     failures = 0
     binaries = Path(os.environ.get("TMPDIR") or "/tmp") / "revenant-tests"
@@ -343,7 +333,9 @@ def main() -> int:
 
     failures = 0
     if args.tier in ("host", "all"):
-        failures += run_host_tests(ROOT)
+        log.error("the host tier is run by Charon, which installs the packages it declares: "
+                  "charon test --tier host")
+        failures += 1
     if args.tier in ("device", "all"):
         failures += run_device_tests(ROOT, default_engine_build(ROOT), transport())
 

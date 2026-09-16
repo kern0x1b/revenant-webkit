@@ -88,6 +88,14 @@ def main():
         if not applied.is_file():
             failures.append("{} names {} which does not exist".format(variable, applied))
 
+        for key, (_, named) in values.items():
+            if not key.startswith("CMAKE_PROJECT_") or not key.endswith("_INCLUDE") or not named:
+                continue
+            if not Path(named).is_file():
+                failures.append("{} in {} names {}, which is not there. An entry cmake never consumes is "
+                                "what hid this defect the first time, so a stale one does not get to "
+                                "stay".format(key, cache, named))
+
         sysroot = values.get("CMAKE_OSX_SYSROOT", ("", ""))[1]
         if not sysroot:
             failures.append("{} carries no CMAKE_OSX_SYSROOT, so nothing says which SDK a package would "
