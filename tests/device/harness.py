@@ -54,6 +54,14 @@ def _shared():
     return Path(home.stdout.strip()) / "extensions" / "charon"
 
 
+def driver():
+    folder = _shared()
+    if "charon" not in sys.modules:
+        sys.path.insert(0, str(folder))
+    import charon
+    return charon
+
+
 def host_address():
     found = subprocess.run(["ipconfig", "getifaddr", "en0"], capture_output=True, text=True).stdout.strip()
     if found:

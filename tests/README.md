@@ -40,12 +40,13 @@ The same fault takes two seconds to find here.
 ## device
 
 `tests/js/*.js` run under `jsc` on the phone with the freshly built engine.
-The engine comes from `ENGINE_BUILD`, or from the system build found under
-`build/` by the dependency environment every build writes; when an older
-layout is still lying beside the current one, the nearer tree wins. The runner
-syncs `jsc` and any framework whose size differs, so the batteries
-never run against a stale engine, and it pins the connection to the iPhone's
-UDID through iproxy so a connected iPad cannot answer instead.
+The engine comes from `ENGINE_BUILD`, or from the engine build Charon names:
+the one tree directly under `build/` that is configured and has its frameworks
+laid out under `stage/`. The port keeps no rule of its own for this. The runner
+compares `jsc`, the C++ runtime and each framework with the phone's copy by
+content and syncs the ones that differ, so the batteries never run against a
+stale engine, and it pins the connection to the iPhone's UDID through iproxy so
+a connected iPad cannot answer instead.
 
 Requires `iproxy 2225:22 -u <iphone-udid> &`.
 

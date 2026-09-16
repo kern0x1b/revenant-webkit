@@ -17,10 +17,16 @@ from typing import NamedTuple
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def harness():
+    folder = str(ROOT / "tests" / "device")
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
+    import harness as loaded
+    return loaded
+
+
 def transport():
-    sys.path.insert(0, str(ROOT / "tests" / "device"))
-    import harness
-    return harness.transport()
+    return harness().transport()
 
 MARKER = Path("conan") / "ios6-deps.env"
 DEVICE_DIR = "/tmp/jscrun"
@@ -85,26 +91,21 @@ def ios_sdk() -> str:
     return os.environ.get("IOS_SDK") or f"{theos}/sdks/iPhoneOS13.7.sdk"
 
 
-def recipe_and_profile(root: Path) -> tuple:
-    for tree in engine_builds(root, "system"):
-        written = tree / "charon"
-        if (written / "conanfile.py").is_file() and (written / "profile").is_file():
-            return written, written / "profile"
-    if (root / "conanfile.py").is_file():
-        profiles = sorted((root / "profiles").glob("*")) if (root / "profiles").is_dir() else []
-        if profiles:
-            return root, profiles[0]
+def recipe_and_profile(build: Path) -> tuple:
+    written = build / "charon"
+    if (written / "conanfile.py").is_file() and (written / "profile").is_file():
+        return written, written / "profile"
     raise DependencyInstallError(
-        f"neither a generated recipe under a build tree of {root / 'build'} nor a recipe at {root} - "
-        "run the build first, so the libraries the batteries need can be installed")
+        f"{written} holds no generated recipe and profile - "
+        "run charon build, so the libraries the batteries need can be installed")
 
 
-def device_libraries(root: Path) -> dict:
-    where, profile = recipe_and_profile(root)
+def device_libraries(root: Path, build: Path) -> dict:
+    where, profile = recipe_and_profile(build)
     return install_dependencies(
         ["conan", "install", where, "-pr:h", profile, "-pr:b", "default", "--build=missing"],
         root / "build" / "deps-install.log",
-        lambda: next(iter(engine_builds(root, "system")), root / "build") / MARKER,
+        build / MARKER,
         ("IOS6_HOST_LIBCXX",), env={**os.environ, "IOS_SDK": ios_sdk()})
 
 
@@ -210,7 +211,7 @@ def build_jsc(build: Path, libraries: dict) -> bool:
 
 def sync_engine(root: Path, build: Path, device) -> bool:
     try:
-        libraries = device_libraries(root)
+        libraries = device_libraries(root, build)
     except DependencyInstallError as error:
         log.error("device tests: %s", error)
         return False
@@ -259,26 +260,14 @@ def battery_verdict(output: str, returncode: int) -> Verdict:
     return Verdict(status, verdict, failed, reported)
 
 
-def engine_builds(root: Path, variant: str) -> list:
-    build = root / "build"
-    found = [marker.parent.parent for marker in build.glob(f"**/{MARKER.as_posix()}")
-             if marker.parent.parent != build and variant in marker.parent.parent.name] if build.is_dir() else []
-    if not found:
-        return []
-    nearest = min(len(path.parts) for path in found)
-    return [path for path in found if len(path.parts) == nearest]
-
-
 def default_engine_build(root: Path) -> Path:
     named = os.environ.get("ENGINE_BUILD")
     if named:
         return Path(named)
-    found = engine_builds(root, "system")
-    if len(found) != 1:
-        names = ", ".join(str(path.relative_to(root)) for path in found) or "no built engine"
-        raise SystemExit(f"{root / 'build'} holds {names} - "
-                         "set ENGINE_BUILD to the build the batteries should use")
-    return found[0]
+    try:
+        return harness().driver().engine_build(root)
+    except LookupError as refused:
+        raise SystemExit(f"{refused} - or set ENGINE_BUILD to the build the batteries should use")
 
 
 def speak() -> None:

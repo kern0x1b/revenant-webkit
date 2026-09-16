@@ -3,9 +3,11 @@
 
     tests/scripts/build-lookup.py
 
-The rule under test: a build tree is one that holds conan/ios6-deps.env, and
-when an older layout is still lying beside the current one the nearer tree
-wins. Nothing here names build/system or build/engine, which is the point.
+The port keeps no rule of its own for this: it takes the engine build Charon
+names and keeps only ENGINE_BUILD as an override. What is checked here is that
+it asks the driver and nothing else - trees the port's old marker search took,
+and the driver does not, are refused. The engine build itself is defined and
+tested in the toolchain.
 """
 import importlib.util
 import os
@@ -25,11 +27,20 @@ def tests_module():
     return module
 
 
-def tree(root: Path, *parts: str) -> Path:
-    built = root.joinpath(*parts)
-    (built / MARKER.parent).mkdir(parents=True, exist_ok=True)
-    (built / MARKER).write_text("IOS6_HOST_LIBCXX=/nowhere\n")
-    return built
+def environment(root: Path, *parts: str) -> Path:
+    folder = root.joinpath(*parts)
+    (folder / MARKER.parent).mkdir(parents=True, exist_ok=True)
+    (folder / MARKER).write_text("IOS6_HOST_LIBCXX=/nowhere\n")
+    return folder
+
+
+def built(root: Path, *parts: str) -> Path:
+    tree = environment(root, *parts)
+    (tree / "CMakeCache.txt").write_text("")
+    framework = tree / "stage" / "Frameworks" / "Engine.framework"
+    framework.mkdir(parents=True)
+    (framework / "Engine").write_text("")
+    return tree
 
 
 def report(passed: bool, claim: str) -> bool:
@@ -52,45 +63,35 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
-        only = tree(root, "build", "system")
+        only = built(root, "build", "system")
         verdicts.append(report(tests.default_engine_build(root) == only,
-                               "one tree holding the dependency environment is the answer"))
-
-        orphan = tree(root, "build", "engine", "armv7-system")
-        verdicts.append(report(tests.default_engine_build(root) == only,
-                               "with {} beside it, the nearer {} wins".format(
-                                   orphan.relative_to(root), only.relative_to(root))))
-
-        (root / "build" / MARKER.parent).mkdir(parents=True, exist_ok=True)
-        (root / "build" / MARKER).write_text("IOS6_HOST_ICU=/nowhere\n")
-        verdicts.append(report(tests.default_engine_build(root) == only,
-                               "a dependency environment sitting straight under build/ is not a build tree"))
-        (root / "build" / MARKER).unlink()
-
-        named = tree(root, "build", "elsewhere-system")
-        said = refusal(lambda: tests.default_engine_build(root))
-        verdicts.append(report(all(part in said for part in ("build/system", "build/elsewhere-system")),
-                               "two trees at the same depth refuse and name both, not one: " + said))
-        for path in (named / MARKER, orphan / MARKER):
-            path.unlink()
+                               "the one built engine directly under build/ is the answer"))
 
         os.environ["ENGINE_BUILD"] = str(root / "somewhere-else")
         verdicts.append(report(tests.default_engine_build(root) == root / "somewhere-else",
-                               "ENGINE_BUILD names the build and nothing is searched"))
+                               "ENGINE_BUILD names the build and the driver is not asked"))
         os.environ.pop("ENGINE_BUILD")
 
     with tempfile.TemporaryDirectory() as folder:
-        said = refusal(lambda: tests.default_engine_build(Path(folder)))
-        verdicts.append(report("no built engine" in said,
-                               "no tree at all refuses and says so: " + said))
+        root = Path(folder)
+        retired = built(root, "build", "engine", "armv7-system")
+        said = refusal(lambda: tests.default_engine_build(root))
+        verdicts.append(report("ENGINE_BUILD" in said,
+                               "{} is built but not directly under build/, so that layout is retired, not "
+                               "searched: {}".format(retired.relative_to(root), said or "it was taken")))
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
-        packages = tree(root, "build", "tier-packages", "host")
+        packages = environment(root, "build", "system-imports")
         said = refusal(lambda: tests.default_engine_build(root))
-        verdicts.append(report("no built engine" in said,
-                               "{} holding a dependency environment is a tier's packages, not an engine build: {}".format(
-                                   packages.relative_to(root), said)))
+        verdicts.append(report("ENGINE_BUILD" in said,
+                               "{} holds a dependency environment and a variant in its name, and is not an "
+                               "engine build: {}".format(packages.relative_to(root), said or "it was taken")))
+
+    with tempfile.TemporaryDirectory() as folder:
+        said = refusal(lambda: tests.default_engine_build(Path(folder)))
+        verdicts.append(report("ENGINE_BUILD" in said,
+                               "no tree at all refuses and says so: " + (said or "it did not")))
 
     print("build lookup intact" if all(verdicts) else "BUILD LOOKUP BROKEN")
     return 0 if all(verdicts) else 1

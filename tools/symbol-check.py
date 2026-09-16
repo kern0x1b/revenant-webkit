@@ -10,6 +10,7 @@ class that stops being exported is the same death from the other side: UIKit and
 Safari link those classes by name.
 """
 import argparse
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -17,7 +18,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FRAMEWORKS = ("JavaScriptCore", "WebCore", "WebKitLegacy")
 PIN = ROOT / "carry-symbols.txt"
-MARKER = Path("conan") / "ios6-deps.env"
 PIN_HEADER = """\
 # Symbols this port's frameworks depend on and provide, as of the last
 # build known to load on the device. tools/symbol-check.py compares a
@@ -54,22 +54,19 @@ def pinned():
 
 
 def default_build():
-    build = ROOT / "build"
-    found = [marker.parent.parent for marker in build.glob(f"**/{MARKER.as_posix()}")
-             if marker.parent.parent != build and "system" in marker.parent.parent.name] if build.is_dir() else []
-    if found:
-        nearest = min(len(path.parts) for path in found)
-        found = [path for path in found if len(path.parts) == nearest]
-    if len(found) != 1:
-        names = ", ".join(str(path.relative_to(ROOT)) for path in found) or "no built engine"
-        raise SystemExit(f"{build} holds {names} - pass --build with the build to check")
-    return found[0]
+    spec = importlib.util.spec_from_file_location("revenant_harness", ROOT / "tests" / "device" / "harness.py")
+    harness = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(harness)
+    try:
+        return harness.driver().engine_build(ROOT)
+    except LookupError as refused:
+        raise SystemExit(f"{refused} - or pass --build with the build to check")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--build", type=Path,
-                        help="engine build to check; default: the system build found under build/")
+                        help="engine build to check; default: the engine build Charon names under build/")
     parser.add_argument("--pin", action="store_true", help="write this build's surface as the baseline")
     args = parser.parse_args()
 
