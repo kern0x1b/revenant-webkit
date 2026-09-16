@@ -1,18 +1,23 @@
 # Tests
 
-Run before every deploy: `tests/run-tests.py`
+Run before every deploy: `charon test`
 
-    tests/run-tests.py host      ICU data checks on this Mac, seconds once ICU is built
-    tests/run-tests.py device    JavaScript batteries under jsc on the iPhone
-    tests/run-tests.py all       both (default)
+    charon test --tier host       ICU data checks on this Mac, seconds once ICU is built
+    charon test --tier batteries  JavaScript batteries under jsc on the iPhone
+    charon test                   every tier the declaration names
+
+Charon installs what a tier declares it needs and hands it over, so the tiers
+are not run by calling this file directly.
 
 ## host
 
 `icu-sanity` opens the resource bundles, the time zone enumeration and every
 character encoding the engine hands to ICU, against the same trimmed data the
-phone ships. `tests/host/conanfile.py` asks for the `icu` package that
-`conan.lock` pins and builds it for this Mac with the recipe's own data filter,
-so the first run builds ICU once and every later run reuses it.
+phone ships. The `host` tier declares the `icu` package it needs in
+`charon.toml`; Charon writes the recipe that asks for the version `conan.lock`
+pins, builds it for this Mac with the recipe's own data filter, and tells the
+tier where it landed, so the first run builds ICU once and every later run
+reuses it.
 
 The encoding list is not maintained by hand. `gen-required-encodings.py` reads
 it out of `TextCodecICU.cpp`, so it tracks the engine: everything else is

@@ -342,17 +342,18 @@ runs = [
 ]
 needs = ["build"]
 
-[tests.imports]
-runs = ["tests/device/imports-are-exported.py:run_imports"]
-needs = ["device", "build"]
-
 [tests.host]
 runs = ["tests/run-tests.py:run_host_tests"]
 needs = []
+packages = { icu = "[*]@revenant/stable" }
 
 [tests.gate]
 runs = ["tests/device/run.py:run_gate"]
 needs = ["device"]
+
+[tests.imports]
+runs = ["tests/device/imports-are-exported.py:run_imports"]
+needs = ["device", "build"]
 
 [tests.batteries]
 runs = ["tests/run-tests.py:run_device_tests"]
