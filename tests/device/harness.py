@@ -16,9 +16,42 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 TESTS = ROOT / "tests" / "device"
 SHOTS = TESTS / "sweep-shots"
 
-if "device" not in sys.modules:
-    sys.path.insert(0, str(ROOT / "tools"))
-import device
+_transport = None
+
+
+def bind(module=None):
+    global _transport
+    _transport = module if module is not None else _found()
+    return _transport
+
+
+def transport():
+    return _transport if _transport is not None else bind()
+
+
+def __getattr__(name):
+    if name == "device":
+        return transport()
+    raise AttributeError(name)
+
+
+def _found():
+    for folder in (ROOT / "tools", _shared()):
+        if (folder / "device.py").is_file():
+            if "device" not in sys.modules:
+                sys.path.insert(0, str(folder))
+            import device
+            return device
+    raise SystemExit(f"no device.py in {ROOT / 'tools'} or {_shared()} - "
+                     "has conan config install been run on this machine?")
+
+
+def _shared():
+    home = subprocess.run(["conan", "config", "home"], capture_output=True, text=True)
+    if home.returncode:
+        raise SystemExit("conan config home failed, so the phone transport cannot be found - "
+                         "has conan config install been run on this machine?")
+    return Path(home.stdout.strip()) / "extensions" / "charon"
 
 
 def host_address():

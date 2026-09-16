@@ -14,9 +14,12 @@ from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
-if "device" not in sys.modules:
-    sys.path.insert(0, str(ROOT / "tools"))
-import device
+
+
+def transport():
+    sys.path.insert(0, str(ROOT / "tests" / "device"))
+    import harness
+    return harness.transport()
 
 DEVICE_DIR = "/tmp/jscrun"
 FRAMEWORKS = ("JavaScriptCore", "WebCore", "WebKitLegacy")
@@ -162,7 +165,7 @@ def remote_sizes(listing: str) -> dict:
     return sizes
 
 
-def push_if_changed(local: Path, remote: str, sizes: dict) -> bool:
+def push_if_changed(local: Path, remote: str, sizes: dict, device) -> bool:
     try:
         size = local.stat().st_size
     except OSError as error:
@@ -188,7 +191,7 @@ def build_jsc(build: Path, libraries: dict) -> bool:
     return jsc.is_file()
 
 
-def sync_engine(root: Path, build: Path) -> bool:
+def sync_engine(root: Path, build: Path, device) -> bool:
     try:
         libraries = device_libraries(root)
     except DependencyInstallError as error:
@@ -204,11 +207,11 @@ def sync_engine(root: Path, build: Path) -> bool:
     relay_stderr(listing)
     sizes = remote_sizes(as_text(listing.stdout))
 
-    if not push_if_changed(build / "jsc", f"{DEVICE_DIR}/jsc", sizes):
+    if not push_if_changed(build / "jsc", f"{DEVICE_DIR}/jsc", sizes, device):
         return False
     libcxx = Path(libraries["IOS6_HOST_LIBCXX"]) / "lib"
     for built_name, device_name in LIBCXX.items():
-        if not push_if_changed(libcxx / built_name, f"{DEVICE_DIR}/Frameworks/{device_name}", sizes):
+        if not push_if_changed(libcxx / built_name, f"{DEVICE_DIR}/Frameworks/{device_name}", sizes, device):
             return False
 
     for framework in FRAMEWORKS:
@@ -217,7 +220,7 @@ def sync_engine(root: Path, build: Path) -> bool:
             continue
         remote_framework = f"{DEVICE_DIR}/Frameworks/{framework}.framework"
         relay_stderr(device.run(30, f"mkdir -p {remote_framework}"))
-        if not push_if_changed(binary, f"{remote_framework}/{framework}", sizes):
+        if not push_if_changed(binary, f"{remote_framework}/{framework}", sizes, device):
             return False
     return True
 
@@ -244,12 +247,12 @@ def default_engine_build(root: Path) -> Path:
     return build
 
 
-def run_device_tests(root: Path, build: Path) -> int:
+def run_device_tests(root: Path, build: Path, device) -> int:
     if not device.reachable(12):
         log.error("device tests: the phone is not reachable - check device.env (see device.env.example)")
         return 1
 
-    if not sync_engine(root, build):
+    if not sync_engine(root, build, device):
         return 1
 
     batteries = sorted((root / "tests" / "js").glob("*.js"))
@@ -288,7 +291,7 @@ def main() -> int:
     if args.tier in ("host", "all"):
         failures += run_host_tests(ROOT)
     if args.tier in ("device", "all"):
-        failures += run_device_tests(ROOT, default_engine_build(ROOT))
+        failures += run_device_tests(ROOT, default_engine_build(ROOT), transport())
 
     print()
     print(f"run-tests: FAILED ({failures})" if failures else "run-tests: PASSED")

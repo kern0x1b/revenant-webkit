@@ -16,8 +16,6 @@ import time
 
 import harness
 
-device = harness.device
-
 PAGES = ["text-and-emoji", "gradients-and-blends", "image-draw-cost", "svg-image-filters", "web-platform", "websocket"]
 
 
@@ -42,11 +40,11 @@ class Bridge:
     def ensure(self):
         for attempt in (1, 2, 3):
             self.token += 1
-            device.open_url(f"{self.base}/warmup.html?token={self.token}")
+            harness.device.open_url(f"{self.base}/warmup.html?token={self.token}")
             if self.server.wait_for(warm_pattern(self.token), 8, 2):
                 return True
             print(f"the tweak is not in this Safari; restarting it (attempt {attempt})", file=sys.stderr, flush=True)
-            device.restart_safari(12)
+            harness.device.restart_safari(12)
         print("giving up on the tweak; the bridges it installs will read as missing", file=sys.stderr, flush=True)
         return False
 
@@ -72,12 +70,12 @@ def run_gate(host: str | None, port: int | None = None) -> int:
 
     with harness.PageServer(port) as server:
         time.sleep(1)
-        device.restart_safari(12)
+        harness.device.restart_safari(12)
 
         bridge = Bridge(server, base)
         for page in PAGES:
             bridge.ensure()
-            device.open_url(f"{base}/{page}.html?run={harness.run_token()}")
+            harness.device.open_url(f"{base}/{page}.html?run={harness.run_token()}")
             server.wait_for(final_pattern(page), 22, 2)
 
         found = problems(server)
