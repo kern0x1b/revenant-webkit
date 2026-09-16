@@ -5,6 +5,7 @@
     ENGINE_BUILD=build/... tests/run-tests.py device
 """
 import argparse
+import hashlib
 import logging
 import os
 import re
@@ -159,22 +160,31 @@ def run_host_tests(root: Path) -> int:
     return failures
 
 
-def remote_sizes(listing: str) -> dict:
-    sizes = {}
+def remote_hashes(listing: str) -> dict:
+    hashes = {}
     for line in listing.splitlines():
-        fields = line.split()
-        if len(fields) >= 9:
-            sizes[fields[-1]] = fields[4]
-    return sizes
+        name, marker, digest = line.partition(")= ")
+        if marker and name.startswith("MD5("):
+            hashes[name[len("MD5("):]] = digest.strip()
+    return hashes
 
 
-def push_if_changed(local: Path, remote: str, sizes: dict, device) -> bool:
+def digest_of(path: Path) -> str:
+    reader = hashlib.md5()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            reader.update(block)
+    return reader.hexdigest()
+
+
+def push_if_changed(local: Path, remote: str, hashes: dict, device) -> bool:
     try:
+        digest = digest_of(local)
         size = local.stat().st_size
     except OSError as error:
         log.error("cannot sync %s: %s", local, error.strerror)
         return False
-    if sizes.get(remote) == str(size):
+    if hashes.get(remote) == digest:
         return True
     log.info("  syncing %s (%d KB)", PurePosixPath(remote).name, size // 1024)
     return device.copy(local, remote)
@@ -205,16 +215,16 @@ def sync_engine(root: Path, build: Path, device) -> bool:
         return False
 
     relay_stderr(device.run(30, f"mkdir -p {DEVICE_DIR}/Frameworks"))
-    listing = device.run(30, f"ls -l {DEVICE_DIR}/jsc {DEVICE_DIR}/Frameworks/*.dylib "
-                             f"{DEVICE_DIR}/Frameworks/*.framework/* 2>/dev/null")
+    listing = device.run(180, f"for f in {DEVICE_DIR}/jsc {DEVICE_DIR}/Frameworks/*.dylib "
+                              f"{DEVICE_DIR}/Frameworks/*.framework/*; do openssl md5 \"$f\" 2>/dev/null; done")
     relay_stderr(listing)
-    sizes = remote_sizes(as_text(listing.stdout))
+    hashes = remote_hashes(as_text(listing.stdout))
 
-    if not push_if_changed(build / "jsc", f"{DEVICE_DIR}/jsc", sizes, device):
+    if not push_if_changed(build / "jsc", f"{DEVICE_DIR}/jsc", hashes, device):
         return False
     libcxx = Path(libraries["IOS6_HOST_LIBCXX"]) / "lib"
     for built_name, device_name in LIBCXX.items():
-        if not push_if_changed(libcxx / built_name, f"{DEVICE_DIR}/Frameworks/{device_name}", sizes, device):
+        if not push_if_changed(libcxx / built_name, f"{DEVICE_DIR}/Frameworks/{device_name}", hashes, device):
             return False
 
     missing = [framework for framework in FRAMEWORKS
@@ -228,7 +238,7 @@ def sync_engine(root: Path, build: Path, device) -> bool:
         binary = build / f"{framework}.framework" / framework
         remote_framework = f"{DEVICE_DIR}/Frameworks/{framework}.framework"
         relay_stderr(device.run(30, f"mkdir -p {remote_framework}"))
-        if not push_if_changed(binary, f"{remote_framework}/{framework}", sizes, device):
+        if not push_if_changed(binary, f"{remote_framework}/{framework}", hashes, device):
             return False
     return True
 
