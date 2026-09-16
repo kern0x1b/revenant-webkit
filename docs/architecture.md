@@ -27,9 +27,9 @@ re-execs. The second launch loads the new engine first.
 
 | Artifact | On device | Built by | Role |
 | --- | --- | --- | --- |
-| Loader | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `platform/safari/rev-safari-tweak.c`, target `RevSafari` in `platform/CMakeLists.txt` | Reads the enabled-apps preference, re-execs an enabled app with the engine's `DYLD_*` set, skips SpringBoard |
+| Loader | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `platform/safari/rev-safari-tweak.c`, the `RevSafari` device library in `charon.toml` | Reads the enabled-apps preference, re-execs an enabled app with the engine's `DYLD_*` set, skips SpringBoard |
 | Engine | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `conan build`, which lays it out under the system's names | The WebKit build itself |
-| Compat | `/usr/lib/rev-safari-compat.dylib` | `platform/safari/safari-compat.mm`, target `rev-safari-compat` in `platform/CMakeLists.txt` | The ABI iOS 6 predates, the bookmarks start page, WebAssembly, preference reads |
+| Compat | `/usr/lib/rev-safari-compat.dylib` | `platform/safari/safari-compat.mm`, the `rev-safari-compat` device library in `charon.toml` | The ABI iOS 6 predates, the bookmarks start page, WebAssembly, preference reads |
 
 ### Framework names have to be the system's
 

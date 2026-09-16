@@ -35,7 +35,7 @@ this has happened. The package puts each in its own place.
 ## The Settings pane
 
 `platform/prefs/` builds `RevPrefs.bundle` — a native PreferenceBundle, built by
-CMake from `platform/CMakeLists.txt` like the dylibs beside it — that writes the `space.kern0x1b.rev` preferences domain the engine reads
+CMake that Charon writes from `charon.toml`, like the dylibs beside it — that writes the `space.kern0x1b.rev` preferences domain the engine reads
 (`NewTabStartPage`, `CustomURLEnabled`, `CustomURL`, `InjectedApps`). System
 `PSListController` cells are loaded from `platform/prefs/Resources/Root.plist`.
 

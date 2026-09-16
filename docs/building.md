@@ -112,7 +112,8 @@ engine now links both packages directly.
 
 `libios6compat.a` - the symbols this OS predates, see
 [compatibility.md](compatibility.md) - is this port's own code, built by the
-engine's recipe from `compat/CMakeLists.txt` before the engine itself.
+engine's recipe from the `[[static-library]]` block of `charon.toml` before the
+engine itself.
 
 `scripts/check-cacert.py` builds nothing: it verifies the trust store the
 standalone application carries against the hash this project reviewed, and with
@@ -228,8 +229,9 @@ engine in one process. The shipped build is the unprefixed one; see
 charon package
 ```
 
-`conan build` has already built everything around the engine - `platform/CMakeLists.txt`
-builds `RevSafari.dylib`, `rev-safari-compat.dylib`, `rev-TLS.dylib` and
+`charon build` has already built everything around the engine - the
+`[[device-library]]` blocks of `charon.toml` build `RevSafari.dylib`,
+`rev-safari-compat.dylib`, `rev-TLS.dylib` and
 `RevPrefs.bundle` - and laid it out with the engine in
 `build/system/stage`. `conan export-pkg` runs the recipe's
 `package()`, which copies that tree into `<package folder>/root` and writes
@@ -244,7 +246,8 @@ One `.deb` carries the loader and its MobileSubstrate filter, the compatibility
 and hook dylib, the TLS library, the Settings bundle with its PreferenceLoader
 entry, the C++ runtime and the engine frameworks.
 
-Two settings in `platform/CMakeLists.txt` are not optional: the compat dylib is
+Two settings on the `rev-safari-compat` device library in `charon.toml` are not
+optional: the compat dylib is
 built without `_FORTIFY_SOURCE` and without libc++ (`-nostdlib++`), because the `__*_chk` symbols
 are linkage this release never had and the engine carries its own C++ runtime — a
 second one in the same process is a crash waiting to happen.

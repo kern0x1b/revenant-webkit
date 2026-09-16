@@ -143,20 +143,119 @@ UNIFORMTYPEIDENTIFIERS_LIBRARY = "UNIFORMTYPEIDENTIFIERS_LIBRARY-NOTFOUND"
 
 [[static-library]]
 name = "ios6compat"
-cmake = "compat"
 produces = "libios6compat.a"
-options = { WEBKIT_IOS6_LIBCXX_DIR = "{pkg:libcxx}", LIBPSL_INCLUDE_DIR = "{include:libpsl}" }
+standard = 23
+sources = [
+    "compat/ios6_compat.c",
+    "compat/ios6_missing.c",
+    "compat/ios6_missing_constants.c",
+    "compat/ios6_coretext.c",
+    "compat/ios6_coregraphics.c",
+    "compat/ios6_missing_classes.m",
+    "compat/ios6_uttype.m",
+    "compat/ios6_palswift.m",
+    "compat/ios6_uicolor.m",
+    "compat/ios6_avaudio.m",
+    "compat/ios6_media_stubs.cpp",
+]
+include-system = [
+    "compat/stubs",
+    '$<$<COMPILE_LANGUAGE:CXX>:${WEBKIT_IOS6_LIBCXX_DIR}/include/c++/v1>',
+]
+source-include = { "compat/ios6_compat.c" = '${LIBPSL_INCLUDE_DIR}' }
+options = [
+    "-O2",
+    "-fno-objc-arc",
+    "-Wno-builtin-requires-header",
+    "-Wno-protocol",
+    "-Wno-objc-designated-initializers",
+    '"$<$<COMPILE_LANGUAGE:OBJC,CXX>:SHELL:-include ${CHARON_PORT}/compat/stubs/ios6_dispatch_compat.h>"',
+    '"$<$<COMPILE_LANGUAGE:CXX>:-nostdinc++>"',
+]
+definitions = [
+    "$<$<COMPILE_LANGUAGE:OBJC>:WEBKIT_IOS6_OBJC_EXTRAS>",
+    "$<$<COMPILE_LANGUAGE:CXX>:_LIBCPP_DISABLE_AVAILABILITY>",
+]
+cache = { WEBKIT_IOS6_LIBCXX_DIR = "{pkg:libcxx}", LIBPSL_INCLUDE_DIR = "{include:libpsl}" }
 
 [[device-library]]
-name = "platform"
-cmake = "platform"
+name = "RevSafari"
+sources = ["platform/safari/rev-safari-tweak.c"]
+install = "/Library/MobileSubstrate/DynamicLibraries"
 installs-into = "stage"
+options = ["-Wall", "-O2"]
+frameworks = ["CoreFoundation"]
+resources = [{ from = "platform/safari/rev-safari.plist", as = "RevSafari.plist" }]
+
+[[device-library]]
+name = "rev-safari-compat"
+sources = ["platform/safari/safari-compat.mm", "platform/safari/RevWasm.m"]
+install = "/usr/lib"
+installs-into = "stage"
+packages = ["wasm3"]
+options = [
+    "-Wall",
+    "-O2",
+    "-fno-objc-arc",
+    "-Wno-deprecated-declarations",
+    "-Wno-unused",
+    "-U_FORTIFY_SOURCE",
+    "-D_FORTIFY_SOURCE=0",
+]
+link-options = ["-nostdlib++"]
+frameworks = ["Foundation", "CoreFoundation"]
+libraries = ["objc", "sqlite3", "wasm3::wasm3"]
+
+[[device-library]]
+name = "rev-TLS"
+sources = ["platform/safari/tls-openssl.c"]
+install = "/usr/lib"
+installs-into = "stage"
+packages = ["openssl"]
+options = ["-Wall", "-O2"]
+frameworks = ["CoreFoundation", "Security"]
+libraries = ["openssl::openssl"]
+
+[[device-library]]
+name = "RevPrefs"
+sources = ["platform/prefs/RevRootListController.m", "platform/prefs/RevAppsListController.m"]
+install = "/Library/PreferenceBundles/RevPrefs.bundle"
+installs-into = "stage"
+suffix = ""
+include = ["platform/prefs"]
+options = ["-Wall", "-Os", "-fno-objc-arc", "-Wno-deprecated-declarations", "-Wno-unused"]
+link-options = ["-undefined", "dynamic_lookup", "-flat_namespace"]
+frameworks = ["Foundation", "CoreFoundation", "UIKit"]
+libraries = ["objc"]
+resources = [
+    { from = "platform/prefs/Resources/", as = "." },
+    { from = "platform/prefs/entry.plist", as = "/Library/PreferenceLoader/Preferences/RevWebKit.plist" },
+]
 
 [application]
 name = "RevWebViewHost"
 variant = "prefixed"
-cmake = "app"
-options = { ENGINE_BUILD = "{build}", CLASS_PREFIX_HEADER = "{stubs}/ios6_class_prefix.h" }
+sources = ["app/rev-webview-host.m", "app/ModernTLSURLProtocol.m", "app/WebKitUIKitDelegate.m"]
+packages = ["openssl"]
+include-system = [
+    '${ENGINE_BUILD}/WebKitLegacy/Headers',
+    '${ENGINE_BUILD}/WebCore.framework/PrivateHeaders',
+    '${ENGINE_BUILD}/WTF/Headers',
+]
+options = ["-g", "-fno-objc-arc", '"SHELL:-include ${CLASS_PREFIX_HEADER}"', '-F${ENGINE_BUILD}']
+link-options = ['-F${ENGINE_BUILD}', "-Wl,-dead_strip", "-Wl,-rpath,@executable_path/Frameworks"]
+frameworks = [
+    "WebKitLegacy",
+    "UIKit",
+    "Foundation",
+    "QuartzCore",
+    "CoreGraphics",
+    "ImageIO",
+    "MobileCoreServices",
+]
+libraries = ["openssl::openssl", "z"]
+resources = ["app/cacert.pem", "app/start.html"]
+cache = { ENGINE_BUILD = "{build}", CLASS_PREFIX_HEADER = "{stubs}/ios6_class_prefix.h" }
 entitlements = "app/entitlements.xml"
 log = "/tmp/rev-webview-host.log"
 first-page = "/tmp/rev-url.txt"
@@ -205,13 +304,13 @@ prefix-exports = "tools/prefix-exports.py {stubs}/ios6_class_prefix.h {engine-ex
 [pipeline]
 system = [
     "task:carry-check",
-    "build:ios6compat",
+    "build:static-library",
     "build:engine",
     "check:exports",
     "task:compat-audit",
     "task:symbol-check",
     "stage:clear",
-    "build:platform",
+    "build:device-library",
     "stage:frameworks",
     "stage:plists-to-binary",
     "check:no-encryption-info",
@@ -220,7 +319,7 @@ system = [
 prefixed = [
     "task:carry-check",
     "task:prefix-exports",
-    "build:ios6compat",
+    "build:static-library",
     "build:engine",
     "check:exports",
     "task:compat-audit",

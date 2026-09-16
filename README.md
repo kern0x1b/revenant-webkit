@@ -108,9 +108,9 @@ first. Three artifacts do this:
 
 | Artifact | On device | Built by | Role |
 | --- | --- | --- | --- |
-| **Loader** | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `RevSafari` in `platform/CMakeLists.txt` | Reads the enabled-apps preference and re-execs an enabled app with the engine's `DYLD_*` set. Skips SpringBoard. |
+| **Loader** | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | the `RevSafari` device library in `charon.toml` | Reads the enabled-apps preference and re-execs an enabled app with the engine's `DYLD_*` set. Skips SpringBoard. |
 | **Engine** | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `charon build` from `charon.toml`, which also lays it out under the system's names | The WebKit build itself. |
-| **Compat / hooks** | `/usr/lib/rev-safari-compat.dylib` | `rev-safari-compat` in `platform/CMakeLists.txt` | The ABI symbols iOS 6 predates, plus the bookmarks start page, WebAssembly, and preference reads. Inserted by the loader. |
+| **Compat / hooks** | `/usr/lib/rev-safari-compat.dylib` | the `rev-safari-compat` device library in `charon.toml` | The ABI symbols iOS 6 predates, plus the bookmarks start page, WebAssembly, and preference reads. Inserted by the loader. |
 
 The loader and the compat dylib are two different files with two different jobs —
 overwriting one with the other drops Safari back to the system engine.
@@ -168,7 +168,8 @@ is installed:
 dpkg -i space.kern0x1b.rev_*_iphoneos-arm.deb
 ```
 
-Two settings in `platform/CMakeLists.txt` are not optional: the compat dylib
+Two settings on the `rev-safari-compat` device library in `charon.toml` are not
+optional: the compat dylib
 is built without `_FORTIFY_SOURCE` and without libc++, because the `__*_chk`
 symbols are linkage this release never had, and the engine carries its own C++
 runtime — a second one in the same process is a crash waiting to happen.
