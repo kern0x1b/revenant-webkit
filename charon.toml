@@ -64,7 +64,7 @@ stubs = "compat/stubs"
 [flags]
 common = "-flto=thin -mllvm -hot-cold-split=false -target {triple} {tuning} -isysroot {sdk}"
 defines = "-DWEBKIT_IOS6=1 -DENABLE_UNFAIR_LOCK=0 -DWEBKIT_IOS6_NO_READLINE -DU_STATIC_IMPLEMENTATION"
-cxx = "{common} -nostdinc++ -isystem {include:libcxx}/c++/v1 -isystem {stubs} -include {stubs}/ios6_dispatch_compat.h -include {stubs}/{prefix-header} -D_LIBCPP_DISABLE_AVAILABILITY {defines}"
+cxx = "{common} -nostdinc++ -isystem {include:libcxx} -isystem {stubs} -include {stubs}/ios6_dispatch_compat.h -include {stubs}/{prefix-header} -D_LIBCPP_DISABLE_AVAILABILITY {defines}"
 c = "{common} -isystem {stubs} -include {stubs}/{prefix-header} {defines}"
 objcxx = "{cxx} -DWEBKIT_IOS6_OBJC_EXTRAS"
 objc = "{c} -DWEBKIT_IOS6_OBJC_EXTRAS"
@@ -210,6 +210,7 @@ system = [
     "check:exports",
     "task:compat-audit",
     "task:symbol-check",
+    "stage:clear",
     "build:platform",
     "stage:frameworks",
     "stage:plists-to-binary",
@@ -230,7 +231,11 @@ prefixed = [
 transport = "tests/device/harness.py:bind"
 
 [tests.scripts]
-runs = ["tests/scripts/build-lookup.py", "tests/scripts/declaration-matches-recipe.py"]
+runs = [
+    "tests/scripts/build-lookup.py",
+    "tests/scripts/declaration-matches-recipe.py",
+    "tests/scripts/flag-paths-exist.py",
+]
 needs = []
 
 [tests.host]
