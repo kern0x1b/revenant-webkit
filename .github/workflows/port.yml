@@ -14,11 +14,11 @@ jobs:
   checks:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: port
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: kern0x1b/ios6-toolchain
           path: ios6-toolchain
