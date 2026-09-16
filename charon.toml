@@ -6,12 +6,13 @@ index = "revenant"
 engine = "webkit-254"
 licenses = ["LICENSE", "THIRD-PARTY.md"]
 
-[target]
-include-profiles = ["ios6-armv7"]
+[platform]
+use = "apple-ios"
 arch = "armv7"
-os = "iOS"
 os-version = "6.0"
-sdk = "iphoneos"
+distribution = "jailbreak"
+
+[target]
 cppstd = 23
 cpu = "cortex-a9"
 fpu = "neon"
@@ -32,14 +33,11 @@ wasm3 = "0.9.1-beta.1+7.gdeeaca9@revenant/stable"
 [tools]
 cmake = "4.4.3"
 ninja = "1.13.2"
-ldid = "2.1.5@ios6/stable"
-ios6-imports-check = "1.0@ios6/stable"
+ldid = "2.1.5@charon/stable"
+dyld-imports-check = "1.0@charon/stable"
 
 [integrate]
 before-build = ["task:carry-check", "task:port-delta"]
-
-[conf]
-"user.ios6:llvm_prefix" = "a path to an LLVM, because cctools runs llvm-config to find libLTO when the ld64 package is built from source; export LLVM_PREFIX before the first build on a machine"
 
 [variants.system]
 

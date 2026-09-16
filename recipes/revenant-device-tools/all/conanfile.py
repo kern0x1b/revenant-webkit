@@ -34,7 +34,7 @@ class RevenantDeviceToolsConan(ConanFile):
         self.settings.rm_safe("compiler.libcxx")
 
     def build_requirements(self):
-        self.tool_requires("ldid/2.1.5@ios6/stable")
+        self.tool_requires("ldid/2.1.5@charon/stable")
 
     def layout(self):
         cmake_layout(self, src_folder=".")

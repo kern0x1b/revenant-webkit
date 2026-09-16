@@ -58,7 +58,7 @@ the list:
     export LD_TRACE_DYLIBS=1 LD_TRACE_ARCHIVES=1 LD_TRACE_FILE=/tmp/links.txt
     # rebuild what is being measured, with ccache out of the way
 
-    python3 <ios6-toolchain>/tools/sdk-usage.py --sdk "$IOS_SDK" \
+    python3 <charon toolchain>/tools/sdk-usage.py --sdk "$(charon where tool:iphoneos-sdk)/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS13.7.sdk" \
         --ninja build/system --headers /tmp/headers.txt --links /tmp/links.txt \
         --out sdk-usage/iPhoneOS13.7.sdk.txt
 
