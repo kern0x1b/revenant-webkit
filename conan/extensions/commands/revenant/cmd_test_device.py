@@ -34,7 +34,7 @@ def run_gate(root: Path, host: str | None, port: int | None) -> int:
     return exit_status(gate.run_gate, host, port)
 
 
-def run_batteries(root: Path, build: Path) -> int:
+def run_batteries(root: Path, build: Path, device) -> int:
     batteries = revenant_checkout.import_file(root / "tests" / "run-tests.py", "revenant_run_tests")
     logger = logging.getLogger("run-tests")
     handler = ConanOutputHandler()
@@ -42,7 +42,7 @@ def run_batteries(root: Path, build: Path) -> int:
     logger.setLevel(logging.INFO)
     logger.propagate = False
     try:
-        return exit_status(batteries.run_device_tests, root, build)
+        return exit_status(batteries.run_device_tests, root, build, device)
     finally:
         logger.removeHandler(handler)
         sys.stdout.flush()
@@ -77,7 +77,8 @@ def test_device(conan_api, parser, *args):
     for tier in tiers:
         out.title(f"device tier: {tier}")
         sys.stdout.flush()
-        results[tier] = run_gate(root, parsed.host, parsed.test_port) if tier == "gate" else run_batteries(root, build)
+        results[tier] = (run_gate(root, parsed.host, parsed.test_port) if tier == "gate"
+                         else run_batteries(root, build, device))
 
     out.title("device tiers")
     for tier, status in results.items():
