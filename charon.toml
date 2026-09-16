@@ -18,3 +18,19 @@ maintainer-scripts = "packaging/DEBIAN"
 [application]
 log = "/tmp/rev-webview-host.log"
 first-page = "/tmp/rev-url.txt"
+
+[tests.scripts]
+runs = ["tests/scripts/build-lookup.py"]
+needs = []
+
+[tests.host]
+runs = ["tests/run-tests.py:run_host_tests"]
+needs = []
+
+[tests.gate]
+runs = ["tests/device/run.py:run_gate"]
+needs = ["device"]
+
+[tests.batteries]
+runs = ["tests/run-tests.py:run_device_tests"]
+needs = ["device", "build"]
