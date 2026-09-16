@@ -157,7 +157,8 @@ def fetch(remote, local):
 def pipe_into(producer, command, cwd=None):
     tunnel()
     argv, env = _authenticated([*ssh_command(), command])
-    source = subprocess.Popen(producer, cwd=cwd, stdout=subprocess.PIPE)
+    source = subprocess.Popen(producer, cwd=cwd, stdout=subprocess.PIPE,
+                              env={**os.environ, "COPYFILE_DISABLE": "1"})
     remote = subprocess.Popen(argv, env=env, stdin=source.stdout)
     source.stdout.close()
     remote.wait()
