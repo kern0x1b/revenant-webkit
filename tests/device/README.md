@@ -4,8 +4,8 @@ Numbers, on the phone, repeatable - because a screenshot is not a measurement
 and one run is not evidence.
 
 ```sh
-make test ARGS="--tier gate"                      # every page, verdict per check
-make test ARGS="--tier gate --test-port 8898"     # if 8899 is busy
+charon test --tier gate                      # every page, verdict per check
+charon test --tier gate --test-port 8898     # if 8899 is busy
 ```
 
 The device cannot be asked for its DOM, so each page reports itself: the runner

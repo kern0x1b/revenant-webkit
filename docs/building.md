@@ -83,19 +83,19 @@ either choice.
 Register the two indexes once, the toolchain's and this repository's:
 
 ```sh
-make setup ARGS=<ios6-toolchain>
+charon setup <ios6-toolchain>
 ```
 
 That installs the toolchain's configuration - profiles, settings, hooks and
 Charon itself - and registers both recipe indexes ahead of the general remotes.
-Charon is what `make build`, `make deploy`, `make test` and the rest run; it
+`charon build`, `charon deploy`, `charon test` and the rest are Charon itself; it
 lives in the toolchain, not here, so every port gets the same verbs. This
-repository declares itself to it in `charon.toml` and includes it in a two-line
-`Makefile`. The phone's address comes from `device.env` at the root of the
+repository declares itself to it in `charon.toml` and carries nothing else of the
+build. The phone's address comes from `device.env` at the root of the
 checkout, and from nowhere else.
 
-`conan config install` copies rather than references, so run `make setup` again
-after the toolchain changes. `make provenance` says which copy is answering.
+`conan config install` copies rather than references, so run `charon setup` again
+after the toolchain changes. `charon provenance` says which copy is answering.
 
 `conan build` writes `build/system/conan/ios6-deps.env` through the
 `ios6-base` generator, straight from the dependency graph - one
@@ -121,7 +121,7 @@ standalone application carries against the hash this project reviewed, and with
 ## 3. The engine
 
 ```sh
-make build
+charon build
 ```
 
 `charon.toml` declares the whole build, the way a Gradle build file does, and
@@ -151,7 +151,7 @@ A change to any recipe here or in ios6-toolchain changes its revision, and
 `conan.lock` has to follow in the same commit:
 
 ```sh
-make build ARGS='--lockfile= --update'
+charon build --lockfile= --update
 ```
 
 A stale lock does not fail on the machine that made the change - the old
@@ -203,8 +203,8 @@ bundle - with what the phone's own shared cache exports, and the build runs it
 once it knows where a copy of that cache is:
 
 ```sh
-make device ARGS="fetch /System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7 build/"
-make build \
+charon device fetch /System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7 build/
+charon build \
     -c user.ios6:dyld_shared_cache="$PWD/build/dyld_shared_cache_armv7"
 ```
 
@@ -216,7 +216,7 @@ WebKit and WebKitLegacy compiled against the old class size, and the result load
 and then behaves wrongly — empty text in the interface, and a silent death with no
 crash log. This has cost more than one debugging session.
 
-`make build VARIANT=prefixed`
+`charon build --variant prefixed`
 builds the same source with the class prefix applied, into
 `build/prefixed`, for a build that has to coexist with the system
 engine in one process. The shipped build is the unprefixed one; see
@@ -225,7 +225,7 @@ engine in one process. The shipped build is the unprefixed one; see
 ## 4. The package
 
 ```sh
-make package
+charon package
 ```
 
 `conan build` has already built everything around the engine - `platform/CMakeLists.txt`
@@ -255,14 +255,14 @@ Copy `device.env.example` to `device.env` and fill in the address and password;
 neither is in the repository.
 
 ```sh
-make deploy    # engine only: back up, push the staged frameworks, restart Safari
+charon deploy    # engine only: back up, push the staged frameworks, restart Safari
 ```
 
 For everything else, install the package the way any tweak is installed:
 
 ```sh
-make device ARGS='copy "<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb" /tmp/rev.deb'
-make device ARGS="run dpkg -i /tmp/rev.deb"
+charon device copy "<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb" /tmp/rev.deb
+charon device run 120 "dpkg -i /tmp/rev.deb"
 ```
 
 ## The engine without Safari
@@ -280,13 +280,13 @@ this engine, because it drives its view through the *system* WebCore's
 `UIWebView`'s own implementation would.
 
 ```sh
-make build VARIANT=prefixed
-make run ARGS="--wait 20"
+charon build --variant prefixed
+charon run --wait 20
 ```
 
 The prefixed build ends in `build/prefixed/RevWebViewHost.app`,
 the engine and the C++ runtime bundled inside it and its version taken from
-`charon.toml`; `make package VARIANT=prefixed` puts it in
+`charon.toml`; `charon package --variant prefixed` puts it in
 `<package folder>/RevWebViewHost.app`. The runner installs it, opens it through its
 `revwebviewhost:` scheme and brings back the log. It needs the device
 address in `device.env` at the root of the checkout, as everything that reaches

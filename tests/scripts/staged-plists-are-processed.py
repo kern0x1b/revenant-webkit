@@ -55,7 +55,7 @@ def main():
     where, bundles = staging()
     stages = sorted((ROOT / "build").glob("*/stage"))
     if not stages:
-        print("FAIL  no staged tree under {}; run make build first".format(ROOT / "build"))
+        print("FAIL  no staged tree under {}; run charon build first".format(ROOT / "build"))
         return 1
 
     failures = []

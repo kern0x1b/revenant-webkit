@@ -48,7 +48,7 @@ def paths_in(flags):
 def main():
     trees = presets()
     if not trees:
-        print("FAIL  no build tree has been configured, so there are no flags to check; run make build first")
+        print("FAIL  no build tree has been configured, so there are no flags to check; run charon build first")
         return 1
     failures, checked = [], 0
     for tree in trees:
