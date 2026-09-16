@@ -84,6 +84,14 @@ def main() -> int:
         verdicts.append(report("no built engine" in said,
                                "no tree at all refuses and says so: " + said))
 
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        packages = tree(root, "build", "tier-packages", "host")
+        said = refusal(lambda: tests.default_engine_build(root))
+        verdicts.append(report("no built engine" in said,
+                               "{} holding a dependency environment is a tier's packages, not an engine build: {}".format(
+                                   packages.relative_to(root), said)))
+
     print("build lookup intact" if all(verdicts) else "BUILD LOOKUP BROKEN")
     return 0 if all(verdicts) else 1
 
