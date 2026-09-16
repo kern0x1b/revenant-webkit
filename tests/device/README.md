@@ -5,7 +5,7 @@ and one run is not evidence.
 
 ```sh
 conan revenant:test-device --tier gate            # every page, verdict per check
-TEST_PORT=8898 conan revenant:test-device --tier gate   # if 8899 is busy
+conan revenant:test-device --tier gate --test-port 8898   # if 8899 is busy
 ```
 
 The device cannot be asked for its DOM, so each page reports itself: the runner
