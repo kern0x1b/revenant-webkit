@@ -34,10 +34,12 @@ the glob kept a retired bridge's stale objects as members long after its sources
 were deleted.
 
 `compat/stubs/` is the other half: headers that close the gap between the iOS
-13.7 SDK this port compiles against and what WebKit trunk expects. Almost all of
-it is declarations for constants and enum values from later releases that the
-engine only ever compares against — codec identifiers, pixel formats, ImageIO
-keys — plus the SPI headers iOS ships no headers for at all. Two of them are not
+16.4 SDK this port compiles against and what WebKit trunk expects. Almost all of
+it is declarations for constants and enum values from releases after it that the
+engine only ever compares against — codec identifiers, pixel formats — plus the
+SPI headers iOS ships no headers for at all. A constant the SDK declares but iOS
+6 does not export is defined in `compat/ios6_missing_constants.c` instead, so
+the image binds it to itself rather than weakly to NULL. Two of them are not
 declarations:
 
 - **`thread_local` does not compile for this deployment target.** Mach-O

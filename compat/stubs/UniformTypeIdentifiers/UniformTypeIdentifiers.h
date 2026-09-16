@@ -1,20 +1,6 @@
 #pragma once
-#import <Foundation/Foundation.h>
+#include_next <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <MobileCoreServices/MobileCoreServices.h>
-
-@interface UTType : NSObject
-@property (readonly, copy) NSString *identifier;
-@property (readonly, copy) NSString *preferredMIMEType;
-@property (readonly, copy) NSString *preferredFilenameExtension;
-+ (UTType *)typeWithIdentifier:(NSString *)identifier;
-+ (UTType *)typeWithMIMEType:(NSString *)mimeType;
-+ (UTType *)typeWithFilenameExtension:(NSString *)filenameExtension;
-- (BOOL)conformsToType:(UTType *)type;
-- (NSArray<NSString *> *)tags:(NSString *)tagClass;
-@property (readonly, copy) NSDictionary<NSString *, NSArray<NSString *> *> *tags;
-@property (readonly, getter=isDeclared) BOOL declared;
-@property (readonly, getter=isDynamic) BOOL dynamic;
-@end
 
 #define WEBKIT_IOS6_UTTYPE(id) ([UTType typeWithIdentifier:(id)])
 #define UTTypeItem              WEBKIT_IOS6_UTTYPE(@"public.item")

@@ -24,16 +24,16 @@ and built for armv7. Each package carries its upstream license file under
 
 | Component | Version | License | Fetched by |
 | --- | --- | --- | --- |
-| libc++, libc++abi | 21.1.0 | Apache-2.0 with the LLVM exception | `libcxx` recipe (ios6-toolchain) |
-| ICU | 74.2 | Unicode license (ICU) | `recipes/icu` |
-| OpenSSL | 3.0.15 | Apache-2.0 | `recipes/openssl` |
-| libpsl | 0.23.3 | MIT; the Public Suffix List data it carries is MPL-2.0 | `recipes/libpsl` |
-| libwebp | 1.4.0 | BSD-3-Clause | `recipes/libwebp` |
+| libc++, libc++abi | 23.1.1 | Apache-2.0 with the LLVM exception | `libcxx` recipe (ios6-toolchain) |
+| ICU | 78.3 | Unicode license (ICU) | `recipes/icu` |
+| OpenSSL | 4.0.2 | Apache-2.0 | `recipes/openssl` |
+| libpsl | 0.23.3 plus 5 commits (`0.23.3+5.ga629c83`) | MIT; the Public Suffix List data it carries is MPL-2.0 | `recipes/libpsl` |
+| libwebp | 1.6.0 plus 258 commits (`1.6.0+258.g6ff2f43`) | BSD-3-Clause | `recipes/libwebp` |
 | libxml2 | 2.15.4 | MIT | `recipes/libxml2` |
 | libxslt | 1.1.45 | MIT | `recipes/libxslt` |
-| woff2 | 1.0.2 | MIT | `recipes/woff2` |
-| brotli | 1.1.0 | MIT | `recipes/brotli` |
-| wasm3 | commit 40e42cc of 2026-09-05 (`cci.20260905`) | MIT | `recipes/wasm3` |
+| woff2 | 1.0.2 plus 13 commits (`1.0.2+13.gfb9c337`) | MIT | `recipes/woff2` |
+| brotli | 1.2.0 plus 161 commits (`1.2.0+161.g85c2aaf`) | MIT | `recipes/brotli` |
+| wasm3 | 0.9.1-beta.1 plus 7 commits (`0.9.1-beta.1+7.gdeeaca9`) | MIT | `recipes/wasm3` |
 
 ## Tools that build it
 

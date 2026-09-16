@@ -1,11 +1,11 @@
 # Building the port
 
-Everything targets **armv7 with a 6.0 deployment target**, built with an **iOS 13.7
-SDK** — the newest SDK that still emits armv7 and still accepts that deployment
-target. Current clang compiles C++23 for a 2011 phone; only the SDK is old.
+Everything targets **armv7 with a 6.0 deployment target**, built with the **iOS 16.4
+SDK** the `apple-ios` platform names. Current clang compiles C++23 for a 2011 phone,
+and what iOS 6 lacks of it is linked in from the toolchain's `apple-compat`.
 
-Host requirements: `conan`, the Command Line Tools, and `iPhoneOS13.7.sdk` from
-[theos/sdks](https://github.com/theos/sdks). Conan itself installs the rest:
+Host requirements: `conan` and the Command Line Tools. Conan installs the rest,
+the SDK included - `iphoneos-sdk` fetches it from [theos/sdks](https://github.com/theos/sdks):
 `cmake` and `ninja` from ConanCenter, `ldid` (ad-hoc signing) and the `ld64`
 linker from ios6-toolchain. Xcode is not needed and is not installed here, and
 neither is Theos - the Command Line Tools carry the compiler and its runtime,
@@ -49,20 +49,20 @@ and each names a git URL and a commit rather than vendoring a copy:
 
 | Package | Why the system copy will not do |
 | --- | --- |
-| `libcxx/21.1.0@charon/stable` | iOS 6 ships a 2012 libc++; C++23 needs a current one |
-| `icu/74.2@revenant/stable` | the system ICU predates WebKit's minimum, and text segmentation with it has no zero-width joiner |
-| `openssl/3.0.15@revenant/stable` | TLS 1.2/1.3 and Web Crypto |
-| `libpsl/0.23.3@revenant/stable` | public-suffix lookups this CFNetwork does not do |
-| `libwebp/1.4.0@revenant/stable` | this ImageIO cannot decode WebP |
+| `libcxx/23.1.1@charon/stable` | iOS 6 ships a 2012 libc++; C++23 needs a current one |
+| `icu/78.3@revenant/stable` | the system ICU predates WebKit's minimum, and text segmentation with it has no zero-width joiner |
+| `openssl/4.0.2@revenant/stable` | TLS 1.2/1.3 and Web Crypto |
+| `libpsl/0.23.3+5.ga629c83@revenant/stable` | public-suffix lookups this CFNetwork does not do |
+| `libwebp/1.6.0+258.g6ff2f43@revenant/stable` | this ImageIO cannot decode WebP |
 | `libxml2/2.15.4@revenant/stable` | the system copy is 2.7.8 from 2010, older than the API libxslt and the SDK headers expect |
 | `libxslt/1.1.45@revenant/stable` | XSLT; the SDK has no libxslt headers or armv7 library |
-| `woff2/1.0.2@revenant/stable` | web fonts in the format the web serves them |
-| `brotli/1.1.0@revenant/stable` | what woff2 decompresses with |
+| `woff2/1.0.2+13.gfb9c337@revenant/stable` | web fonts in the format the web serves them |
+| `brotli/1.2.0+161.g85c2aaf@revenant/stable` | what woff2 decompresses with |
 
 The user and channel are not decoration. ConanCenter publishes packages under
 these same names, Conan asks remotes in the order they were registered, and a
 wrong order does not fail - it quietly builds against a recipe that cannot
-cross-compile for armv7. The namespace makes a bare `icu/74.2` unresolvable
+cross-compile for armv7. The namespace makes a bare `icu/78.3` unresolvable
 from these indexes, so a reference that forgets it is an error instead.
 
 `@charon/stable` belongs to what ios6-toolchain serves and every port shares.
@@ -416,7 +416,7 @@ outlive any macOS release:
 - the linker: the `ld64` package from ios6-toolchain - ld64 956.6 built from
   `cctools-port`, which supports armv7, reads `.tbd` stubs through
   `apple-libtapi`, and does LTO through the same LLVM;
-- the SDK: `iPhoneOS13.7.sdk` from theos/sdks, which has never depended on
+- the SDK: the iOS 16.4 SDK from theos/sdks, which has never depended on
   Xcode.
 
 The `ld64` recipe carries the two snags in building it: `apple-libtapi` calls

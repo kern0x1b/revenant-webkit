@@ -1,37 +1,36 @@
 {
     "version": "0.5",
     "requires": [
-        "woff2/1.0.2@revenant/stable#db36f2d4c8c999c6e3b47c4270980f93%1789567077.117097",
-        "wasm3/cci.20260905@revenant/stable#f2727ca4b9b013ce5d058a636146626d%1789567058.34413",
-        "openssl/3.0.15@revenant/stable#b03fdf6d71ae67d3433786fa7b61d8f4%1789567057.932292",
-        "libxslt/1.1.45@revenant/stable#a5285c798b70a95c570931e3bde5d8c2%1789567058.263648",
-        "libxml2/2.15.4@revenant/stable#8580afb20610ee7482ba957dbd2f1874%1789567058.160013",
-        "libwebp/1.4.0@revenant/stable#32b9069334e095af257fb107ac4b7e99%1789567058.1319091",
-        "libpsl/0.23.3@revenant/stable#b70e7ebc199977d9c97dc0ae10999db7%1789567058.301496",
-        "libcxx/21.1.0@charon/stable#deb3e152b204e81b03164f57d3c8a7b8%1789567058.210568",
-        "icu/74.2@revenant/stable#be44e184593d18b984237181b951f08c%1789567058.183158",
-        "brotli/1.1.0@revenant/stable#3d7ab81f4b1a60b303545f138cc4bec4%1789567058.10681",
-        "apple-compat/1.0@charon/stable#a40a91744a301951a8d027e8c95877c3%1789567058.233857"
+        "woff2/1.0.2+13.gfb9c337@revenant/stable#2e635bddbe789b8762df2146b7e81a69%1789575185.335587",
+        "wasm3/0.9.1-beta.1+7.gdeeaca9@revenant/stable#2974f7f9031be6fc627a87fad9530bf4%1789575185.360644",
+        "openssl/4.0.2@revenant/stable#3128e39d40eab3353e6f006d6915b125%1789575185.0945122",
+        "libxslt/1.1.45@revenant/stable#a5285c798b70a95c570931e3bde5d8c2%1789575185.271837",
+        "libxml2/2.15.4@revenant/stable#5ebc707e169127b8af0c3ac83d97f1cc%1789575185.193949",
+        "libwebp/1.6.0+258.g6ff2f43@revenant/stable#be5f805ebaf8ea1fc79e31b49aae997b%1789575185.166443",
+        "libpsl/0.23.3+5.ga629c83@revenant/stable#a8a4277f809254cc3b495cc91a919189%1789575185.306546",
+        "libcxx/23.1.1@charon/stable#38abf8ad3a6902bd0195796af5e937e0%1789575986.3443682",
+        "icu/78.3@revenant/stable#0627eb1d7c3c6c61ddc1b3838e4225b7%1789575185.22068",
+        "brotli/1.2.0+161.g85c2aaf@revenant/stable#eb9ec0d3cf54cfe38b9fb4cfe617ebf6%1789575185.1412292",
+        "apple-compat/1.0@charon/stable#4ec6f0c800be148fb98802b818775c7c%1789575986.669483"
     ],
     "build_requires": [
-        "zlib/1.3.2#1cb806da49011867778ffb6ac7190fcb%1777558780.503",
-        "openssl/3.6.4#bc460bf37686ccae86a15bfdce71be11%1787920038.176",
+        "openssl/4.0.2#b700c658ab174d6ef1bbd719ca441236%1787920035.586",
         "ninja/1.13.2#c8c5dc2a52ed6e4e42a66d75b4717ceb%1764096931.974",
         "m4/1.4.19#1727f439cf74e83826ec96d0b4904eee%1784541921.659",
         "libtool/2.4.7#14e7739cc128bc1623d2ed318008e47e%1755679003.847",
         "libplist/2.6.0#dc10c332cee89d1dd467f5df645da966%1733219039.652",
-        "ldid/2.1.5@charon/stable#b3d82cc409c7641bc9c84764fff07721%1789567058.401927",
-        "ld64/956.6@charon/stable#12f94a06eae9d5bb1ef23b1c2ca8dd2a%1789567058.0729222",
-        "iphoneos-sdk/13.7@charon/stable#2431b5aa228cc4746e98a2b3dc3e233f%1789567058.031857",
+        "ldid/2.1.5-procursus7+23.gaf86971@charon/stable#2c8fb51566abe5f4ae071898749e4fd4%1789575185.4188318",
+        "ld64/956.6@charon/stable#12f94a06eae9d5bb1ef23b1c2ca8dd2a%1789575986.725116",
+        "iphoneos-sdk/16.4@charon/stable#82fce29526296ced75a45a8de6862c23%1789575986.698763",
         "gnu-config/cci.20210814#466e9d4d7779e1c142443f7ea44b4284%1762363589.329",
-        "dyld-imports-check/1.0@charon/stable#fbdbace7f3f5413f60750000dae44416%1789567059.075634",
+        "dyld-imports-check/1.0@charon/stable#13351def62e3f84fe9c7d9c994236159%1789576081.738179",
         "cmake/4.4.3#c5b4d075979c7cb5d9649861acad0efe%1788855208.145",
         "automake/1.16.5#b91b7c384c3deaa9d535be02da14d04f%1755524470.56",
         "autoconf/2.71#51077f068e61700d65bb05541ea1e4b0%1731054366.86"
     ],
     "python_requires": [
-        "charon-base/1.0@charon/stable#6ec5828cc099a2a91309927f3a0351e7%1789567057.599832",
-        "charon-apple/1.0@charon/stable#f2cdcbf43d5bba76c64de20192f42401%1789567057.9015481"
+        "charon-base/1.0@charon/stable#85af7aee76c21c71f7856896d13c66f1%1789575184.5749671",
+        "charon-apple/1.0@charon/stable#1956a57cef0ff5f31c4aa27c5ad269d8%1789575184.863961"
     ],
     "config_requires": []
 }

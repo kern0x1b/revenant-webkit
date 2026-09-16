@@ -564,8 +564,7 @@ undefined JavaScriptCore __ZNSt13runtime_errorD2Ev
 undefined JavaScriptCore __ZNSt3__111__call_onceERVmPvPFvS2_E
 undefined JavaScriptCore __ZNSt3__112__next_primeEm
 undefined JavaScriptCore __ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE21__grow_by_and_replaceEmmmmmmPKc
-undefined JavaScriptCore __ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEmc
-undefined JavaScriptCore __ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6insertEmmc
+undefined JavaScriptCore __ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9__grow_byEmmmmmm
 undefined JavaScriptCore __ZNSt3__113__hash_memoryEPKvm
 undefined JavaScriptCore __ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE6sentryC1ERS3_
 undefined JavaScriptCore __ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE6sentryD1Ev
@@ -1814,8 +1813,13 @@ undefined WebCore __NSConcreteStackBlock
 undefined WebCore __Unwind_SjLj_Register
 undefined WebCore __Unwind_SjLj_Resume
 undefined WebCore __Unwind_SjLj_Unregister
+undefined WebCore __Z16ulocimp_toBcpKeyNSt3__117basic_string_viewIcNS_11char_traitsIcEEEE
+undefined WebCore __Z17ulocimp_toBcpTypeNSt3__117basic_string_viewIcNS_11char_traitsIcEEEES3_
+undefined WebCore __Z19ulocimp_toLegacyKeyNSt3__117basic_string_viewIcNS_11char_traitsIcEEEE
 undefined WebCore __Z20WTFCrashWithInfoImpliPKcS0_j
 undefined WebCore __Z20WTFCrashWithInfoImpliPKcS0_jj
+undefined WebCore __Z20ulocimp_toLegacyTypeNSt3__117basic_string_viewIcNS_11char_traitsIcEEEES3_
+undefined WebCore __Z24ulocimp_addLikelySubtagsPKcR10UErrorCode
 undefined WebCore __Z26ReportBlockedObjCExceptionP11NSException
 undefined WebCore __ZN13OpaqueJSClassD1Ev
 undefined WebCore __ZN14OpaqueJSString9tryCreateEON3WTF6StringE
@@ -2816,6 +2820,8 @@ undefined WebCore __ZN3WTFlsERNS_10TextStreamERKNS_27ObjectIdentifierGenericBase
 undefined WebCore __ZN3WTFlsERNS_10TextStreamERKNS_3URLE
 undefined WebCore __ZN3WTFssERKNS_24TimeWithDynamicClockTypeES2_
 undefined WebCore __ZN3WTFssERKNS_9MediaTimeES2_
+undefined WebCore __ZN3icu11LocaleBased11getLocaleIDERKNS_6LocaleES3_18ULocDataLocaleTypeR10UErrorCode
+undefined WebCore __ZN3icu11LocaleBased9getLocaleERKNS_6LocaleES3_18ULocDataLocaleTypeR10UErrorCode
 undefined WebCore __ZN9Inspector13AgentRegistry13discardValuesEv
 undefined WebCore __ZN9Inspector13AgentRegistry27didCreateFrontendAndBackendEv
 undefined WebCore __ZN9Inspector13AgentRegistry29willDestroyFrontendAndBackendENS_16DisconnectReasonE
@@ -3365,6 +3371,7 @@ undefined WebCore __ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcE
 undefined WebCore __ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6insertEmPKcm
 undefined WebCore __ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6resizeEmc
 undefined WebCore __ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7replaceEmmPKcm
+undefined WebCore __ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9__grow_byEmmmmmm
 undefined WebCore __ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEED2Ev
 undefined WebCore __ZNSt3__113__hash_memoryEPKvm
 undefined WebCore __ZNSt3__113basic_filebufIcNS_11char_traitsIcEEE4openEPKcj
@@ -3565,7 +3572,6 @@ undefined WebCore ___cxa_guard_acquire
 undefined WebCore ___cxa_guard_release
 undefined WebCore ___cxa_pure_virtual
 undefined WebCore ___cxa_throw
-undefined WebCore ___darwin_check_fd_set_overflow
 undefined WebCore ___divdc3
 undefined WebCore ___divdi3
 undefined WebCore ___divsi3
@@ -3594,6 +3600,7 @@ undefined WebCore ___stderrp
 undefined WebCore ___stdinp
 undefined WebCore ___stdoutp
 undefined WebCore ___strcat_chk
+undefined WebCore ___strncpy_chk
 undefined WebCore ___tolower
 undefined WebCore ___toupper
 undefined WebCore ___udivdi3
@@ -3622,7 +3629,6 @@ undefined WebCore _atan2
 undefined WebCore _atan2f
 undefined WebCore _atanf
 undefined WebCore _atanhf
-undefined WebCore _atexit
 undefined WebCore _atof
 undefined WebCore _atoi
 undefined WebCore _atol
@@ -3678,7 +3684,6 @@ undefined WebCore _dispatch_suspend
 undefined WebCore _dispatch_time
 undefined WebCore _dladdr
 undefined WebCore _dlclose
-undefined WebCore _dlerror
 undefined WebCore _dlopen
 undefined WebCore _dlsym
 undefined WebCore _dup
@@ -3725,16 +3730,16 @@ undefined WebCore _geteuid
 undefined WebCore _getgid
 undefined WebCore _gethostbyname
 undefined WebCore _getnameinfo
+undefined WebCore _getpeername
 undefined WebCore _getpid
 undefined WebCore _getsockname
 undefined WebCore _getsockopt
 undefined WebCore _gettimeofday
 undefined WebCore _getuid
 undefined WebCore _gmtime
-undefined WebCore _gmtime_r
 undefined WebCore _hypot
 undefined WebCore _hypotf
-undefined WebCore _icudt74_dat
+undefined WebCore _icudt78_dat
 undefined WebCore _inet_pton
 undefined WebCore _inflate
 undefined WebCore _inflateEnd
@@ -3932,6 +3937,7 @@ undefined WebCore _modf
 undefined WebCore _modff
 undefined WebCore _mprotect
 undefined WebCore _munmap
+undefined WebCore _nanosleep
 undefined WebCore _newlocale
 undefined WebCore _nextafterf
 undefined WebCore _notify_cancel
@@ -3973,6 +3979,7 @@ undefined WebCore _object_getInstanceVariable
 undefined WebCore _object_setInstanceVariable
 undefined WebCore _open
 undefined WebCore _opendir
+undefined WebCore _poll
 undefined WebCore _posix_madvise
 undefined WebCore _posix_memalign
 undefined WebCore _pow
@@ -3980,14 +3987,18 @@ undefined WebCore _powf
 undefined WebCore _property_getName
 undefined WebCore _pthread_attr_destroy
 undefined WebCore _pthread_attr_init
+undefined WebCore _pthread_attr_setdetachstate
 undefined WebCore _pthread_attr_setscope
 undefined WebCore _pthread_attr_setstacksize
+undefined WebCore _pthread_cond_broadcast
 undefined WebCore _pthread_cond_destroy
 undefined WebCore _pthread_cond_init
 undefined WebCore _pthread_cond_signal
+undefined WebCore _pthread_cond_timedwait
 undefined WebCore _pthread_cond_wait
 undefined WebCore _pthread_create
 undefined WebCore _pthread_equal
+undefined WebCore _pthread_exit
 undefined WebCore _pthread_getspecific
 undefined WebCore _pthread_join
 undefined WebCore _pthread_key_create
@@ -3996,6 +4007,7 @@ undefined WebCore _pthread_main_np
 undefined WebCore _pthread_mutex_destroy
 undefined WebCore _pthread_mutex_init
 undefined WebCore _pthread_mutex_lock
+undefined WebCore _pthread_mutex_trylock
 undefined WebCore _pthread_mutex_unlock
 undefined WebCore _pthread_once
 undefined WebCore _pthread_rwlock_destroy
@@ -4011,6 +4023,8 @@ undefined WebCore _qsort
 undefined WebCore _read
 undefined WebCore _readdir
 undefined WebCore _realloc
+undefined WebCore _recvfrom
+undefined WebCore _recvmsg
 undefined WebCore _remainderf
 undefined WebCore _rename
 undefined WebCore _rmdir
@@ -4019,7 +4033,9 @@ undefined WebCore _roundf
 undefined WebCore _sched_yield
 undefined WebCore _sel_getName
 undefined WebCore _sel_registerName
-undefined WebCore _select
+undefined WebCore _send
+undefined WebCore _sendmsg
+undefined WebCore _sendto
 undefined WebCore _setenv
 undefined WebCore _setlocale
 undefined WebCore _setsockopt
@@ -4029,10 +4045,8 @@ undefined WebCore _shutdown
 undefined WebCore _sin
 undefined WebCore _sinf
 undefined WebCore _sinhf
-undefined WebCore _sleep
 undefined WebCore _snprintf
 undefined WebCore _socket
-undefined WebCore _sprintf
 undefined WebCore _sqlite3_bind_blob
 undefined WebCore _sqlite3_bind_double
 undefined WebCore _sqlite3_bind_int
@@ -4096,6 +4110,7 @@ undefined WebCore _strncat
 undefined WebCore _strncmp
 undefined WebCore _strncpy
 undefined WebCore _strnlen
+undefined WebCore _strpbrk
 undefined WebCore _strrchr
 undefined WebCore _strspn
 undefined WebCore _strstr
@@ -4120,7 +4135,6 @@ undefined WebCore _tzname
 undefined WebCore _tzset
 undefined WebCore _uhash_close
 undefined WebCore _uhash_compareChars
-undefined WebCore _uhash_compareIChars
 undefined WebCore _uhash_compareLong
 undefined WebCore _uhash_compareUChars
 undefined WebCore _uhash_containsKey
@@ -4130,7 +4144,6 @@ undefined WebCore _uhash_find
 undefined WebCore _uhash_get
 undefined WebCore _uhash_geti
 undefined WebCore _uhash_hashChars
-undefined WebCore _uhash_hashIChars
 undefined WebCore _uhash_hashLong
 undefined WebCore _uhash_hashUChars
 undefined WebCore _uhash_igeti
@@ -4145,7 +4158,6 @@ undefined WebCore _uhash_remove
 undefined WebCore _uhash_removeElement
 undefined WebCore _uhash_setKeyDeleter
 undefined WebCore _uhash_setValueDeleter
-undefined WebCore _ulocimp_addLikelySubtags
 undefined WebCore _uncompress
 undefined WebCore _unlink
 undefined WebCore _uprv_asciitolower
@@ -4159,7 +4171,6 @@ undefined WebCore _uprv_strdup
 undefined WebCore _uprv_stricmp
 undefined WebCore _uprv_strnicmp
 undefined WebCore _uprv_toupper
-undefined WebCore _usleep
 undefined WebCore _utf8_back1SafeBody
 undefined WebCore _utf8_nextCharSafeBody
 undefined WebCore _utf8_prevCharSafeBody
@@ -6383,7 +6394,7 @@ undefined WebKitLegacy _fwrite
 undefined WebKitLegacy _g_webkitIOS6TileDidDrawPending
 undefined WebKitLegacy _getenv
 undefined WebKitLegacy _getpid
-undefined WebKitLegacy _icudt74_dat
+undefined WebKitLegacy _icudt78_dat
 undefined WebKitLegacy _kCFAllocatorDefault
 undefined WebKitLegacy _kCFAllocatorNull
 undefined WebKitLegacy _kCFBooleanFalse

@@ -99,16 +99,15 @@
 static const void *webKitIOS6AttributionKey = &webKitIOS6AttributionKey;
 
 @implementation NSURLRequest (WebKitIOS6Attribution)
-- (WebKitIOS6URLRequestAttribution)attribution
+- (NSURLRequestAttribution)attribution
 {
     NSNumber *stored = objc_getAssociatedObject(self, webKitIOS6AttributionKey);
-    return stored ? (WebKitIOS6URLRequestAttribution)[stored integerValue] : NSURLRequestAttributionDeveloper;
+    return stored ? (NSURLRequestAttribution)[stored integerValue] : NSURLRequestAttributionDeveloper;
 }
 @end
 
 @implementation NSMutableURLRequest (WebKitIOS6Attribution)
-@dynamic attribution;
-- (void)setAttribution:(WebKitIOS6URLRequestAttribution)attribution
+- (void)setAttribution:(NSURLRequestAttribution)attribution
 {
     objc_setAssociatedObject(self, webKitIOS6AttributionKey, @(attribution), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }

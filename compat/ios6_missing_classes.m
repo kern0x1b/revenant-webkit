@@ -12,12 +12,6 @@
 @interface LSBundleProxy : NSObject
 @end
 
-@interface NSPresentationIntent : NSObject
-@property (nonatomic, readonly) NSInteger identity;
-@property (nonatomic, readonly) NSPresentationIntent *parentIntent;
-+ (instancetype)blockQuoteIntentWithIdentity:(NSInteger)identity nestedInsideIntent:(NSPresentationIntent *)parent;
-@end
-
 @interface _LSOpenConfiguration : NSObject
 @property (nonatomic, retain) NSURL *referrerURL;
 @end

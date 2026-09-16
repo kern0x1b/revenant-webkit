@@ -37,16 +37,9 @@ typedef struct { uint64_t value[2]; } CMTag;
 typedef mach_port_t task_id_token_t;
 #endif
 #if defined(__OBJC__)
-#define UIUserInterfaceIdiomMac ((UIUserInterfaceIdiom)5)
 #define UIUserInterfaceIdiomVision ((UIUserInterfaceIdiom)6)
 #endif
 
-#if defined(__OBJC__)
-#ifndef WEBKIT_IOS6_UIBUTTON_CONFIG
-#define WEBKIT_IOS6_UIBUTTON_CONFIG
-typedef void (^UIButtonConfigurationUpdateHandler)(id button);
-#endif
-#endif
 
 #if defined(__cplusplus)
 #include <pthread.h>
@@ -114,12 +107,6 @@ typedef NSString *NSTextListMarkerFormat;
 #import <AVFoundation/AVFoundation.h>
 #endif
 
-#ifndef kCMVideoCodecType_VP9
-#define kCMVideoCodecType_VP9 'vp09'
-#endif
-#ifndef kCMVideoCodecType_AV1
-#define kCMVideoCodecType_AV1 'av01'
-#endif
 
 #ifndef __counted_by
 #define __counted_by(N)
@@ -146,18 +133,6 @@ typedef NSString *NSTextListMarkerFormat;
 #define __single
 #endif
 
-#ifndef kAudioFileBW64Type
-#define kAudioFileBW64Type 'BW64'
-#endif
-#ifndef kAudioFileWave64Type
-#define kAudioFileWave64Type 'W64f'
-#endif
-#ifndef kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarVideoRange
-#define kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarVideoRange '&8v0'
-#endif
-#ifndef kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarFullRange
-#define kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarFullRange '&8f0'
-#endif
 
 #ifndef kAudioChannelLayoutTag_Ogg_3_0
 #define kAudioChannelLayoutTag_Ogg_3_0 kAudioChannelLayoutTag_AC3_3_0
@@ -178,22 +153,10 @@ typedef NSString *NSTextListMarkerFormat;
 #define kAudioChannelLayoutTag_Ogg_7_1 ((215U << 16) | 8)
 #endif
 
-#if defined(__OBJC__) || defined(__cplusplus)
-#ifndef kCGImagePropertyWebPDictionary
-#define kCGImagePropertyWebPDictionary CFSTR("{WebP}")
-#endif
-#ifndef kCGImageAuxiliaryDataTypeHDRGainMap
-#define kCGImageAuxiliaryDataTypeHDRGainMap CFSTR("kCGImageAuxiliaryDataTypeHDRGainMap")
-#endif
-#endif
-
 #ifndef kCTFontVariationAxesAttribute
 #define kCTFontVariationAxesAttribute kCTFontVariationAttribute
 #endif
 
-#ifndef kCVPixelFormatType_64RGBALE
-#define kCVPixelFormatType_64RGBALE 'l64r'
-#endif
 #ifndef kCVPixelFormatType_30RGB_r210
 #define kCVPixelFormatType_30RGB_r210 'r210'
 #endif
@@ -201,50 +164,14 @@ typedef NSString *NSTextListMarkerFormat;
 #define kCVPixelFormatType_4444AYpCbCrFloat 'r4fl'
 #endif
 
-#ifndef kCVPixelFormatType_16VersatileBayer
-#define kCVPixelFormatType_16VersatileBayer 'bp16'
-#endif
 #ifndef kCVPixelFormatType_30RGBLE_8A_BiPlanar
 #define kCVPixelFormatType_30RGBLE_8A_BiPlanar 'b3a8'
 #endif
 #ifndef kCVPixelFormatType_30RGB_r210
 #define kCVPixelFormatType_30RGB_r210 'r210'
 #endif
-#ifndef kCVPixelFormatType_40ARGBLEWideGamut
-#define kCVPixelFormatType_40ARGBLEWideGamut 'w40a'
-#endif
-#ifndef kCVPixelFormatType_40ARGBLEWideGamutPremultiplied
-#define kCVPixelFormatType_40ARGBLEWideGamutPremultiplied 'w40m'
-#endif
-#ifndef kCVPixelFormatType_422YpCbCr16BiPlanarVideoRange
-#define kCVPixelFormatType_422YpCbCr16BiPlanarVideoRange 'sv22'
-#endif
-#ifndef kCVPixelFormatType_422YpCbCr8BiPlanarFullRange
-#define kCVPixelFormatType_422YpCbCr8BiPlanarFullRange '422f'
-#endif
-#ifndef kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange
-#define kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange '422v'
-#endif
 #ifndef kCVPixelFormatType_4444AYpCbCrFloat
 #define kCVPixelFormatType_4444AYpCbCrFloat 'r4fl'
-#endif
-#ifndef kCVPixelFormatType_444YpCbCr16BiPlanarVideoRange
-#define kCVPixelFormatType_444YpCbCr16BiPlanarVideoRange 'sv44'
-#endif
-#ifndef kCVPixelFormatType_444YpCbCr16VideoRange_16A_TriPlanar
-#define kCVPixelFormatType_444YpCbCr16VideoRange_16A_TriPlanar 's4as'
-#endif
-#ifndef kCVPixelFormatType_444YpCbCr8BiPlanarFullRange
-#define kCVPixelFormatType_444YpCbCr8BiPlanarFullRange '444f'
-#endif
-#ifndef kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange
-#define kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange '444v'
-#endif
-#ifndef kCVPixelFormatType_64RGBALE
-#define kCVPixelFormatType_64RGBALE 'l64r'
-#endif
-#ifndef kCVPixelFormatType_64RGBA_DownscaledProResRAW
-#define kCVPixelFormatType_64RGBA_DownscaledProResRAW 'bp64'
 #endif
 #ifndef kCVPixelFormatType_96VersatileBayerPacked12
 #define kCVPixelFormatType_96VersatileBayerPacked12 'btp2'
@@ -255,53 +182,11 @@ typedef NSString *NSTextListMarkerFormat;
 #ifndef kCVPixelFormatType_Lossless_30RGBLE_8A_BiPlanar
 #define kCVPixelFormatType_Lossless_30RGBLE_8A_BiPlanar '&b38'
 #endif
-#ifndef kCVPixelFormatType_Lossless_32BGRA
-#define kCVPixelFormatType_Lossless_32BGRA '&BGA'
-#endif
 #ifndef kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarFullRange
 #define kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarFullRange '&xf0'
 #endif
-#ifndef kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarVideoRange
-#define kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarVideoRange '&xv0'
-#endif
-#ifndef kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarFullRange
-#define kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarFullRange '&8f0'
-#endif
-#ifndef kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarVideoRange
-#define kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarVideoRange '&8v0'
-#endif
-#ifndef kCVPixelFormatType_Lossless_422YpCbCr10PackedBiPlanarVideoRange
-#define kCVPixelFormatType_Lossless_422YpCbCr10PackedBiPlanarVideoRange '&xv2'
-#endif
 #ifndef kCVPixelFormatType_Lossless_64RGBAHalf
 #define kCVPixelFormatType_Lossless_64RGBAHalf '&RhA'
-#endif
-#ifndef kCVPixelFormatType_Lossy_32BGRA
-#define kCVPixelFormatType_Lossy_32BGRA '-BGA'
-#endif
-#ifndef kCVPixelFormatType_Lossy_420YpCbCr10PackedBiPlanarVideoRange
-#define kCVPixelFormatType_Lossy_420YpCbCr10PackedBiPlanarVideoRange '-xv0'
-#endif
-#ifndef kCVPixelFormatType_Lossy_420YpCbCr8BiPlanarFullRange
-#define kCVPixelFormatType_Lossy_420YpCbCr8BiPlanarFullRange '-8f0'
-#endif
-#ifndef kCVPixelFormatType_Lossy_420YpCbCr8BiPlanarVideoRange
-#define kCVPixelFormatType_Lossy_420YpCbCr8BiPlanarVideoRange '-8v0'
-#endif
-#ifndef kCVPixelFormatType_Lossy_422YpCbCr10PackedBiPlanarVideoRange
-#define kCVPixelFormatType_Lossy_422YpCbCr10PackedBiPlanarVideoRange '-xv2'
-#endif
-#ifndef kCVPixelFormatType_OneComponent10
-#define kCVPixelFormatType_OneComponent10 'L010'
-#endif
-#ifndef kCVPixelFormatType_OneComponent12
-#define kCVPixelFormatType_OneComponent12 'L012'
-#endif
-#ifndef kCVPixelFormatType_OneComponent16
-#define kCVPixelFormatType_OneComponent16 'L016'
-#endif
-#ifndef kCVPixelFormatType_TwoComponent16
-#define kCVPixelFormatType_TwoComponent16 '2C16'
 #endif
 
 #ifndef kCGColorSpaceExtendedDisplayP3
@@ -312,23 +197,6 @@ typedef NSString *NSTextListMarkerFormat;
 #endif
 #ifndef kCGColorSpaceLinearDisplayP3
 #define kCGColorSpaceLinearDisplayP3 kCGColorSpaceLinearSRGB
-#endif
-
-#if defined(__OBJC__)
-#ifndef WEBKIT_IOS6_URL_ATTRIBUTION
-#define WEBKIT_IOS6_URL_ATTRIBUTION
-#import <Foundation/NSURLRequest.h>
-typedef NS_ENUM(NSInteger, WebKitIOS6URLRequestAttribution) {
-    NSURLRequestAttributionDeveloper = 0,
-    NSURLRequestAttributionUser = 1,
-};
-@interface NSURLRequest (WebKitIOS6Attribution)
-@property (readonly) WebKitIOS6URLRequestAttribution attribution;
-@end
-@interface NSMutableURLRequest (WebKitIOS6Attribution)
-@property WebKitIOS6URLRequestAttribution attribution;
-@end
-#endif
 #endif
 
 #include <Security/SecTrust.h>
