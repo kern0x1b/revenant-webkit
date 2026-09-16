@@ -7,6 +7,7 @@ engine = "webkit-254"
 licenses = ["LICENSE", "THIRD-PARTY.md"]
 
 [target]
+include-profiles = ["ios6-armv7"]
 arch = "armv7"
 os = "iOS"
 os-version = "6.0"
