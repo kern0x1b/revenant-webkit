@@ -137,7 +137,8 @@ the steps in the order that fails cheapest first:
 7. the frameworks laid out as the iOS 6 system frameworks they replace, beside
    the C++ runtime and everything from step 6, as the whole device filesystem
    tree in `build/engine/armv7-system/stage`
-8. `tools/ios6-imports-check.py`, when the phone's shared cache is configured
+8. `ios6-imports-check` from ios6-toolchain, when the phone's shared cache is
+   configured
 
 Everything lands in `build/engine/armv7-system`. The `.deb` is a separate step,
 described in [the package](#4-the-package). Why each CMake setting has the
@@ -192,9 +193,11 @@ python3 tools/compat-audit.py --compat build/engine/armv7-system/compat/libios6c
 is years newer than the system it runs on, so a call can link cleanly against a
 function iOS 6 never had. Nothing fails at load: the import is bound lazily, and
 the process dies the first time the call is made. A plain `ws://` WebSocket did
-exactly that. `tools/ios6-imports-check.py` compares every non-weak import of the
-laid-out frameworks with what the phone's own shared cache exports, and the build
-runs it once it knows where a copy of that cache is:
+exactly that. `ios6-imports-check`, a tool_requires from ios6-toolchain because
+the other port needs it too, compares every non-weak import in the staged tree -
+the frameworks, the C++ runtime, the tweak and TLS dylibs and the Settings
+bundle - with what the phone's own shared cache exports, and the build runs it
+once it knows where a copy of that cache is:
 
 ```sh
 tools/device.py fetch /System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7 build/
