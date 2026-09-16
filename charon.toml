@@ -60,6 +60,7 @@ project-name = "WebKit"
 config-packages = ["LibXml2", "LibXslt"]
 prefix-header = "ios6_class_names.h"
 exports = "{source}/Source/WebKitLegacy/WebKitLegacy-iOS.exp"
+exports-binary = "{build}/WebKitLegacy.framework/WebKitLegacy"
 stubs = "compat/stubs"
 
 [flags]
@@ -277,10 +278,12 @@ runtime-from = "libcxx"
 [stage.frameworks.JavaScriptCore]
 as = "JavaScriptCore"
 replaces = "/System/Library/PrivateFrameworks/JavaScriptCore.framework/JavaScriptCore"
+compatibility-version = "1.0.0"
 
 [stage.frameworks.WebCore]
 as = "WebCore"
 replaces = "/System/Library/PrivateFrameworks/WebCore.framework/WebCore"
+compatibility-version = "1.0.0"
 resources = true
 omit = ["WebCore", "Headers", "PrivateHeaders", "Modules", "_CodeSignature"]
 flatten = [{ from = "modern-media-controls/images/iOS", into = "modern-media-controls/images", patterns = ["*.svg", "*.png"] }]
@@ -288,6 +291,7 @@ flatten = [{ from = "modern-media-controls/images/iOS", into = "modern-media-con
 [stage.frameworks.WebKitLegacy]
 as = "WebKit"
 replaces = "/System/Library/PrivateFrameworks/WebKit.framework/WebKit"
+compatibility-version = "1.0.0"
 
 [stage.runtime]
 "libc++.1.0.dylib" = "librev-c++.1.dylib"
