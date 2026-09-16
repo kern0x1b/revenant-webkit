@@ -21,6 +21,7 @@ def transport():
     import harness
     return harness.transport()
 
+MARKER = Path("conan") / "ios6-deps.env"
 DEVICE_DIR = "/tmp/jscrun"
 FRAMEWORKS = ("JavaScriptCore", "WebCore", "WebKitLegacy")
 LIBCXX = {"libc++.1.0.dylib": "libc++.1.dylib", "libc++abi.1.0.dylib": "libc++abi.1.dylib"}
@@ -60,7 +61,7 @@ def read_env_file(path: Path) -> dict:
     return values
 
 
-def install_dependencies(argv: list, log_path: Path, env_file: Path, required: tuple, env=None) -> dict:
+def install_dependencies(argv: list, log_path: Path, env_file, required: tuple, env=None) -> dict:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("wb") as install_log:
         try:
@@ -68,6 +69,7 @@ def install_dependencies(argv: list, log_path: Path, env_file: Path, required: t
                            env=env, check=True)
         except (OSError, subprocess.CalledProcessError) as error:
             raise DependencyInstallError(f"conan install failed, see {log_path}") from error
+    env_file = env_file() if callable(env_file) else env_file
     if not env_file.is_file():
         raise DependencyInstallError(f"conan install left no {env_file}, see {log_path}")
     libraries = read_env_file(env_file)
@@ -97,7 +99,7 @@ def device_libraries(root: Path) -> dict:
         ["conan", "install", root, "-pr:h", root / "profiles" / "revenant-armv7", "-pr:b", "default",
          "--build=missing"],
         root / "build" / "deps-install.log",
-        root / "build" / "system" / "conan" / "ios6-deps.env",
+        lambda: next(iter(engine_builds(root, "system")), root / "build") / MARKER,
         ("IOS6_HOST_LIBCXX",), env={**os.environ, "IOS_SDK": ios_sdk()})
 
 
@@ -214,10 +216,15 @@ def sync_engine(root: Path, build: Path, device) -> bool:
         if not push_if_changed(libcxx / built_name, f"{DEVICE_DIR}/Frameworks/{device_name}", sizes, device):
             return False
 
+    missing = [framework for framework in FRAMEWORKS
+               if not (build / f"{framework}.framework" / framework).is_file()]
+    if missing:
+        log.error("device tests: %s holds no %s - the batteries would run against whatever the phone "
+                  "already has", build, ", ".join(missing))
+        return False
+
     for framework in FRAMEWORKS:
         binary = build / f"{framework}.framework" / framework
-        if not binary.is_file():
-            continue
         remote_framework = f"{DEVICE_DIR}/Frameworks/{framework}.framework"
         relay_stderr(device.run(30, f"mkdir -p {remote_framework}"))
         if not push_if_changed(binary, f"{remote_framework}/{framework}", sizes, device):
@@ -237,14 +244,26 @@ def battery_verdict(output: str, returncode: int) -> Verdict:
     return Verdict(status, verdict, failed, reported)
 
 
+def engine_builds(root: Path, variant: str) -> list:
+    build = root / "build"
+    found = [marker.parent.parent for marker in build.glob(f"**/{MARKER.as_posix()}")
+             if variant in marker.parent.parent.name] if build.is_dir() else []
+    if not found:
+        return []
+    nearest = min(len(path.parts) for path in found)
+    return [path for path in found if len(path.parts) == nearest]
+
+
 def default_engine_build(root: Path) -> Path:
     named = os.environ.get("ENGINE_BUILD")
     if named:
         return Path(named)
-    build = root / "build" / "system"
-    if not (build / "conan" / "ios6-deps.env").is_file():
-        raise SystemExit(f"{build} is not a finished build - set ENGINE_BUILD to the build the batteries should use")
-    return build
+    found = engine_builds(root, "system")
+    if len(found) != 1:
+        names = ", ".join(str(path.relative_to(root)) for path in found) or "no built engine"
+        raise SystemExit(f"{root / 'build'} holds {names} - "
+                         "set ENGINE_BUILD to the build the batteries should use")
+    return found[0]
 
 
 def run_device_tests(root: Path, build: Path, device) -> int:
