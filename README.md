@@ -127,7 +127,7 @@ overwriting one with the other drops Safari back to the system engine.
 - The Command Line Tools. The **iOS 16.4 SDK** the `apple-ios` platform names
   arrives as the toolchain's `iphoneos-sdk` package, fetched from [theos/sdks](https://github.com/theos/sdks)
   and checked against its sha256. Xcode is not needed, and neither is Theos.
-- `conan`, and [ios6-toolchain](https://github.com/kern0x1b/ios6-toolchain)
+- `conan`, and [Charon](https://github.com/kern0x1b/charon)
   installed with `conan config install`. Conan itself installs `cmake`, `ninja`,
   `ldid` and the `ld64` linker.
 

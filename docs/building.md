@@ -7,14 +7,14 @@ and what iOS 6 lacks of it is linked in from the toolchain's `apple-compat`.
 Host requirements: `conan` and the Command Line Tools. Conan installs the rest,
 the SDK included - `iphoneos-sdk` fetches it from [theos/sdks](https://github.com/theos/sdks):
 `cmake` and `ninja` from ConanCenter, `ldid` (ad-hoc signing) and the `ld64`
-linker from ios6-toolchain. Xcode is not needed and is not installed here, and
+linker from Charon. Xcode is not needed and is not installed here, and
 neither is Theos - the Command Line Tools carry the compiler and its runtime,
 and `strip`, `otool`, `nm` and `install_name_tool` are found through them. The
 Python that runs WebKit's generators and the check scripts is the one Conan runs
 in; nothing is taken from `PATH`.
 
 The first build of `ld64` on a machine also needs an LLVM, because cctools'
-configure runs `llvm-config` to find `libLTO`; ios6-toolchain reads the path
+configure runs `llvm-config` to find `libLTO`; Charon reads the path
 from `LLVM_PREFIX` once, so `export LLVM_PREFIX="$(brew --prefix llvm)"` before
 it. Afterwards the package is in the Conan cache and nothing asks again.
 
@@ -65,7 +65,7 @@ wrong order does not fail - it quietly builds against a recipe that cannot
 cross-compile for armv7. The namespace makes a bare `icu/78.3` unresolvable
 from these indexes, so a reference that forgets it is an error instead.
 
-`@charon/stable` belongs to what ios6-toolchain serves and every port shares.
+`@charon/stable` belongs to what Charon serves and every port shares.
 The libraries this port builds for itself are `@revenant/stable`: another port
 on the same machine builds its own OpenSSL with its own choices, and two recipes
 behind one reference overwrite each other's packages in the shared cache.
@@ -80,7 +80,7 @@ either choice.
 Register the two indexes once, the toolchain's and this repository's:
 
 ```sh
-charon setup <ios6-toolchain>
+charon setup <charon>
 ```
 
 That installs the toolchain's configuration - profiles, settings, hooks and
@@ -138,14 +138,14 @@ the steps in the order that fails cheapest first:
 7. the frameworks laid out as the iOS 6 system frameworks they replace, beside
    the C++ runtime and everything from step 6, as the whole device filesystem
    tree in `build/system/stage`
-8. `dyld-imports-check` from ios6-toolchain, when the phone's shared cache is
+8. `dyld-imports-check` from Charon, when the phone's shared cache is
    configured
 
 Everything lands in `build/system`. The `.deb` is a separate step,
 described in [the package](#4-the-package). Why each CMake setting has the
 value it has is in [engine-configuration.md](engine-configuration.md).
 
-A change to any recipe here or in ios6-toolchain changes its revision, and
+A change to any recipe here or in Charon changes its revision, and
 `conan.lock` has to follow in the same commit:
 
 ```sh
@@ -194,7 +194,7 @@ python3 tools/compat-audit.py --compat build/system/compat/libios6compat.a \
 is years newer than the system it runs on, so a call can link cleanly against a
 function iOS 6 never had. Nothing fails at load: the import is bound lazily, and
 the process dies the first time the call is made. A plain `ws://` WebSocket did
-exactly that. `dyld-imports-check`, a tool_requires from ios6-toolchain because
+exactly that. `dyld-imports-check`, a tool_requires from Charon because
 the other port needs it too, compares every non-weak import in the staged tree -
 the frameworks, the C++ runtime, the tweak and TLS dylibs and the Settings
 bundle - with what the phone's own shared cache exports, and the build runs it
@@ -413,7 +413,7 @@ outlive any macOS release:
 
 - the compiler: any recent LLVM, Homebrew's `llvm` is enough - `armv7-apple-ios6.0`
   is a supported target;
-- the linker: the `ld64` package from ios6-toolchain - ld64 956.6 built from
+- the linker: the `ld64` package from Charon - ld64 956.6 built from
   `cctools-port`, which supports armv7, reads `.tbd` stubs through
   `apple-libtapi`, and does LTO through the same LLVM;
 - the SDK: the iOS 16.4 SDK from theos/sdks, which has never depended on

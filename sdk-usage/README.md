@@ -51,7 +51,7 @@ built for it.
 ## Measuring again
 
 The recording costs one rebuild with two variables set for the compiler and
-three for the linker. `tools/sdk-usage.py` in ios6-toolchain turns the logs into
+three for the linker. `tools/sdk-usage.py` in Charon turns the logs into
 the list:
 
     export CC_PRINT_HEADERS=1 CC_PRINT_HEADERS_FILE=/tmp/headers.txt

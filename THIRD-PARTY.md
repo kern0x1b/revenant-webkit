@@ -24,7 +24,7 @@ and built for armv7. Each package carries its upstream license file under
 
 | Component | Version | License | Fetched by |
 | --- | --- | --- | --- |
-| libc++, libc++abi | 23.1.1 | Apache-2.0 with the LLVM exception | `libcxx` recipe (ios6-toolchain) |
+| libc++, libc++abi | 23.1.1 | Apache-2.0 with the LLVM exception | `libcxx` recipe (Charon) |
 | ICU | 78.3 | Unicode license (ICU) | `recipes/icu` |
 | OpenSSL | 4.0.2 | Apache-2.0 | `recipes/openssl` |
 | libpsl | 0.23.3 plus 5 commits (`0.23.3+5.ga629c83`) | MIT; the Public Suffix List data it carries is MPL-2.0 | `recipes/libpsl` |
@@ -42,8 +42,8 @@ phone.
 
 | Component | Version | License | Fetched by |
 | --- | --- | --- | --- |
-| ld64, from cctools-port | 956.6 | Apple Public Source License 2.0, `cctools/ld64/APPLE_LICENSE` | `ld64` recipe (ios6-toolchain) |
-| apple-libtapi, which ld64 loads to read the SDK's `.tbd` stubs | as pinned in the recipe | Apache-2.0 with the LLVM exception (`src/LICENSE.txt`), plus the University of Illinois/NCSA licenses its tapi and LLVM parts carry | `ld64` recipe (ios6-toolchain) |
+| ld64, from cctools-port | 956.6 | Apple Public Source License 2.0, `cctools/ld64/APPLE_LICENSE` | `ld64` recipe (Charon) |
+| apple-libtapi, which ld64 loads to read the SDK's `.tbd` stubs | as pinned in the recipe | Apache-2.0 with the LLVM exception (`src/LICENSE.txt`), plus the University of Illinois/NCSA licenses its tapi and LLVM parts carry | `ld64` recipe (Charon) |
 
 The `ld64` package holds the linker, `libtapi.dylib` and those license files,
 and nothing else. cctools-port builds a whole toolchain beside the linker - its

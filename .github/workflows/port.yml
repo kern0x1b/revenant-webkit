@@ -20,8 +20,8 @@ jobs:
 
       - uses: actions/checkout@v7
         with:
-          repository: kern0x1b/ios6-toolchain
-          path: ios6-toolchain
+          repository: kern0x1b/charon
+          path: charon
 
       - uses: conan-io/setup-conan@v1.4.0
         with:
@@ -30,9 +30,9 @@ jobs:
 
       - name: Register the toolchain and the port's recipes
         run: |
-          conan config install "$GITHUB_WORKSPACE/ios6-toolchain/config"
+          conan config install "$GITHUB_WORKSPACE/charon/config"
           ln -sf "$(conan config home)/extensions/charon/charon" /usr/local/bin/charon
-          charon setup "$GITHUB_WORKSPACE/ios6-toolchain"
+          charon setup "$GITHUB_WORKSPACE/charon"
 
       - name: The declaration parses
         run: python3 -c 'import tomllib; tomllib.load(open("charon.toml","rb")); print("charon.toml parses")'
