@@ -22,14 +22,12 @@ maintainer-scripts = "packaging/DEBIAN"
 log = "/tmp/rev-webview-host.log"
 first-page = "/tmp/rev-url.txt"
 
-<<<<<<< HEAD
 [tests]
 transport = "tests/device/harness.py:bind"
-=======
+
 [tests.scripts]
 runs = ["tests/scripts/build-lookup.py"]
 needs = []
->>>>>>> origin/main
 
 [tests.host]
 runs = ["tests/run-tests.py:run_host_tests"]

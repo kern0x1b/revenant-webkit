@@ -33,6 +33,9 @@ jobs:
           conan config install "$GITHUB_WORKSPACE/ios6-toolchain/config"
           make setup ARGS="$GITHUB_WORKSPACE/ios6-toolchain"
 
+      - name: The declaration parses
+        run: python3 -c 'import tomllib; tomllib.load(open("charon.toml","rb")); print("charon.toml parses")'
+
       - name: Every Python file compiles
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
 
