@@ -2,6 +2,7 @@
 """Load every device test page in Safari on the phone and print each verdict.
 
     tests/device/run.py [HOST]
+    tests/device/run.py --port 8898
     TEST_PORT=8898 tests/device/run.py
 """
 from __future__ import annotations
@@ -64,9 +65,9 @@ def verdict_feed(server):
     return "".join(f"GET {path}\n" for path in server.matching("/verdicts?"))
 
 
-def run_gate(host: str | None) -> int:
+def run_gate(host: str | None, port: int | None = None) -> int:
     host = host or harness.host_address()
-    port = int(os.environ.get("TEST_PORT") or 8899)
+    port = port or int(os.environ.get("TEST_PORT") or 8899)
     base = f"http://{host}:{port}"
 
     with harness.PageServer(port) as server:
@@ -91,7 +92,9 @@ def run_gate(host: str | None) -> int:
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("host", nargs="?", help="address the phone reaches this Mac on; default: this Mac's en0")
-    return run_gate(parser.parse_args().host)
+    parser.add_argument("--port", type=int, help="port the pages are served on; default: TEST_PORT, else 8899")
+    parsed = parser.parse_args()
+    return run_gate(parsed.host, parsed.port)
 
 
 if __name__ == "__main__":

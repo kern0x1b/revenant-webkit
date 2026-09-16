@@ -47,25 +47,10 @@ def install_resources(device, staged: Path, remote: str, frameworks, out):
             raise ConanException(f"streaming {framework} resources to the phone failed (exit {status})")
 
 
-@conan_command(group="Revenant")
-def deploy(conan_api, parser, *args):
-    """
-    Install the built engine frameworks where the package puts them on the phone and restart Mobile Safari.
-    """
-    revenant_checkout.add_root_argument(parser)
-    parser.add_argument("--build", help="engine build folder whose stage holds the laid-out frameworks; "
-                                        "default: build/engine/armv7-system of the checkout")
-    parsed = parser.parse_args(*args)
-
-    out = ConanOutput()
-    root = revenant_checkout.find_checkout(parsed.root)
-    if parsed.build:
-        staged = revenant_checkout.frameworks_in(Path(parsed.build).expanduser().resolve(), root)
-    else:
-        staged = revenant_checkout.staged_frameworks(root)
+def deploy_engine(root: Path, build: Path | None, device, out) -> Path:
+    staged = revenant_checkout.frameworks_in(build, root) if build else revenant_checkout.staged_frameworks(root)
     remote = revenant_checkout.device_location(staged)
     frameworks = frameworks_of(staged)
-    device = revenant_checkout.device_module(root, conan_api)
     out.info(f"deploying {staged} to {device.HOST}:{device.PORT} {remote}")
 
     probe = device.run(12, "echo ok")
@@ -84,3 +69,19 @@ def deploy(conan_api, parser, *args):
     out.info("restarting Mobile Safari (no respring)")
     device.run(15, "killall MobileSafari")
     out.success("engine deployed - verify the engine reports AppleWebKit/605")
+    return staged
+
+
+@conan_command(group="Revenant")
+def deploy(conan_api, parser, *args):
+    """
+    Install the built engine frameworks where the package puts them on the phone and restart Mobile Safari.
+    """
+    revenant_checkout.add_root_argument(parser)
+    parser.add_argument("--build", help="engine build folder whose stage holds the laid-out frameworks; "
+                                        "default: build/engine/armv7-system of the checkout")
+    parsed = parser.parse_args(*args)
+
+    root = revenant_checkout.find_checkout(parsed.root)
+    build = Path(parsed.build).expanduser().resolve() if parsed.build else None
+    deploy_engine(root, build, revenant_checkout.device_module(root, conan_api), ConanOutput())

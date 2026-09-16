@@ -29,9 +29,9 @@ def exit_status(run, *arguments) -> int:
         return stop.code if isinstance(stop.code, int) else 1
 
 
-def run_gate(root: Path, host: str | None) -> int:
+def run_gate(root: Path, host: str | None, port: int | None) -> int:
     gate = revenant_checkout.import_file(root / "tests" / "device" / "run.py", "revenant_device_gate")
-    return exit_status(gate.run_gate, host)
+    return exit_status(gate.run_gate, host, port)
 
 
 def run_batteries(root: Path, build: Path) -> int:
@@ -55,6 +55,7 @@ def test_device(conan_api, parser, *args):
     """
     revenant_checkout.add_root_argument(parser)
     parser.add_argument("--host", help="address the phone reaches this Mac on; default: this Mac's en0")
+    parser.add_argument("--test-port", type=int, help="port the gate serves its pages on; default: TEST_PORT, else 8899")
     parser.add_argument("--tier", choices=(*TIERS, "all"), default="all", help="which tier to run (default: all)")
     parser.add_argument("--engine-build", help="engine build folder the batteries take jsc and frameworks from; "
                                                "default: build/engine/armv7-system of the checkout")
@@ -76,7 +77,7 @@ def test_device(conan_api, parser, *args):
     for tier in tiers:
         out.title(f"device tier: {tier}")
         sys.stdout.flush()
-        results[tier] = run_gate(root, parsed.host) if tier == "gate" else run_batteries(root, build)
+        results[tier] = run_gate(root, parsed.host, parsed.test_port) if tier == "gate" else run_batteries(root, build)
 
     out.title("device tiers")
     for tier, status in results.items():
