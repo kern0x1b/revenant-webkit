@@ -74,11 +74,15 @@ FRAMEWORK = ".framework"
 
 
 def engine_build(root: Path, variant: str) -> Path:
-    build = root / "build" / "engine" / f"armv7-{variant}"
-    if not build.is_dir():
+    engines = root / "build" / "engine"
+    built = sorted(path for path in engines.glob(f"*-{variant}") if path.is_dir()) if engines.is_dir() else []
+    if not built:
         options = " -o prefixed=True" if variant == "prefixed" else ""
-        raise ConanException(f"{build} does not exist - run conan build{options} at {root} first")
-    return build
+        raise ConanException(f"{engines} holds no {variant} build - run conan build{options} at {root} first")
+    if len(built) > 1:
+        names = ", ".join(path.name for path in built)
+        raise ConanException(f"{engines} holds more than one {variant} build ({names}) - name the one to use")
+    return built[0]
 
 
 def staged_frameworks(root: Path) -> Path:
