@@ -272,6 +272,7 @@ url-scheme = "revwebviewhost"
 
 [stage]
 engine-location = "usr/lib/rev-fw"
+runtime-from = "libcxx"
 
 [stage.frameworks.JavaScriptCore]
 as = "JavaScriptCore"
