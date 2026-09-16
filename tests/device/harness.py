@@ -51,7 +51,7 @@ def _shared():
     if home.returncode:
         raise SystemExit("conan config home failed, so the phone transport cannot be found - "
                          "has conan config install been run on this machine?")
-    return Path(home.stdout.strip()) / "extensions" / "ios6"
+    return Path(home.stdout.strip()) / "extensions" / "charon"
 
 
 def host_address():
