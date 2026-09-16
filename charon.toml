@@ -7,6 +7,9 @@ index = "revenant"
 [checks]
 before-build = ["scripts/carry-check.py", "scripts/port-delta.py"]
 
+[conf]
+"user.ios6:llvm_prefix" = "a path to an LLVM, because cctools runs llvm-config to find libLTO when the ld64 package is built from source; export LLVM_PREFIX before the first build on a machine"
+
 [variants]
 system = {}
 prefixed = { options = ["prefixed=True"] }
