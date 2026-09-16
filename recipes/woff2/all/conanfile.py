@@ -16,8 +16,8 @@ class Woff2Conan(ConanFile):
     settings = "os", "arch", "compiler", "build_type"
 
     def requirements(self):
-        self.requires("brotli/1.1.0@revenant/stable", transitive_headers=True, transitive_libs=True)
-        self.requires("libcxx/21.1.0@ios6/stable", transitive_headers=True, transitive_libs=True)
+        self.requires("brotli/[>=1.2.0]@revenant/stable", transitive_headers=True, transitive_libs=True)
+        self.requires("libcxx/[>=21.1]@charon/stable", transitive_headers=True, transitive_libs=True)
 
     def layout(self):
         cmake_layout(self)
@@ -38,10 +38,9 @@ class Woff2Conan(ConanFile):
         tc.cache_variables["CANONICAL_PREFIXES"] = True
         tc.preprocessor_definitions["WOFF2_EXTERNAL_BROTLI"] = "1"
         tc.extra_cflags.append(f"-I{brotli.includedirs[0]}")
-        libcxx = self.dependencies["libcxx"].cpp_info
-        tc.extra_cxxflags += [f"-I{brotli.includedirs[0]}", "-nostdinc++",
-                              f"-isystem{libcxx.includedirs[0]}",
-                              "-D_LIBCPP_DISABLE_AVAILABILITY"]
+        libcxx = self.dependencies["libcxx"].cpp_info.aggregated_components()
+        tc.extra_cxxflags += [f"-I{brotli.includedirs[0]}", "-nostdinc++", f"-isystem{libcxx.includedirs[0]}",
+                              *(f"-D{define}" for define in libcxx.defines)]
         tc.generate()
 
     def build(self):

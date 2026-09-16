@@ -1,4 +1,4 @@
 sources:
-  "cci.20260905":
-    url: "https://github.com/wasm3/wasm3.git"
-    commit: "40e42cc0f33b24f1db3c632d82cec14084a3a83d"
+  0.9.1-beta.1+7.gdeeaca9:
+    commit: deeaca9ce815565478ab854e0db9046a479c92ff
+    url: https://github.com/wasm3/wasm3.git

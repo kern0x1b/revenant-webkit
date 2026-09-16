@@ -26,7 +26,7 @@ class IcuConan(ConanFile):
 
     def requirements(self):
         if self._cross:
-            self.requires("libcxx/21.1.0@ios6/stable")
+            self.requires("libcxx/[>=21.1]@charon/stable")
 
     def layout(self):
         basic_layout(self, src_folder="src")
@@ -57,16 +57,16 @@ class IcuConan(ConanFile):
 
         sdk = self.conf.get("tools.apple:sdk_path")
         target = f"armv7-apple-ios{self.settings.os.version}"
-        libcxx = self.dependencies["libcxx"].cpp_info
+        libcxx = self.dependencies["libcxx"].cpp_info.aggregated_components()
         cxx_include = libcxx.includedirs[0]
+        cxx_defines = " ".join(f"-D{define}" for define in libcxx.defines)
         xcrun = XCRun(self)
         flags = f"-target {target} -isysroot {sdk} -O2"
         env = {
             "CC": xcrun.cc,
             "CXX": xcrun.cxx,
             "CFLAGS": flags,
-            "CXXFLAGS": f"{flags} -nostdinc++ -isystem {cxx_include}"
-                        " -D_LIBCPP_DISABLE_AVAILABILITY",
+            "CXXFLAGS": f"{flags} -nostdinc++ -isystem {cxx_include} {cxx_defines}",
             "LDFLAGS": f"-target {target} -isysroot {sdk}",
             "ICU_DATA_FILTER_FILE": self._filter_file,
         }

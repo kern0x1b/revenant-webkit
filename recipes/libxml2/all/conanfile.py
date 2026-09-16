@@ -20,7 +20,7 @@ class LibXml2Conan(ConanFile):
         self.settings.rm_safe("compiler.libcxx")
 
     def requirements(self):
-        self.requires("icu/74.2@revenant/stable")
+        self.requires("icu/[>=78.3]@revenant/stable")
 
     def layout(self):
         cmake_layout(self, src_folder="src")

@@ -1,4 +1,4 @@
 sources:
-  "0.23.3":
-    url: "https://github.com/rockdaboot/libpsl.git"
-    commit: "c486db8d221cbac55f87508d4da4db4497760997"
+  0.23.3+5.ga629c83:
+    commit: a629c831d09011f76974d931be7f6167be90673e
+    url: https://github.com/rockdaboot/libpsl.git

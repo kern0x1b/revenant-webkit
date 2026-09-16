@@ -18,16 +18,16 @@ fpu = "neon"
 defines = ["-DWEBKIT_IOS6_NO_READLINE"]
 
 [requires]
-openssl = "3.0.15@revenant/stable"
-brotli = "1.1.0@revenant/stable"
-libwebp = "1.4.0@revenant/stable"
+openssl = "4.0.2@revenant/stable"
+brotli = "1.2.0+161.g85c2aaf@revenant/stable"
+libwebp = "1.6.0+258.g6ff2f43@revenant/stable"
 libxml2 = "2.15.4@revenant/stable"
 libxslt = "1.1.45@revenant/stable"
-libpsl = "0.23.3@revenant/stable"
-icu = "74.2@revenant/stable"
-woff2 = "1.0.2@revenant/stable"
-libcxx = "21.1.0@ios6/stable"
-wasm3 = "cci.20260905@revenant/stable"
+libpsl = "0.23.3+5.ga629c83@revenant/stable"
+icu = "78.3@revenant/stable"
+woff2 = "1.0.2+13.gfb9c337@revenant/stable"
+libcxx = "23.1.1@charon/stable"
+wasm3 = "0.9.1-beta.1+7.gdeeaca9@revenant/stable"
 
 [tools]
 cmake = "4.4.3"

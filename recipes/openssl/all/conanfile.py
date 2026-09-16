@@ -1,68 +1,59 @@
-from conan import ConanFile
-from conan.tools.files import copy, replace_in_file, chdir
-from conan.tools.apple import XCRun
-from conan.tools.scm import Git
 import os
+
+from conan import ConanFile
+from conan.errors import ConanException, ConanInvalidConfiguration
+from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches
+from conan.tools.scm import Git
 
 
 class OpenSSLConan(ConanFile):
     name = "openssl"
     user = "revenant"
     channel = "stable"
-    description = "OpenSSL for armv7 / iOS 6, with the ARM assembly kept"
+    description = ("OpenSSL, the newest release, through its own iOS Configure targets with the ARM assembly "
+                   "kept; armv7 carries a perlasm fix for OPENSSL_armcap_P on Mach-O (openssl/openssl#26510)")
     license = "Apache-2.0"
     homepage = "https://www.openssl.org"
     package_type = "static-library"
     settings = "os", "arch", "compiler", "build_type"
 
-    # Xcode 27's linker asserts on a named atom in a __nl_symbol_ptr section
-    # (setGotCoalescable, DynamicAtom.cpp). OpenSSL's ARM generator emits one
-    # for OPENSSL_armcap_P in every module that dispatches on NEON, and one such
-    # object in the archive kills the link whether or not anything references it.
-    # A plain data word holds the same address without being a GOT atom.
-    _armcap_old = (
-        '\t$ret .= ".non_lazy_symbol_pointer\\n";\n'
-        '\t$ret .= "$name:\\n";\n'
-        '\t$ret .= ".indirect_symbol\\t_$name\\n";\n'
-        '\t$ret .= ".long\\t0";'
-    )
-    _armcap_new = (
-        '\t$ret .= ".data\\n";\n'
-        '\t$ret .= ".align\\t2\\n";\n'
-        '\t$ret .= "$name:\\n";\n'
-        '\t$ret .= ".long\\t_$name\\n";\n'
-        '\t$ret .= ".text";'
-    )
+    _configure_targets = {"armv7": "ios-cross", "armv8": "ios64-cross"}
+
+    def export_sources(self):
+        export_conandata_patches(self)
+
+    def validate(self):
+        if str(self.settings.arch) not in self._configure_targets:
+            raise ConanInvalidConfiguration(f"OpenSSL has no iOS Configure target for {self.settings.arch}")
 
     def source(self):
-        source = self.conan_data["sources"][self.version]
-        git = Git(self)
-        git.fetch_commit(source["url"], source["commit"])
-        # replace_in_file raises when the text is absent, which is what this
-        # needs: silently skipping it builds the form the linker rejects, and
-        # the failure then looks unrelated to OpenSSL.
-        replace_in_file(self, os.path.join(self.source_folder, "crypto", "perlasm", "arm-xlate.pl"),
-                        self._armcap_old, self._armcap_new)
+        data = self.conan_data["sources"][self.version]
+        Git(self).fetch_commit(url=data["url"], commit=data["commit"])
+        apply_conandata_patches(self)
+
+    def _environment(self):
+        sdk = os.path.normpath(self.conf.get("tools.apple:sdk_path", check_type=str) or "")
+        cross_top, cross_sdk = os.path.dirname(os.path.dirname(sdk)), os.path.basename(sdk)
+        if not os.path.isdir(os.path.join(cross_top, "SDKs", cross_sdk)):
+            raise ConanException(f"OpenSSL's iOS targets read the SDK as $(CROSS_TOP)/SDKs/$(CROSS_SDK), and "
+                                 f"{sdk or 'no SDK'} is not laid out that way")
+        commit_time = Git(self, folder=self.source_folder).run("log -1 --format=%ct")
+        return {"CROSS_TOP": cross_top, "CROSS_SDK": cross_sdk, "SOURCE_DATE_EPOCH": commit_time}
 
     def build(self):
-        sdk = self.conf.get("tools.apple:sdk_path")
-        target = f"{self.settings.arch}-apple-ios{self.settings.os.version}"
-        xcrun = XCRun(self)
-        env = {
-            "CC": xcrun.cc,
-            "CFLAGS": f"-target {target} -isysroot {sdk} -O2 -DBROKEN_CLANG_ATOMICS",
-            "LDFLAGS": f"-target {target} -isysroot {sdk}",
-            "SOURCE_DATE_EPOCH": Git(self, self.source_folder).run("log -1 --format=%ct"),
-        }
-        with chdir(self, self.source_folder):
-            exports = " ".join(f'{k}="{v}"' for k, v in env.items())
-            self.run(f"{exports} ./Configure ios-cross"
-                     " no-shared no-tests no-ui-console no-engine no-async")
-            self.run(f"{exports} make -j{os.cpu_count()} build_libs")
+        arch = str(self.settings.arch)
+        atomics = ["-DBROKEN_CLANG_ATOMICS"] if arch == "armv7" else []
+        environment = " ".join(f'{key}="{value}"' for key, value in self._environment().items())
+        options = ["no-shared", "no-dso", "no-tests", "no-docs", "no-apps", "no-ui-console", "no-engine", "no-async",
+                   *atomics, f"-mios-version-min={self.settings.os.version}"]
+        self.run(f'{environment} ./Configure {self._configure_targets[arch]} {" ".join(options)}',
+                 cwd=self.source_folder)
+        self.run(f"{environment} make -j{os.cpu_count()} build_libs", cwd=self.source_folder)
 
     def package(self):
         copy(self, "LICENSE.txt", self.source_folder, os.path.join(self.package_folder, "licenses"))
-        copy(self, "*.a", self.source_folder, os.path.join(self.package_folder, "lib"), keep_path=False)
+        for library in ("libcrypto.a", "libssl.a"):
+            copy(self, library, self.source_folder, os.path.join(self.package_folder, "lib"), keep_path=False)
         copy(self, "*.h", os.path.join(self.source_folder, "include", "openssl"),
              os.path.join(self.package_folder, "include", "openssl"))
 
