@@ -79,7 +79,7 @@ def deploy(conan_api, parser, *args):
     """
     revenant_checkout.add_root_argument(parser)
     parser.add_argument("--build", help="engine build folder whose stage holds the laid-out frameworks; "
-                                        "default: build/engine/armv7-system of the checkout")
+                                        "default: the system build under build/engine of the checkout")
     parsed = parser.parse_args(*args)
 
     root = revenant_checkout.find_checkout(parsed.root)

@@ -235,7 +235,15 @@ def battery_verdict(output: str, returncode: int) -> Verdict:
 
 
 def default_engine_build(root: Path) -> Path:
-    return Path(os.environ.get("ENGINE_BUILD") or root / "build" / "engine" / "armv7-system")
+    named = os.environ.get("ENGINE_BUILD")
+    if named:
+        return Path(named)
+    engines = root / "build" / "engine"
+    built = sorted(path for path in engines.glob("*-system") if path.is_dir()) if engines.is_dir() else []
+    if len(built) != 1:
+        found = ", ".join(path.name for path in built) or "none"
+        raise SystemExit(f"{engines} holds {found} - set ENGINE_BUILD to the build the batteries should use")
+    return built[0]
 
 
 def run_device_tests(root: Path, build: Path) -> int:

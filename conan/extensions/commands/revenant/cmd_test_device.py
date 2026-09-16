@@ -58,7 +58,7 @@ def test_device(conan_api, parser, *args):
     parser.add_argument("--test-port", type=int, help="port the gate serves its pages on; default: TEST_PORT, else 8899")
     parser.add_argument("--tier", choices=(*TIERS, "all"), default="all", help="which tier to run (default: all)")
     parser.add_argument("--engine-build", help="engine build folder the batteries take jsc and frameworks from; "
-                                               "default: build/engine/armv7-system of the checkout")
+                                               "default: the system build under build/engine of the checkout")
     parsed = parser.parse_args(*args)
 
     out = ConanOutput()
