@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Run the host checks, the JavaScript batteries on the phone, or both.
+"""The host checks and the JavaScript batteries, as tiers Charon runs.
 
-    tests/run-tests.py [host|device|all]
-    ENGINE_BUILD=build/... tests/run-tests.py device
+    charon test --tier host
+    charon test --tier batteries
+
+Charon installs what a tier declares and hands it over, so the tiers are run
+through it. The one direct call is the batteries, against the engine build
+Charon names or against a tree it does not manage:
+
+    ENGINE_BUILD=/path/to/build tests/run-tests.py
 """
 import argparse
 import hashlib
@@ -316,18 +322,8 @@ def run_device_tests(root: Path, build: Path, device) -> int:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     sys.stdout.reconfigure(line_buffering=True)
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("tier", nargs="?", default="all", choices=("host", "device", "all"))
-    args = parser.parse_args()
-
-    failures = 0
-    if args.tier in ("host", "all"):
-        log.error("the host tier is run by Charon, which installs the packages it declares: "
-                  "charon test --tier host")
-        failures += 1
-    if args.tier in ("device", "all"):
-        failures += run_device_tests(ROOT, default_engine_build(ROOT), transport())
-
+    argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter).parse_args()
+    failures = run_device_tests(ROOT, default_engine_build(ROOT), transport())
     print()
     print(f"run-tests: FAILED ({failures})" if failures else "run-tests: PASSED")
     return 1 if failures else 0

@@ -7,7 +7,8 @@ Run before every deploy: `charon test`
     charon test                   every tier the declaration names
 
 Charon installs what a tier declares it needs and hands it over, so the tiers
-are not run by calling this file directly.
+are run through it. The one direct call is the batteries against a tree Charon
+does not manage: `ENGINE_BUILD=/path/to/build tests/run-tests.py`.
 
 ## host
 
