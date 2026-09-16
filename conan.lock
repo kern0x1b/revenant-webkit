@@ -1,16 +1,16 @@
 {
     "version": "0.5",
     "requires": [
-        "woff2/1.0.2@revenant/stable#f4d583f4620e1f787d4878d477a2db49%1789549944.50778",
-        "wasm3/cci.20260905@revenant/stable#f2727ca4b9b013ce5d058a636146626d%1789549944.5329468",
-        "openssl/3.0.15@revenant/stable#b03fdf6d71ae67d3433786fa7b61d8f4%1789549944.1939352",
-        "libxslt/1.1.45@revenant/stable#a5285c798b70a95c570931e3bde5d8c2%1789549944.451919",
-        "libxml2/2.15.4@revenant/stable#8580afb20610ee7482ba957dbd2f1874%1789549944.296163",
-        "libwebp/1.4.0@revenant/stable#32b9069334e095af257fb107ac4b7e99%1789549944.272015",
-        "libpsl/0.23.3@revenant/stable#b70e7ebc199977d9c97dc0ae10999db7%1789549944.486242",
-        "libcxx/21.1.0@ios6/stable#6a219db9cec1f643371607f85abfd39b%1789549944.428801",
-        "icu/74.2@revenant/stable#899cdef8e1e53b54f808fcd3a1df9704%1789549944.402585",
-        "brotli/1.1.0@revenant/stable#3d7ab81f4b1a60b303545f138cc4bec4%1789549944.249166"
+        "woff2/1.0.2@revenant/stable#f4d583f4620e1f787d4878d477a2db49%1789554084.877959",
+        "wasm3/cci.20260905@revenant/stable#f2727ca4b9b013ce5d058a636146626d%1789554084.902153",
+        "openssl/3.0.15@revenant/stable#b03fdf6d71ae67d3433786fa7b61d8f4%1789554084.548121",
+        "libxslt/1.1.45@revenant/stable#a5285c798b70a95c570931e3bde5d8c2%1789554084.819102",
+        "libxml2/2.15.4@revenant/stable#8580afb20610ee7482ba957dbd2f1874%1789554084.74354",
+        "libwebp/1.4.0@revenant/stable#32b9069334e095af257fb107ac4b7e99%1789554084.717922",
+        "libpsl/0.23.3@revenant/stable#b70e7ebc199977d9c97dc0ae10999db7%1789554084.856972",
+        "libcxx/21.1.0@ios6/stable#6a219db9cec1f643371607f85abfd39b%1789554084.793571",
+        "icu/74.2@revenant/stable#899cdef8e1e53b54f808fcd3a1df9704%1789554084.768781",
+        "brotli/1.1.0@revenant/stable#3d7ab81f4b1a60b303545f138cc4bec4%1789554084.6897311"
     ],
     "build_requires": [
         "zlib/1.3.2#1cb806da49011867778ffb6ac7190fcb%1777558780.503",
@@ -19,16 +19,16 @@
         "m4/1.4.19#1727f439cf74e83826ec96d0b4904eee%1784541921.659",
         "libtool/2.4.7#14e7739cc128bc1623d2ed318008e47e%1755679003.847",
         "libplist/2.6.0#dc10c332cee89d1dd467f5df645da966%1733219039.652",
-        "ldid/2.1.5@ios6/stable#d4cb69b5833a91b46542fbd122c6e359%1789549944.590833",
-        "ld64/956.6@ios6/stable#75299f3be484712732a2f4fab4e6ca58%1789549944.2211509",
-        "ios6-imports-check/1.0@ios6/stable#50d91df34926e1f3332fac97df0e653f%1789549945.119583",
+        "ldid/2.1.5@ios6/stable#d4cb69b5833a91b46542fbd122c6e359%1789554084.954484",
+        "ld64/956.6@ios6/stable#75299f3be484712732a2f4fab4e6ca58%1789554084.57636",
+        "ios6-imports-check/1.0@ios6/stable#50d91df34926e1f3332fac97df0e653f%1789554085.439648",
         "gnu-config/cci.20210814#466e9d4d7779e1c142443f7ea44b4284%1762363589.329",
         "cmake/4.4.3#c5b4d075979c7cb5d9649861acad0efe%1788855208.145",
         "automake/1.16.5#b91b7c384c3deaa9d535be02da14d04f%1755524470.56",
         "autoconf/2.71#51077f068e61700d65bb05541ea1e4b0%1731054366.86"
     ],
     "python_requires": [
-        "ios6-base/1.0@ios6/stable#63d3746f096a8b3630455d12f2232925%1789554084.2365172"
+        "ios6-base/1.0@ios6/stable#2d49047c453f7ce7793b13cdc5ab625b%1789554958.10394"
     ],
     "config_requires": []
 }

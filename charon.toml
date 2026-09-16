@@ -336,6 +336,7 @@ prefixed = [
     "check:exports",
     "task:compat-audit",
     "build:application",
+    "sign:application",
 ]
 
 [tests]
