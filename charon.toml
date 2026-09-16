@@ -43,6 +43,8 @@ before-build = ["scripts/carry-check.py", "scripts/port-delta.py"]
 
 [variants.prefixed]
 options = ["prefixed=True"]
+prefix-header = "ios6_class_prefix.h"
+exports = "{build}/WebKitLegacy-iOS-rev.exp"
 
 [variants.prefixed.engine-options]
 ENABLE_MEDIA_STREAM = "OFF"
@@ -55,9 +57,7 @@ find-packages = ["icu", "libcxx", "libxml2", "libxslt", "openssl", "wasm3"]
 user-toolchain = "scripts/ios6-armv7-trunk.cmake"
 project-include = "scripts/ios6-conan-targets.cmake"
 prefix-header = "ios6_class_names.h"
-prefixed-header = "ios6_class_prefix.h"
 exports = "{source}/Source/WebKitLegacy/WebKitLegacy-iOS.exp"
-prefixed-exports = "{build}/WebKitLegacy-iOS-rev.exp"
 stubs = "compat/stubs"
 
 [flags]
