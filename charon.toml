@@ -39,6 +39,7 @@ before-build = ["scripts/carry-check.py", "scripts/port-delta.py"]
 
 [conf]
 "user.ios6:llvm_prefix" = "a path to an LLVM, because cctools runs llvm-config to find libLTO when the ld64 package is built from source; export LLVM_PREFIX before the first build on a machine"
+"user.ios6:dyld_shared_cache" = "the shared cache of the iOS this port runs on, because check:imports answers whether the staged binaries import only symbols that system exports; without it the step has nothing to compare against and the pipeline stops there rather than reporting a success it did not earn"
 
 [variants.system]
 
@@ -57,6 +58,7 @@ cmake = "webkit-254"
 find-packages = ["icu", "libcxx", "libxml2", "libxslt", "openssl", "wasm3"]
 user-toolchain = "scripts/ios6-armv7-trunk.cmake"
 project-include = "scripts/ios6-conan-targets.cmake"
+project-name = "WebKit"
 prefix-header = "ios6_class_names.h"
 exports = "{source}/Source/WebKitLegacy/WebKitLegacy-iOS.exp"
 stubs = "compat/stubs"
@@ -334,7 +336,11 @@ runs = ["tests/scripts/build-lookup.py"]
 needs = []
 
 [tests.flags]
-runs = ["tests/scripts/flag-paths-exist.py", "tests/scripts/staged-plists-are-processed.py"]
+runs = [
+    "tests/scripts/flag-paths-exist.py",
+    "tests/scripts/staged-plists-are-processed.py",
+    "tests/scripts/project-include-is-applied.py",
+]
 needs = ["build"]
 
 [tests.host]
