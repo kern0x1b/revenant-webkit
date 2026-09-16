@@ -10,7 +10,6 @@ import revenant_checkout
 from revenant_checkout import add_root_argument, device_module, engine_build, find_checkout
 
 ENGINE = "webkit-254"
-ARCH = "armv7"
 PORT_DELTA_LINES = 14
 
 
@@ -88,24 +87,25 @@ def _gate(root, host, port):
         raise ConanException("the device gate failed; the verdicts are above")
 
 
-def _device(root, conan_api, host, port, out):
+def _device(root, conan_api, arch, host, port, out):
     device = device_module(root, conan_api)
     if not device.reachable(10):
         raise ConanException("the phone is not reachable, so this integration is unverified "
                              "and must not be shipped")
-    _deploy(root, engine_build(root, "system"), device, out)
+    build = engine_build(root, "system")
+    if build.name != f"{arch}-system":
+        raise ConanException(f"the profile builds for {arch}, and the tree offers {build.name} to deploy. "
+                             f"Deploying that would put a build on the phone that this run did not make.")
+    _deploy(root, build, device, out)
     _gate(root, host, port)
 
 
-def _refuse_other_architectures(conan_api, profile, out):
+def _profile_arch(conan_api, profile):
     loaded = conan_api.profiles.get_profile([conan_api.profiles.get_path(profile)])
     arch = loaded.settings.get("arch")
-    if arch != ARCH:
-        raise ConanException(f"{profile} builds for {arch}, and every step after the build - the stage, "
-                             f"the deploy and the gate - reads the {ARCH} tree. Build that profile with "
-                             f"conan build and take it to the phone yourself, or teach those steps the "
-                             f"architecture first.")
-    out.info(f"{profile} builds for {arch}")
+    if not arch:
+        raise ConanException(f"{profile} names no architecture, so what this run builds is undefined")
+    return arch
 
 
 @conan_command(group="Revenant")
@@ -130,7 +130,8 @@ def integrate(conan_api, parser, *args):
     out = ConanOutput()
     root = find_checkout(args.root)
     profile = str(root / args.profile) if (root / args.profile).is_file() else args.profile
-    _refuse_other_architectures(conan_api, profile, out)
+    arch = _profile_arch(conan_api, profile)
+    out.info(f"{profile} builds for {arch}")
     _run(["git", "-C", str(root / ENGINE), "config", "rerere.enabled", "true"])
 
     steps = []
@@ -141,7 +142,7 @@ def integrate(conan_api, parser, *args):
         ("port delta", lambda: _delta(root)),
         ("build, symbols and stage", lambda: _build(root, profile)),
         ("host checks", lambda: _host_checks(root)),
-        ("the phone", lambda: _device(root, conan_api, args.host, args.test_port, out)),
+        ("the phone", lambda: _device(root, conan_api, arch, args.host, args.test_port, out)),
     ]
 
     for title, step in steps:
