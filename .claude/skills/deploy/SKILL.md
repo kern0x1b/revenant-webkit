@@ -12,8 +12,8 @@ cp device.env.example device.env
 # set DEVICE_HOST, DEVICE_PORT, DEVICE_PASSWORD in device.env (gitignored)
 ```
 
-`tools/device.py` reads it: `tools/device.py run <timeout> "<cmd>"`,
-`tools/device.py copy <local> <remote>` and `tools/device.py fetch <remote> <local>`.
+Charon reads it: `make device ARGS='run <timeout> "<cmd>"'`,
+`make device ARGS="copy <local> <remote>"` and `make device ARGS="fetch <remote> <local>"`.
 Scripts import it instead of building SSH option strings of their own.
 
 ## Push everything
@@ -22,16 +22,16 @@ Scripts import it instead of building SSH option strings of their own.
 the way any tweak is installed:
 
 ```sh
-conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default
+make package
 deb="$(conan cache path revenant-webkit/<version>:<package id>)/deb"
-tools/device.py copy "$deb"/space.kern0x1b.rev_*_iphoneos-arm.deb /tmp/rev.deb
-tools/device.py run 120 "dpkg -i /tmp/rev.deb"
+make device ARGS='copy "$deb"/space.kern0x1b.rev_*_iphoneos-arm.deb /tmp/rev.deb'
+make device ARGS='run 120 "dpkg -i /tmp/rev.deb"'
 ```
 
 For the engine alone, without rebuilding the package:
 
 ```sh
-conan revenant:deploy
+make deploy
 ```
 
 Its postinst restarts Mobile Safari and Preferences; no respring is needed. The
@@ -53,11 +53,11 @@ package puts each file where it belongs:
 - **Keep the `.bak` files** the deploy makes. To recover, copy a `.bak` back over
   its target and respring — see `.claude/skills/debug`.
 - **Iterating on the Settings pane needs no respring:** redeploy the bundle, then
-  `tools/device.py run 15 "killall Preferences"` and reopen it. A respring re-locks the
+  `make device ARGS='run 15 "killall Preferences"'` and reopen it. A respring re-locks the
   device.
 
 ## After deploying
 
-Respring with `tools/device.py run 15 "killall SpringBoard"`, wait for it to come back
+Respring with `make device ARGS='run 15 "killall SpringBoard"'`, wait for it to come back
 (`launchctl list | grep com.apple.SpringBoard`), then verify — see
 `.claude/skills/test`.

@@ -83,19 +83,21 @@ either choice.
 Register the two indexes once, the toolchain's and this repository's:
 
 ```sh
-conan config install <ios6-toolchain>/config
-conan ios6-remote ios6 <ios6-toolchain>
-conan ios6-remote revenant .
-conan config install conan
+make setup ARGS=<ios6-toolchain>
 ```
 
-The last line installs this repository's own commands, `revenant:deploy`,
-`revenant:run-app` and `revenant:test-device`, which take the phone's address
-from `device.env` at the root of the checkout or from
-`user.revenant:device_host` and the configuration beside it. `conan config
-install` copies them, so run it again after changing anything under `conan/`.
+That installs the toolchain's configuration - profiles, settings, hooks and
+Charon itself - and registers both recipe indexes ahead of the general remotes.
+Charon is what `make build`, `make deploy`, `make test` and the rest run; it
+lives in the toolchain, not here, so every port gets the same verbs. This
+repository declares itself to it in `charon.toml` and includes it in a two-line
+`Makefile`. The phone's address comes from `device.env` at the root of the
+checkout, and from nowhere else.
 
-`conan build` writes `build/engine/armv7-system/conan/ios6-deps.env` through the
+`conan config install` copies rather than references, so run `make setup` again
+after the toolchain changes. `make provenance` says which copy is answering.
+
+`conan build` writes `build/system/conan/ios6-deps.env` through the
 `ios6-base` generator, straight from the dependency graph - one
 `IOS6_HOST_<NAME>=path` line per library and `IOS6_BUILD_<NAME>=path` per build
 tool, so `IOS6_BUILD_LD64` is the linker. Nothing names a version, an
@@ -119,7 +121,7 @@ standalone application carries against the hash this project reviewed, and with
 ## 3. The engine
 
 ```sh
-conan build . -pr:h profiles/revenant-armv7 -pr:b default --build=missing
+make build
 ```
 
 `conanfile.py` is the whole build, the way a Gradle or Maven build file is: it
@@ -136,11 +138,11 @@ the steps in the order that fails cheapest first:
    Settings bundle - stripped and signed
 7. the frameworks laid out as the iOS 6 system frameworks they replace, beside
    the C++ runtime and everything from step 6, as the whole device filesystem
-   tree in `build/engine/armv7-system/stage`
+   tree in `build/system/stage`
 8. `ios6-imports-check` from ios6-toolchain, when the phone's shared cache is
    configured
 
-Everything lands in `build/engine/armv7-system`. The `.deb` is a separate step,
+Everything lands in `build/system`. The `.deb` is a separate step,
 described in [the package](#4-the-package). Why each CMake setting has the
 value it has is in [engine-configuration.md](engine-configuration.md).
 
@@ -148,7 +150,7 @@ A change to any recipe here or in ios6-toolchain changes its revision, and
 `conan.lock` has to follow in the same commit:
 
 ```sh
-conan lock create . -pr:h profiles/revenant-armv7 -pr:b default --lockfile="" --update
+make build ARGS='--lockfile= --update'
 ```
 
 A stale lock does not fail on the machine that made the change - the old
@@ -166,11 +168,11 @@ can sit in a process beside the system one. When a process takes our frameworks
 through `DYLD_FRAMEWORK_PATH` the system engine is never loaded, there is
 nothing to collide with, and UIKit needs the classes under their real names - it
 links `_OBJC_CLASS_$_WebView`, not a prefixed spelling. The recipe therefore
-builds the unprefixed engine by default; `-o prefixed=True` builds the prefixed
+builds the unprefixed engine by default; `VARIANT=prefixed` builds the prefixed
 one for the standalone application.
 
 **The recipe arranges that build as the system frameworks a process expects**,
-into `build/engine/armv7-system/stage/usr/lib/rev-fw` rather than an application bundle,
+into `build/system/stage/usr/lib/rev-fw` rather than an application bundle,
 which is what makes `DYLD_FRAMEWORK_PATH` substitution possible for Mobile
 Safari: `WebKitLegacy` becomes `WebKit.framework`, every framework takes the
 install name of the iOS 6 framework it stands in for (`JavaScriptCore` is a
@@ -185,8 +187,8 @@ here, which turned a call into a store into `__TEXT` and a bus error.
 `tools/compat-audit.py` checks for exactly that:
 
 ```sh
-python3 tools/compat-audit.py --compat build/engine/armv7-system/compat/libios6compat.a \
-    --engine-build build/engine/armv7-system --icu "$IOS6_HOST_ICU"
+python3 tools/compat-audit.py --compat build/system/compat/libios6compat.a \
+    --engine-build build/system --icu "$IOS6_HOST_ICU"
 ```
 
 **Every import has to exist on the phone.** The SDK the engine compiles against
@@ -200,8 +202,8 @@ bundle - with what the phone's own shared cache exports, and the build runs it
 once it knows where a copy of that cache is:
 
 ```sh
-tools/device.py fetch /System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7 build/
-conan build . -pr:h profiles/revenant-armv7 -pr:b default \
+make device ARGS="fetch /System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7 build/"
+make build \
     -c user.ios6:dyld_shared_cache="$PWD/build/dyld_shared_cache_armv7"
 ```
 
@@ -213,22 +215,22 @@ WebKit and WebKitLegacy compiled against the old class size, and the result load
 and then behaves wrongly — empty text in the interface, and a silent death with no
 crash log. This has cost more than one debugging session.
 
-`conan build . -pr:h profiles/revenant-armv7 -pr:b default -o prefixed=True`
+`make build VARIANT=prefixed`
 builds the same source with the class prefix applied, into
-`build/engine/armv7-prefixed`, for a build that has to coexist with the system
+`build/prefixed`, for a build that has to coexist with the system
 engine in one process. The shipped build is the unprefixed one; see
 [architecture.md](architecture.md#two-webkits-in-one-process).
 
 ## 4. The package
 
 ```sh
-conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default
+make package
 ```
 
 `conan build` has already built everything around the engine - `platform/CMakeLists.txt`
 builds `RevSafari.dylib`, `rev-safari-compat.dylib`, `rev-TLS.dylib` and
 `RevPrefs.bundle` - and laid it out with the engine in
-`build/engine/armv7-system/stage`. `conan export-pkg` runs the recipe's
+`build/system/stage`. `conan export-pkg` runs the recipe's
 `package()`, which copies that tree into `<package folder>/root` and writes
 `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb` with
 ios6-base's `DebianPackage`: `debian-binary`, `control.tar.gz` and
@@ -252,14 +254,14 @@ Copy `device.env.example` to `device.env` and fill in the address and password;
 neither is in the repository.
 
 ```sh
-conan revenant:deploy    # engine only: back up, push the staged frameworks, restart Safari
+make deploy    # engine only: back up, push the staged frameworks, restart Safari
 ```
 
 For everything else, install the package the way any tweak is installed:
 
 ```sh
-tools/device.py copy "<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb" /tmp/rev.deb
-tools/device.py run dpkg -i /tmp/rev.deb
+make device ARGS='copy "<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb" /tmp/rev.deb'
+make device ARGS="run dpkg -i /tmp/rev.deb"
 ```
 
 ## The engine without Safari
@@ -277,11 +279,11 @@ this engine, because it drives its view through the *system* WebCore's
 `UIWebView`'s own implementation would.
 
 ```sh
-conan build . -pr:h profiles/revenant-armv7 -pr:b default -o prefixed=True
-conan revenant:run-app --wait 20
+make build VARIANT=prefixed
+make run ARGS="--wait 20"
 ```
 
-The prefixed build ends in `build/engine/armv7-prefixed/RevWebViewHost.app`,
+The prefixed build ends in `build/prefixed/RevWebViewHost.app`,
 the engine and the C++ runtime bundled inside it and its version taken from
 `conanfile.py`; `conan export-pkg` with the same option puts it in
 `<package folder>/RevWebViewHost.app`. The runner installs it, opens it through its
@@ -329,8 +331,8 @@ imports check covers what it links against; two things it cannot see are worth
 looking at in the staged tree the package is made from:
 
 ```sh
-otool -L build/engine/armv7-system/stage/usr/lib/rev-safari-compat.dylib
-otool -l build/engine/armv7-system/stage/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib | grep LC_ENCRYPTION_INFO
+otool -L build/system/stage/usr/lib/rev-safari-compat.dylib
+otool -l build/system/stage/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib | grep LC_ENCRYPTION_INFO
 ```
 
 The second must print nothing. Apple's linker from Xcode 27 writes that load

@@ -45,7 +45,7 @@ with `-B`, because that linker stamps every armv7 dylib with an
 
 ## Not measured in this pass
 
-The prefixed engine and the standalone application (`-o prefixed=True`) were not
+The prefixed engine and the standalone application (`VARIANT=prefixed`) were not
 built for it.
 
 ## Measuring again
@@ -59,7 +59,7 @@ the list:
     # rebuild what is being measured, with ccache out of the way
 
     python3 <ios6-toolchain>/tools/sdk-usage.py --sdk "$IOS_SDK" \
-        --ninja build/engine/armv7-system --headers /tmp/headers.txt --links /tmp/links.txt \
+        --ninja build/system --headers /tmp/headers.txt --links /tmp/links.txt \
         --out sdk-usage/iPhoneOS13.7.sdk.txt
 
 ccache replays a compile without running the compiler, so a cached compile logs

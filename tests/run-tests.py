@@ -94,7 +94,7 @@ def device_libraries(root: Path) -> dict:
         ["conan", "install", root, "-pr:h", root / "profiles" / "revenant-armv7", "-pr:b", "default",
          "--build=missing"],
         root / "build" / "deps-install.log",
-        root / "build" / "engine" / "armv7-system" / "conan" / "ios6-deps.env",
+        root / "build" / "system" / "conan" / "ios6-deps.env",
         ("IOS6_HOST_LIBCXX",), env={**os.environ, "IOS_SDK": ios_sdk()})
 
 
@@ -238,12 +238,10 @@ def default_engine_build(root: Path) -> Path:
     named = os.environ.get("ENGINE_BUILD")
     if named:
         return Path(named)
-    engines = root / "build" / "engine"
-    built = sorted(path for path in engines.glob("*-system") if path.is_dir()) if engines.is_dir() else []
-    if len(built) != 1:
-        found = ", ".join(path.name for path in built) or "none"
-        raise SystemExit(f"{engines} holds {found} - set ENGINE_BUILD to the build the batteries should use")
-    return built[0]
+    build = root / "build" / "system"
+    if not (build / "conan" / "ios6-deps.env").is_file():
+        raise SystemExit(f"{build} is not a finished build - set ENGINE_BUILD to the build the batteries should use")
+    return build
 
 
 def run_device_tests(root: Path, build: Path) -> int:

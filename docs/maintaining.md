@@ -117,9 +117,9 @@ rather than screenshots.
 ## How an update actually runs
 
 ```sh
-conan revenant:integrate upstream/webkitglib/2.54   # the series' own picks
-conan revenant:integrate upstream/main              # the base change, when it is time
-conan revenant:integrate --no-merge                 # just run the gates on what is here
+make integrate ARGS="--ref upstream/webkitglib/2.54"   # the series' own picks
+make integrate ARGS="--ref upstream/main"              # the base change, when it is time
+make integrate                                        # just run the gates on what is here
 ```
 
 In order, stopping at the first failure that matters:
@@ -129,7 +129,7 @@ In order, stopping at the first failure that matters:
 2. `scripts/carry-check.py` — before a single file is compiled.
 3. `scripts/port-delta.py` — the delta and the guard census, against the new
    base, kept as the before-and-after of the merge.
-4. The armv7 build, `conan build`.
+4. The armv7 build, `make build`.
 5. `tools/symbol-check.py` against the pin, which the build runs itself.
 6. Host tests.
 7. Deploy, then the device suite — if the phone answers. If it does not, the run
@@ -154,7 +154,7 @@ Nothing here needs a service. One crontab line takes the series' own picks every
 Monday morning and leaves a log to read:
 
 ```
-0 9 * * 1  cd ~/path/to/port && conan revenant:integrate upstream/webkitglib/2.54 >> ~/port-integration.log 2>&1
+0 9 * * 1  cd ~/path/to/port && make integrate ARGS="--ref upstream/webkitglib/2.54" >> ~/port-integration.log 2>&1
 ```
 
 It stops at the first gate that fails, and a run that cannot reach the phone

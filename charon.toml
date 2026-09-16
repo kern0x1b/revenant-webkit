@@ -1,0 +1,19 @@
+[port]
+name = "revenant-webkit"
+version = "0.1.0"
+description = "WebKit for armv7 / iOS 6"
+
+[checks]
+before-build = ["scripts/carry-check.py", "scripts/port-delta.py"]
+
+[variants]
+system = {}
+prefixed = { options = ["prefixed=True"] }
+
+[package]
+control = "packaging/control"
+maintainer-scripts = "packaging/DEBIAN"
+
+[application]
+log = "/tmp/rev-webview-host.log"
+first-page = "/tmp/rev-url.txt"

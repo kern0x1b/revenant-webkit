@@ -53,12 +53,10 @@ def pinned():
 
 
 def default_build():
-    engines = ROOT / "build" / "engine"
-    built = sorted(path for path in engines.glob("*-system") if path.is_dir()) if engines.is_dir() else []
-    if len(built) != 1:
-        found = ", ".join(path.name for path in built) or "none"
-        raise SystemExit(f"{engines} holds {found} - pass --build with the build to check")
-    return built[0]
+    build = ROOT / "build" / "system"
+    if not (build / "conan" / "ios6-deps.env").is_file():
+        raise SystemExit(f"{build} is not a finished build - pass --build with the build to check")
+    return build
 
 
 def main():

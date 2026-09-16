@@ -144,8 +144,8 @@ sequence, and why each piece exists, is in **[docs/building.md](docs/building.md
 
 | Step | Builds |
 | --- | --- |
-| `conan build . -pr:h profiles/revenant-armv7 -pr:b default --build=missing` | the libraries iOS 6 predates, `libios6compat.a`, the engine and everything around it, laid out as the device filesystem in `build/engine/armv7-system/stage` |
-| `conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default` | the `.deb` |
+| `make build` | the libraries iOS 6 predates, `libios6compat.a`, the engine and everything around it, laid out as the device filesystem in `build/system/stage` |
+| `make package` | the `.deb` |
 
 A change to a WebCore header means a full build, which `conan build` is: a
 partial build leaves the other frameworks compiled against the old class size,
@@ -186,10 +186,10 @@ Then build and install the package, which carries the loader, the compatibility
 dylib, the TLS dylib and the Settings pane, and can be removed again:
 
 ```sh
-conan build . -pr:h profiles/revenant-armv7 -pr:b default --build=missing
-conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default
-tools/device.py copy "<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb" /tmp/rev.deb
-tools/device.py run 120 "dpkg -i /tmp/rev.deb"
+make build
+make package
+make device ARGS='copy "<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb" /tmp/rev.deb'
+make device ARGS='run 120 "dpkg -i /tmp/rev.deb"'
 ```
 
 **Verify it took.** Open any page in Safari and check the user agent — a request

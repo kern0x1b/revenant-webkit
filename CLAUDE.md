@@ -11,7 +11,7 @@ and the machinery that runs it. There are two ways the engine is used:
 
 1. **Standalone app** — the engine hosted in this repo's own application
    (`app/`), which exists to exercise the engine directly. Built by
-   `conan build . -pr:h profiles/revenant-armv7 -pr:b default -o prefixed=True`.
+   `make build VARIANT=prefixed`.
 2. **Safari substitution** — the engine dropped underneath the phone's own Mobile
    Safari by a MobileSubstrate tweak. This is the current focus; the screenshots
    in the README are of it.
@@ -24,9 +24,9 @@ A loader is injected into the launching app, sets `DYLD_FRAMEWORK_PATH` /
 
 | Source | Built to | On device | Job |
 | --- | --- | --- | --- |
-| `platform/safari/rev-safari-tweak.c` | `build/engine/armv7-system/stage/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | The **loader**: reads `InjectedApps`, re-execs enabled apps, skips SpringBoard. |
-| `platform/safari/safari-compat.mm` | `build/engine/armv7-system/stage/usr/lib/rev-safari-compat.dylib` | `/usr/lib/rev-safari-compat.dylib` | **Compat + hooks**: iOS 6 ABI stubs, bookmarks start page, WebAssembly, preference reads. Inserted by the loader. |
-| the engine build | `build/engine/armv7-system/stage/usr/lib/rev-fw` | `/usr/lib/rev-fw/*.framework` | The WebKit engine itself. |
+| `platform/safari/rev-safari-tweak.c` | `build/system/stage/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | The **loader**: reads `InjectedApps`, re-execs enabled apps, skips SpringBoard. |
+| `platform/safari/safari-compat.mm` | `build/system/stage/usr/lib/rev-safari-compat.dylib` | `/usr/lib/rev-safari-compat.dylib` | **Compat + hooks**: iOS 6 ABI stubs, bookmarks start page, WebAssembly, preference reads. Inserted by the loader. |
+| the engine build | `build/system/stage/usr/lib/rev-fw` | `/usr/lib/rev-fw/*.framework` | The WebKit engine itself. |
 
 **The loader and the compat dylib are different files.** Deploying the compat
 dylib over `RevSafari.dylib` (or vice versa) drops Safari to the system engine —
@@ -84,11 +84,11 @@ CMake from `platform/CMakeLists.txt` like the dylibs beside it — that writes t
 
 ## Where to look
 
-- Build: `conan build . -pr:h profiles/revenant-armv7 -pr:b default --build=missing` (add `-o prefixed=True` for the standalone application's engine); see `docs/building.md`. It ends with the device filesystem tree in `build/engine/armv7-system/stage`.
-- Package: `conan export-pkg . -pr:h profiles/revenant-armv7 -pr:b default` writes
+- Build: `make build` (`make build VARIANT=prefixed` for the standalone application's engine); see `docs/building.md`. It ends with the device filesystem tree in `build/system/stage`.
+- Package: `make package` writes
   `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`, engine
   frameworks included; `packaging/` holds only the `control` file and the
   `DEBIAN/postinst` script. The version is `version` in `conanfile.py`.
-- Deploy: `dpkg -i` that package through `tools/device.py`; `conan revenant:deploy` for the engine alone.
+- Deploy: `dpkg -i` that package through `make device ARGS="copy ..."`; `make deploy` for the engine alone.
 - Documentation: `docs/` (`architecture.md`, `network.md`, `compatibility.md`, `building.md`, `memory-and-caches.md`).
 - Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.

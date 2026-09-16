@@ -31,8 +31,7 @@ jobs:
       - name: Register the toolchain and the port's recipes
         run: |
           conan config install "$GITHUB_WORKSPACE/ios6-toolchain/config"
-          conan ios6-remote ios6 "$GITHUB_WORKSPACE/ios6-toolchain"
-          conan ios6-remote revenant "$PWD"
+          make setup ARGS="$GITHUB_WORKSPACE/ios6-toolchain"
 
       - name: Every Python file compiles
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile

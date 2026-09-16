@@ -59,7 +59,7 @@ class RevenantWebKit(ConanFile):
     def layout(self):
         variant = "prefixed" if self.options.prefixed else "system"
         self.folders.source = "webkit-254"
-        self.folders.build = os.path.join("build", "engine", f"{self.settings.arch}-{variant}")
+        self.folders.build = os.path.join("build", variant)
         self.folders.generators = os.path.join(self.folders.build, "conan")
 
     def _dependency(self, name):
