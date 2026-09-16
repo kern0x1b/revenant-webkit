@@ -33,7 +33,7 @@ wasm3 = "0.9.1-beta.1+7.gdeeaca9@revenant/stable"
 [tools]
 cmake = "4.4.3"
 ninja = "1.13.2"
-ldid = "2.1.5@charon/stable"
+ldid = "2.1.5-procursus7+23.gaf86971@charon/stable"
 dyld-imports-check = "1.0@charon/stable"
 
 [integrate]
