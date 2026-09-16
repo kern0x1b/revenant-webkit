@@ -13,11 +13,15 @@ def frameworks_of(staged: Path):
 
 
 def back_up_engine(device, remote: str, frameworks, out):
-    out.info(f"backing up current engine -> {remote}.bak")
     names = " ".join(frameworks)
     device.run(30, f"mkdir -p {remote}.bak; for fw in {names}; do "
                    f"cp -f {remote}/$fw{revenant_checkout.FRAMEWORK}/$fw {remote}.bak/$fw 2>/dev/null || true; done",
                capture=False, check=True)
+    held = sorted(device.output(20, f"ls {remote}.bak 2>/dev/null").split())
+    if held:
+        out.info(f"{remote}.bak holds the engine being replaced ({', '.join(held)}) - the only way back")
+    else:
+        out.warning(f"{remote}.bak is empty - this deploy has nothing to roll back to")
 
 
 def install_binaries(device, staged: Path, remote: str, frameworks, out):
