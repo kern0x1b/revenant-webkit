@@ -119,6 +119,7 @@ def main() -> int:
         return 0
 
     intact = directives is not None
+    checked = 0
     for directive in directives or []:
         fields = directive.split(None, 2)
         kind, target, detail = fields + [""] * (3 - len(fields))
@@ -130,7 +131,12 @@ def main() -> int:
         else:
             passed, message = False, "unknown directive: " + kind
         print("{:<6} {}".format("ok" if passed else "FAIL", message))
+        checked += 1
         intact = intact and passed
+
+    if intact and not checked:
+        warn("{} names nothing to check".format(manifest))
+        intact = False
 
     print("carry intact" if intact else "CARRY BROKEN - the tree no longer holds what this port depends on")
     return 0 if intact else 1
