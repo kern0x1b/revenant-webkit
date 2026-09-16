@@ -17,7 +17,7 @@ class OpenSSLConan(ConanFile):
     package_type = "static-library"
     settings = "os", "arch", "compiler", "build_type"
 
-    _configure_targets = {"armv7": "ios-cross", "armv8": "ios64-cross"}
+    _configure_targets = {"armv7": "ios-xcrun", "armv8": "ios64-xcrun"}
 
     def export_sources(self):
         export_conandata_patches(self)
@@ -32,13 +32,12 @@ class OpenSSLConan(ConanFile):
         apply_conandata_patches(self)
 
     def _environment(self):
-        sdk = os.path.normpath(self.conf.get("tools.apple:sdk_path", check_type=str) or "")
-        cross_top, cross_sdk = os.path.dirname(os.path.dirname(sdk)), os.path.basename(sdk)
-        if not os.path.isdir(os.path.join(cross_top, "SDKs", cross_sdk)):
-            raise ConanException(f"OpenSSL's iOS targets read the SDK as $(CROSS_TOP)/SDKs/$(CROSS_SDK), and "
-                                 f"{sdk or 'no SDK'} is not laid out that way")
+        sdk = self.conf.get("tools.apple:sdk_path", check_type=str)
+        if not sdk or not os.path.isdir(sdk):
+            raise ConanException(f"tools.apple:sdk_path names {sdk or 'no SDK'}, and the compiler reads its sysroot "
+                                 "from it through SDKROOT")
         commit_time = Git(self, folder=self.source_folder).run("log -1 --format=%ct")
-        return {"CROSS_TOP": cross_top, "CROSS_SDK": cross_sdk, "SOURCE_DATE_EPOCH": commit_time}
+        return {"SDKROOT": sdk, "SOURCE_DATE_EPOCH": commit_time}
 
     def build(self):
         arch = str(self.settings.arch)
@@ -46,7 +45,7 @@ class OpenSSLConan(ConanFile):
         environment = " ".join(f'{key}="{value}"' for key, value in self._environment().items())
         options = ["no-shared", "no-dso", "no-tests", "no-docs", "no-apps", "no-ui-console", "no-engine", "no-async",
                    *atomics, f"-mios-version-min={self.settings.os.version}"]
-        self.run(f'{environment} ./Configure {self._configure_targets[arch]} {" ".join(options)}',
+        self.run(f'{environment} ./Configure {self._configure_targets[arch]} CC=cc {" ".join(options)}',
                  cwd=self.source_folder)
         self.run(f"{environment} make -j{os.cpu_count()} build_libs", cwd=self.source_folder)
 

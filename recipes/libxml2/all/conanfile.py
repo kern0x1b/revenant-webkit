@@ -39,6 +39,7 @@ class LibXml2Conan(ConanFile):
             "LIBXML2_WITH_DOCS": False,
             "LIBXML2_WITH_ICU": True,
             "LIBXML2_WITH_ICONV": False,
+            "CMAKE_INSTALL_SYSCONFDIR": "/etc",
         })
         tc.extra_cflags.append("-fvisibility=hidden")
         tc.generate()
