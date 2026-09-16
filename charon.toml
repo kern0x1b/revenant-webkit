@@ -15,6 +15,7 @@ sdk = "iphoneos"
 cppstd = 23
 cpu = "cortex-a9"
 fpu = "neon"
+defines = ["-DWEBKIT_IOS6_NO_READLINE"]
 
 [requires]
 openssl = "3.0.15@revenant/stable"
@@ -55,7 +56,6 @@ ENABLE_WEBGL = "OFF"
 [engine]
 cmake = "webkit-254"
 find-packages = ["icu", "libcxx", "libxml2", "libxslt", "openssl", "wasm3"]
-user-toolchain = "scripts/ios6-armv7-trunk.cmake"
 project-name = "WebKit"
 config-packages = ["LibXml2", "LibXslt"]
 prefix-header = "ios6_class_names.h"
@@ -77,6 +77,7 @@ module-link = "-B{bin:ld64} {lib:libpsl:psl}"
 PORT = "Cocoa"
 DEVELOPER_MODE = "OFF"
 SWIFT_REQUIRED = "OFF"
+WEBKIT_IOS6 = "ON"
 WEBKIT_IOS6_SIZE_OPTIMIZED = "ON"
 WEBKIT_NO_AVAILABILITY_OVERLAY = "ON"
 CMAKE_DISABLE_PRECOMPILE_HEADERS = "OFF"

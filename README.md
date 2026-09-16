@@ -235,7 +235,7 @@ platform/       The tweak, compat and TLS dylibs and the Settings bundle, built 
   prefs/        The RevWebKit Settings PreferenceBundle
   device/       What is installed on the phone beside the engine
 recipes/        Conan recipes for the libraries iOS 6 cannot supply
-scripts/        The check scripts and CMake toolchain files the recipe uses, and maintenance and device helpers
+scripts/        The check scripts the declaration names, and maintenance and device helpers
 tests/          The numeric device suite, host tests, and JS conformance checks
 tools/          Diagnostic instruments, on the host and on the device
 webkit-254/     The engine, a git submodule on the fork's main branch
