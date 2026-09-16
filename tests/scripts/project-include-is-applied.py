@@ -61,9 +61,10 @@ def package_of(key):
 
 def main():
     engine = declared()
-    include = engine.get("project-include")
+    include = engine.get("project-include") or (
+        "the packages it declares under config-packages" if engine.get("config-packages") else None)
     if not include:
-        print("ok    the declaration names no project-include, so there is nothing for cmake to apply")
+        print("ok    the declaration asks for no package to be found by config, so there is nothing to apply")
         return 0
     name = engine.get("project-name")
     if not name:

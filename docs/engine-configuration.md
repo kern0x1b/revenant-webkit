@@ -74,8 +74,9 @@ headers are 2.9.4, so compiling against one and running on the other left
 libxslt calling functions the phone does not have. Both libraries now come from
 packages - libxml2 2.15.4 and libxslt 1.1.45 - and are linked into WebCore
 statically, with their symbols hidden. WebKit creates `LibXml2::LibXml2` and
-`LibXslt::LibXslt` from the SDK only when no such target exists yet;
-`scripts/ios6-conan-targets.cmake`, included into the WebKit project, finds the
+`LibXslt::LibXslt` from the SDK only when no such target exists yet; the file
+Charon writes from `config-packages` in `charon.toml`, included into the WebKit
+project as `CMAKE_PROJECT_WebKit_INCLUDE`, finds the
 packages' own targets first, and the SDK's header directories now travel with
 the SDK targets instead of being added to WebCore unconditionally. libxslt's
 library directory stays on the linker's search path because WebCore also asks
