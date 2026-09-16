@@ -61,6 +61,12 @@ def main() -> int:
                                "with {} beside it, the nearer {} wins".format(
                                    orphan.relative_to(root), only.relative_to(root))))
 
+        (root / "build" / MARKER.parent).mkdir(parents=True, exist_ok=True)
+        (root / "build" / MARKER).write_text("IOS6_HOST_ICU=/nowhere\n")
+        verdicts.append(report(tests.default_engine_build(root) == only,
+                               "a dependency environment sitting straight under build/ is not a build tree"))
+        (root / "build" / MARKER).unlink()
+
         named = tree(root, "build", "elsewhere-system")
         said = refusal(lambda: tests.default_engine_build(root))
         verdicts.append(report(all(part in said for part in ("build/system", "build/elsewhere-system")),

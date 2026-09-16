@@ -248,7 +248,7 @@ def battery_verdict(output: str, returncode: int) -> Verdict:
 def engine_builds(root: Path, variant: str) -> list:
     build = root / "build"
     found = [marker.parent.parent for marker in build.glob(f"**/{MARKER.as_posix()}")
-             if variant in marker.parent.parent.name] if build.is_dir() else []
+             if marker.parent.parent != build and variant in marker.parent.parent.name] if build.is_dir() else []
     if not found:
         return []
     nearest = min(len(path.parts) for path in found)
