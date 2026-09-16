@@ -170,12 +170,21 @@ url-scheme = "revwebviewhost"
 
 [stage]
 engine-location = "usr/lib/rev-fw"
-webcore-omit = ["WebCore", "Headers", "PrivateHeaders", "Modules", "_CodeSignature"]
 
-[stage.frameworks]
-JavaScriptCore = { as = "JavaScriptCore", replaces = "/System/Library/PrivateFrameworks/JavaScriptCore.framework/JavaScriptCore" }
-WebCore = { as = "WebCore", replaces = "/System/Library/PrivateFrameworks/WebCore.framework/WebCore" }
-WebKitLegacy = { as = "WebKit", replaces = "/System/Library/PrivateFrameworks/WebKit.framework/WebKit" }
+[stage.frameworks.JavaScriptCore]
+as = "JavaScriptCore"
+replaces = "/System/Library/PrivateFrameworks/JavaScriptCore.framework/JavaScriptCore"
+
+[stage.frameworks.WebCore]
+as = "WebCore"
+replaces = "/System/Library/PrivateFrameworks/WebCore.framework/WebCore"
+resources = true
+omit = ["WebCore", "Headers", "PrivateHeaders", "Modules", "_CodeSignature"]
+flatten = [{ from = "modern-media-controls/images/iOS", into = "modern-media-controls/images", patterns = ["*.svg", "*.png"] }]
+
+[stage.frameworks.WebKitLegacy]
+as = "WebKit"
+replaces = "/System/Library/PrivateFrameworks/WebKit.framework/WebKit"
 
 [stage.runtime]
 "libc++.1.0.dylib" = "librev-c++.1.dylib"

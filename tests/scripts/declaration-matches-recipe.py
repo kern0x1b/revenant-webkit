@@ -62,18 +62,22 @@ def called_with(tree, method):
 
 
 def references(section):
-    return {"{}/{}".format(name, version) for name, version in section.items()}
+    return ["{}/{}".format(name, version) for name, version in section.items()]
 
 
 def compare_requirements(spec, tree, failures):
     for method, section, what in (("requires", "requires", "libraries"),
                                   ("tool_requires", "tools", "build tools")):
         wanted = references(spec.get(section, {}))
-        found = set(called_with(tree, method))
-        for reference in sorted(found - wanted):
+        found = called_with(tree, method)
+        for reference in sorted(set(found) - set(wanted)):
             failures.append("the recipe {} {} and the declaration does not".format(what, reference))
-        for reference in sorted(wanted - found):
+        for reference in sorted(set(wanted) - set(found)):
             failures.append("the declaration {} {} and the recipe does not".format(what, reference))
+        if set(found) == set(wanted) and found != wanted:
+            failures.append("the {} are declared in a different order than the recipe requires them, and the "
+                            "order decides which include and library folder CMake searches first: recipe {}, "
+                            "declaration {}".format(what, found, wanted))
 
 
 def compare_options(spec, tree, failures):
