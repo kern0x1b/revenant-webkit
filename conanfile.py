@@ -54,6 +54,7 @@ class RevenantWebKit(ConanFile):
         self.tool_requires("cmake/4.4.3")
         self.tool_requires("ninja/1.13.2")
         self.tool_requires("ldid/2.1.5@ios6/stable")
+        self.tool_requires("ios6-imports-check/1.0@ios6/stable")
 
     def layout(self):
         variant = "prefixed" if self.options.prefixed else "system"
@@ -463,8 +464,7 @@ class RevenantWebKit(ConanFile):
         self._check_no_encryption_info(stage)
         dyld_cache = self.conf.get("user.ios6:dyld_shared_cache", check_type=str)
         if dyld_cache:
-            self._python("tools/ios6-imports-check.py", "--cache", dyld_cache,
-                         "--dist", os.path.join(stage, self._engine_location))
+            self.run(f'ios6-imports-check --cache "{dyld_cache}" --dist "{stage}"')
 
     def package(self):
         copy(self, "LICENSE", self.recipe_folder, os.path.join(self.package_folder, "licenses"))
