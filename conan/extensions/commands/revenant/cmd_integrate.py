@@ -87,16 +87,20 @@ def _gate(root, host, port):
         raise ConanException("the device gate failed; the verdicts are above")
 
 
+def _build_for(root, arch):
+    build = engine_build(root, "system")
+    if build.name != f"{arch}-system":
+        raise ConanException(f"the profile builds for {arch}, and the tree offers {build.name} to deploy. "
+                             f"Deploying that would put a build on the phone that this run did not make.")
+    return build
+
+
 def _device(root, conan_api, arch, host, port, out):
     device = device_module(root, conan_api)
     if not device.reachable(10):
         raise ConanException("the phone is not reachable, so this integration is unverified "
                              "and must not be shipped")
-    build = engine_build(root, "system")
-    if build.name != f"{arch}-system":
-        raise ConanException(f"the profile builds for {arch}, and the tree offers {build.name} to deploy. "
-                             f"Deploying that would put a build on the phone that this run did not make.")
-    _deploy(root, build, device, out)
+    _deploy(root, _build_for(root, arch), device, out)
     _gate(root, host, port)
 
 
