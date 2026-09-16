@@ -216,10 +216,15 @@ def sync_engine(root: Path, build: Path, device) -> bool:
         if not push_if_changed(libcxx / built_name, f"{DEVICE_DIR}/Frameworks/{device_name}", sizes, device):
             return False
 
+    missing = [framework for framework in FRAMEWORKS
+               if not (build / f"{framework}.framework" / framework).is_file()]
+    if missing:
+        log.error("device tests: %s holds no %s - the batteries would run against whatever the phone "
+                  "already has", build, ", ".join(missing))
+        return False
+
     for framework in FRAMEWORKS:
         binary = build / f"{framework}.framework" / framework
-        if not binary.is_file():
-            continue
         remote_framework = f"{DEVICE_DIR}/Frameworks/{framework}.framework"
         relay_stderr(device.run(30, f"mkdir -p {remote_framework}"))
         if not push_if_changed(binary, f"{remote_framework}/{framework}", sizes, device):
