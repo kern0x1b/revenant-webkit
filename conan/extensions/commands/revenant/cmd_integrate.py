@@ -10,6 +10,7 @@ import revenant_checkout
 from revenant_checkout import add_root_argument, device_module, engine_build, find_checkout
 
 ENGINE = "webkit-254"
+ARCH = "armv7"
 PORT_DELTA_LINES = 14
 
 
@@ -81,19 +82,30 @@ def _deploy(root, build, device, out):
     deploy.deploy_engine(root, build, device, out)
 
 
-def _gate(root, host):
+def _gate(root, host, port):
     gate = revenant_checkout.import_file(root / "tests" / "device" / "run.py", "revenant_device_gate")
-    if gate.run_gate(host):
+    if gate.run_gate(host, port):
         raise ConanException("the device gate failed; the verdicts are above")
 
 
-def _device(root, conan_api, host, out):
+def _device(root, conan_api, host, port, out):
     device = device_module(root, conan_api)
     if not device.reachable(10):
         raise ConanException("the phone is not reachable, so this integration is unverified "
                              "and must not be shipped")
     _deploy(root, engine_build(root, "system"), device, out)
-    _gate(root, host)
+    _gate(root, host, port)
+
+
+def _refuse_other_architectures(conan_api, profile, out):
+    loaded = conan_api.profiles.get_profile([conan_api.profiles.get_path(profile)])
+    arch = loaded.settings.get("arch")
+    if arch != ARCH:
+        raise ConanException(f"{profile} builds for {arch}, and every step after the build - the stage, "
+                             f"the deploy and the gate - reads the {ARCH} tree. Build that profile with "
+                             f"conan build and take it to the phone yourself, or teach those steps the "
+                             f"architecture first.")
+    out.info(f"{profile} builds for {arch}")
 
 
 @conan_command(group="Revenant")
@@ -111,10 +123,14 @@ def integrate(conan_api, parser, *args):
     parser.add_argument("--profile", default=os.path.join("profiles", "revenant-armv7"),
                         help="host profile the build uses; default: profiles/revenant-armv7")
     parser.add_argument("--host", help="address the phone reaches this Mac on, for the gate's page server")
+    parser.add_argument("--test-port", type=int,
+                        help="port the gate serves its pages on, when the usual one is taken")
     args = parser.parse_args(*args)
 
     out = ConanOutput()
     root = find_checkout(args.root)
+    profile = str(root / args.profile) if (root / args.profile).is_file() else args.profile
+    _refuse_other_architectures(conan_api, profile, out)
     _run(["git", "-C", str(root / ENGINE), "config", "rerere.enabled", "true"])
 
     steps = []
@@ -123,9 +139,9 @@ def integrate(conan_api, parser, *args):
     steps += [
         ("carry manifest", lambda: _carry(root)),
         ("port delta", lambda: _delta(root)),
-        ("build, symbols and stage", lambda: _build(root, args.profile)),
+        ("build, symbols and stage", lambda: _build(root, profile)),
         ("host checks", lambda: _host_checks(root)),
-        ("the phone", lambda: _device(root, conan_api, args.host, out)),
+        ("the phone", lambda: _device(root, conan_api, args.host, args.test_port, out)),
     ]
 
     for title, step in steps:
