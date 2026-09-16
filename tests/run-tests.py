@@ -34,7 +34,7 @@ def harness():
 def transport():
     return harness().transport()
 
-MARKER = Path("conan") / "ios6-deps.env"
+MARKER = Path("conan") / "charon-deps.env"
 DEVICE_DIR = "/tmp/jscrun"
 FRAMEWORKS = ("JavaScriptCore", "WebCore", "WebKitLegacy")
 LIBCXX = {"libc++.1.0.dylib": "libc++.1.dylib", "libc++abi.1.0.dylib": "libc++abi.1.dylib"}
@@ -92,11 +92,6 @@ def install_dependencies(argv: list, log_path: Path, env_file, required: tuple, 
     return libraries
 
 
-def ios_sdk() -> str:
-    theos = os.environ.get("THEOS") or str(Path.home() / "theos")
-    return os.environ.get("IOS_SDK") or f"{theos}/sdks/iPhoneOS13.7.sdk"
-
-
 def recipe_and_profile(build: Path) -> tuple:
     written = build / "charon"
     if (written / "conanfile.py").is_file() and (written / "profile").is_file():
@@ -112,7 +107,7 @@ def device_libraries(root: Path, build: Path) -> dict:
         ["conan", "install", where, "-pr:h", profile, "-pr:b", "default", "--build=missing"],
         root / "build" / "deps-install.log",
         build / MARKER,
-        ("IOS6_HOST_LIBCXX",), env={**os.environ, "IOS_SDK": ios_sdk()})
+        ("CHARON_HOST_LIBCXX",), env=dict(os.environ))
 
 
 def as_text(value) -> str:
@@ -206,7 +201,7 @@ def build_jsc(build: Path, libraries: dict) -> bool:
     if not jsc.is_file():
         if build.is_dir():
             try:
-                subprocess.run(["ninja", "jsc"], cwd=build, env={**os.environ, "IOS_SDK": ios_sdk(), **libraries},
+                subprocess.run(["ninja", "jsc"], cwd=build, env={**os.environ, **libraries},
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except OSError as error:
                 log.error("ninja: %s", error.strerror)
@@ -233,7 +228,7 @@ def sync_engine(root: Path, build: Path, device) -> bool:
 
     if not push_if_changed(build / "jsc", f"{DEVICE_DIR}/jsc", hashes, device):
         return False
-    libcxx = Path(libraries["IOS6_HOST_LIBCXX"]) / "lib"
+    libcxx = Path(libraries["CHARON_HOST_LIBCXX"]) / "lib"
     for built_name, device_name in LIBCXX.items():
         if not push_if_changed(libcxx / built_name, f"{DEVICE_DIR}/Frameworks/{device_name}", hashes, device):
             return False

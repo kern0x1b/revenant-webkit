@@ -124,11 +124,10 @@ overwriting one with the other drops Safari back to the system engine.
 
 **Build host** (macOS)
 
-- The Command Line Tools and an **iOS 13.7 SDK** — the newest SDK that still
-  emits armv7 and accepts a 6.0 deployment target, from
-  [theos/sdks](https://github.com/theos/sdks). The build looks for it in
-  `~/theos/sdks/iPhoneOS13.7.sdk`; set `IOS_SDK` only if yours lives elsewhere.
-  Xcode is not needed, and neither is Theos.
+- The Command Line Tools. The **iOS 13.7 SDK** — the newest SDK that still
+  emits armv7 and accepts a 6.0 deployment target — arrives as the toolchain's
+  `iphoneos-sdk` package, fetched from [theos/sdks](https://github.com/theos/sdks)
+  and checked against its sha256. Xcode is not needed, and neither is Theos.
 - `conan`, and [ios6-toolchain](https://github.com/kern0x1b/ios6-toolchain)
   installed with `conan config install`. Conan itself installs `cmake`, `ninja`,
   `ldid` and the `ld64` linker.

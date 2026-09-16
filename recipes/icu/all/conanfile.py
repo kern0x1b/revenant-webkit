@@ -1,7 +1,8 @@
 from conan import ConanFile
 from conan.tools.files import copy, chdir
 from conan.tools.layout import basic_layout
-from conan.tools.apple import XCRun
+from conan.tools.apple import XCRun, to_apple_arch
+from conan.tools.env import Environment
 from conan.tools.scm import Git
 import os
 import json
@@ -26,7 +27,12 @@ class IcuConan(ConanFile):
 
     def requirements(self):
         if self._cross:
-            self.requires("libcxx/21.1.0@ios6/stable")
+            self.requires("libcxx/21.1.0@charon/stable")
+
+    def generate(self):
+        host = Environment()
+        host.unset("IPHONEOS_DEPLOYMENT_TARGET")
+        host.vars(self, scope="hosttools").save_script("conanhosttoolsenv")
 
     def layout(self):
         basic_layout(self, src_folder="src")
@@ -43,30 +49,27 @@ class IcuConan(ConanFile):
             os.makedirs(folder, exist_ok=True)
         data_filter = self._data_filter()
 
-        # ICU builds tools it then runs to generate its own data, so a cross
-        # build needs a native one first. Conan's build context is exactly that
-        # distinction, and this is the shape it takes for autotools.
         prefix = "" if self._cross else f" --prefix={self.package_folder}"
         with chdir(self, host_build):
             self.run(f'{data_filter} {icu_source}/configure --enable-static --disable-shared'
-                     f" --disable-tests --disable-samples --disable-extras{prefix}")
-            self.run(f"{data_filter} make -j{os.cpu_count()}")
+                     f" --disable-tests --disable-samples --disable-extras{prefix}", env=["conanbuild", "conanhosttools"])
+            self.run(f"{data_filter} make -j{os.cpu_count()}", env=["conanbuild", "conanhosttools"])
             if not self._cross:
-                self.run("make install")
+                self.run("make install", env=["conanbuild", "conanhosttools"])
                 return
 
         sdk = self.conf.get("tools.apple:sdk_path")
-        target = f"armv7-apple-ios{self.settings.os.version}"
-        libcxx = self.dependencies["libcxx"].cpp_info
+        target = f"{to_apple_arch(self)}-apple-ios{self.settings.os.version}"
+        libcxx = self.dependencies["libcxx"].cpp_info.aggregated_components()
         cxx_include = libcxx.includedirs[0]
+        cxx_defines = " ".join(f"-D{define}" for define in libcxx.defines)
         xcrun = XCRun(self)
         flags = f"-target {target} -isysroot {sdk} -O2"
         env = {
             "CC": xcrun.cc,
             "CXX": xcrun.cxx,
             "CFLAGS": flags,
-            "CXXFLAGS": f"{flags} -nostdinc++ -isystem {cxx_include}"
-                        " -D_LIBCPP_DISABLE_AVAILABILITY",
+            "CXXFLAGS": f"{flags} -nostdinc++ -isystem {cxx_include} {cxx_defines}",
             "LDFLAGS": f"-target {target} -isysroot {sdk}",
             "ICU_DATA_FILTER_FILE": self._filter_file,
         }

@@ -6,10 +6,9 @@ description: Build the WebKit engine and the Safari-substitution artifacts (load
 # Building Revenant WebKit
 
 Everything targets **armv7, iOS 6.0 deployment**, built with an **iOS 13.7 SDK**
-(the newest SDK that still emits armv7), from https://github.com/theos/sdks. The
-profile finds it at `~/theos/sdks/iPhoneOS13.7.sdk`; set `IOS_SDK` only if it
-lives elsewhere. `cmake`, `ninja`, `ldid` and `ld64` come from Conan, not `PATH`;
-Theos is not used.
+(the newest SDK that still emits armv7), which the toolchain's `iphoneos-sdk`
+package fetches and verifies. `cmake`, `ninja`, `ldid`, `ld64` and the SDK come
+from Conan, not `PATH`; Theos is not used.
 
 ## Engine
 

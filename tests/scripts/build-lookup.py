@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MARKER = Path("conan") / "ios6-deps.env"
+MARKER = Path("conan") / "charon-deps.env"
 
 
 def tests_module():
@@ -30,7 +30,7 @@ def tests_module():
 def environment(root: Path, *parts: str) -> Path:
     folder = root.joinpath(*parts)
     (folder / MARKER.parent).mkdir(parents=True, exist_ok=True)
-    (folder / MARKER).write_text("IOS6_HOST_LIBCXX=/nowhere\n")
+    (folder / MARKER).write_text("CHARON_HOST_LIBCXX=/nowhere\n")
     return folder
 
 

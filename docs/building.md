@@ -18,13 +18,10 @@ configure runs `llvm-config` to find `libLTO`; ios6-toolchain reads the path
 from `LLVM_PREFIX` once, so `export LLVM_PREFIX="$(brew --prefix llvm)"` before
 it. Afterwards the package is in the Conan cache and nothing asks again.
 
-The SDK reaches the build as `tools.apple:sdk_path`, which ios6-toolchain's
-`ios6-armv7` profile sets from `IOS_SDK`, or `~/theos/sdks/iPhoneOS13.7.sdk`
-when that is unset. Only an SDK somewhere else needs the variable:
-
-```sh
-export IOS_SDK="$HOME/path/to/iPhoneOS13.7.sdk"
-```
+The SDK reaches the build as `tools.apple:sdk_path`, which the toolchain's
+`iphoneos-sdk` package answers: the `apple-ios` platform requires it for every
+build, and it downloads the SDK archive once, checks its sha256 and lays it out
+as Xcode does. A `tools.apple:sdk_path` set in a profile still wins.
 
 ccache is not picked up on its own. To use it, set the compiler launchers in
 your own `global.conf` or profile; `compat/`, `platform/` and the engine all
@@ -52,7 +49,7 @@ and each names a git URL and a commit rather than vendoring a copy:
 
 | Package | Why the system copy will not do |
 | --- | --- |
-| `libcxx/21.1.0@ios6/stable` | iOS 6 ships a 2012 libc++; C++23 needs a current one |
+| `libcxx/21.1.0@charon/stable` | iOS 6 ships a 2012 libc++; C++23 needs a current one |
 | `icu/74.2@revenant/stable` | the system ICU predates WebKit's minimum, and text segmentation with it has no zero-width joiner |
 | `openssl/3.0.15@revenant/stable` | TLS 1.2/1.3 and Web Crypto |
 | `libpsl/0.23.3@revenant/stable` | public-suffix lookups this CFNetwork does not do |
@@ -68,15 +65,15 @@ wrong order does not fail - it quietly builds against a recipe that cannot
 cross-compile for armv7. The namespace makes a bare `icu/74.2` unresolvable
 from these indexes, so a reference that forgets it is an error instead.
 
-`@ios6/stable` belongs to what ios6-toolchain serves and every port shares.
+`@charon/stable` belongs to what ios6-toolchain serves and every port shares.
 The libraries this port builds for itself are `@revenant/stable`: another port
 on the same machine builds its own OpenSSL with its own choices, and two recipes
 behind one reference overwrite each other's packages in the shared cache.
 
-The target comes from ios6-toolchain's shared `ios6-armv7` profile, which says
-only what is true of armv7 on iOS 6. What is this port's own - C++23, and
-tuning for the Cortex-A9 in the iPhone 4S and iPad 2 - is in
-`charon.toml`, from which Charon writes a profile that includes the shared one. A 3GS is a
+The target is `[platform] use = "apple-ios"` with armv7 and iOS 6.0 in
+`charon.toml`; the toolchain's platform file says what is true of that target.
+What is this port's own - C++23, and tuning for the Cortex-A9 in the iPhone 4S
+and iPad 2 - is `[target]`, and Charon writes the whole profile from both. A 3GS is a
 Cortex-A8, and another port on the same toolchain has no reason to inherit
 either choice.
 
@@ -97,10 +94,10 @@ checkout, and from nowhere else.
 `conan config install` copies rather than references, so run `charon setup` again
 after the toolchain changes. `charon provenance` says which copy is answering.
 
-`charon build` writes `build/system/conan/ios6-deps.env` through the
-`ios6-base` generator, straight from the dependency graph - one
-`IOS6_HOST_<NAME>=path` line per library and `IOS6_BUILD_<NAME>=path` per build
-tool, so `IOS6_BUILD_LD64` is the linker. Nothing names a version, an
+`charon build` writes `build/system/conan/charon-deps.env` through the
+`charon-base` generator, straight from the dependency graph - one
+`CHARON_HOST_<NAME>=path` line per library and `CHARON_BUILD_<NAME>=path` per build
+tool, so `CHARON_BUILD_LD64` is the linker. Nothing names a version, an
 architecture or a folder layout. Change a version in
 `charon.toml` and everything follows. Building builds whatever is missing and
 reuses whatever is not.
@@ -141,7 +138,7 @@ the steps in the order that fails cheapest first:
 7. the frameworks laid out as the iOS 6 system frameworks they replace, beside
    the C++ runtime and everything from step 6, as the whole device filesystem
    tree in `build/system/stage`
-8. `ios6-imports-check` from ios6-toolchain, when the phone's shared cache is
+8. `dyld-imports-check` from ios6-toolchain, when the phone's shared cache is
    configured
 
 Everything lands in `build/system`. The `.deb` is a separate step,
@@ -190,14 +187,14 @@ here, which turned a call into a store into `__TEXT` and a bus error.
 
 ```sh
 python3 tools/compat-audit.py --compat build/system/compat/libios6compat.a \
-    --engine-build build/system --icu "$IOS6_HOST_ICU"
+    --engine-build build/system --icu "$CHARON_HOST_ICU"
 ```
 
 **Every import has to exist on the phone.** The SDK the engine compiles against
 is years newer than the system it runs on, so a call can link cleanly against a
 function iOS 6 never had. Nothing fails at load: the import is bound lazily, and
 the process dies the first time the call is made. A plain `ws://` WebSocket did
-exactly that. `ios6-imports-check`, a tool_requires from ios6-toolchain because
+exactly that. `dyld-imports-check`, a tool_requires from ios6-toolchain because
 the other port needs it too, compares every non-weak import in the staged tree -
 the frameworks, the C++ runtime, the tweak and TLS dylibs and the Settings
 bundle - with what the phone's own shared cache exports, and the build runs it
@@ -206,7 +203,7 @@ once it knows where a copy of that cache is:
 ```sh
 charon device fetch /System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7 build/
 charon build \
-    -c user.ios6:dyld_shared_cache="$PWD/build/dyld_shared_cache_armv7"
+    -c user.apple-ios:dyld_shared_cache="$PWD/build/dyld_shared_cache_armv7"
 ```
 
 `build/` is reproducible and gitignored.
@@ -236,7 +233,7 @@ charon package
 `build/system/stage`. `charon package` runs the recipe's
 `package()`, which copies that tree into `<package folder>/root` and writes
 `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb` with
-ios6-base's `DebianPackage`: `debian-binary`, `control.tar.gz` and
+charon-apple's `DebianPackage`: `debian-binary`, `control.tar.gz` and
 `data.tar.lzma`, the same members `dpkg-deb` writes. To release a new version,
 change `version` in `charon.toml` and build. `packaging/` holds only
 `packaging/control`, which carries no version of its own, and

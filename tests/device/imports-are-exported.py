@@ -20,24 +20,24 @@ from pathlib import Path
 
 REMOTE = "/System/Library/Caches/com.apple.dyld/dyld_shared_cache_{arch}"
 HELD = Path.home() / ".charon" / "dyld"
-TOOL = "IOS6_BUILD_IOS6_IMPORTS_CHECK"
+TOOL = "CHARON_BUILD_DYLD_IMPORTS_CHECK"
 MANIFEST = "charon.toml"
 
 
 def declared_arch(root):
     with (root / MANIFEST).open("rb") as handle:
-        return tomllib.load(handle).get("target", {}).get("arch")
+        return tomllib.load(handle).get("platform", {}).get("arch")
 
 
 def checker_from(build):
-    written = build / "conan" / "ios6-deps.env"
+    written = build / "conan" / "charon-deps.env"
     if not written.is_file():
         return None, "{} does not exist, so nothing says where the checker was installed".format(written)
     for line in written.read_text().splitlines():
         name, _, value = line.partition("=")
         if name.strip() != TOOL:
             continue
-        found = Path(value.strip()) / "bin" / "ios6-imports-check"
+        found = Path(value.strip()) / "bin" / "dyld-imports-check"
         if not found.is_file():
             return None, "{} names {} and no checker is there".format(written, found)
         return found, None
@@ -60,7 +60,7 @@ def cache_for(arch, device):
 def run_imports(root, device, build):
     arch = declared_arch(root)
     if not arch:
-        print("FAIL  {} declares no [target] arch, so nothing says which cache answers this".format(
+        print("FAIL  {} declares no [platform] arch, so nothing says which cache answers this".format(
             root / MANIFEST))
         return 1
 

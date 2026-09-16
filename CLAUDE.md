@@ -75,7 +75,7 @@ CMake that Charon writes from `charon.toml`, like the dylibs beside it — that 
 
 - **No personal data in the repo.** The device address and password live only in
   `device.env` (gitignored). Never commit device credentials, IP addresses,
-  hostnames, or absolute `/Users/<name>/...` paths — use `$HOME` / `$IOS_SDK` /
+  hostnames, or absolute `/Users/<name>/...` paths — use `$HOME` /
   placeholders in scripts and docs.
 - **Commit messages:** plain imperative subject describing the change. No AI or
   tool attribution.
