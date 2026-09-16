@@ -14,7 +14,7 @@ a probe should be the experiment and nothing else.
 | `revmem.c` | `revmem <pid>` - dirty and resident memory of another process, summed by VM tag. A vmmap for a phone that ships no vmmap; run as root, and read it to see which framework owns the resident dirty pages. |
 | `revpid.c` | `revpid [name]` - the pid of each running process, or only those whose name matches. This device has no `ps`, so this is how a process is found at all. |
 | `raise-memory-limit.c` | Raises the jetsam limit for a process, for measurements that would otherwise be killed before they finish. |
-| `device.py` | Not a probe: the address, port and credentials of the phone in one place, imported by every script that talks to it and runnable by hand as `make device ARGS="run SECONDS COMMAND"`, `copy LOCAL REMOTE`, `fetch REMOTE LOCAL`. It revives the `iproxy` tunnel before every command, because a dead tunnel answers "connection refused", which reads in a log exactly like a browser that crashed - an evening went into a crash that was a dead cable. |
+| `device.py` | Not a probe: the address, port and credentials of the phone in one place, imported by every script that talks to it and runnable by hand as `charon device run SECONDS COMMAND`, `copy LOCAL REMOTE`, `fetch REMOTE LOCAL`. It revives the `iproxy` tunnel before every command, because a dead tunnel answers "connection refused", which reads in a log exactly like a browser that crashed - an evening went into a crash that was a dead cable. |
 
 ## Building them
 
@@ -25,5 +25,5 @@ each with the entitlements it needs:
 conan install --requires=revenant-device-tools/1.0.0@revenant/stable --lockfile="" \
   -pr:h build/system/charon/profile -pr:b default --build=missing \
   --deployer=direct_deploy --deployer-folder=dist --output-folder=dist/conan
-make device ARGS="copy dist/direct_deploy/revenant-device-tools/bin/revmem /usr/bin/revmem"
+charon device copy dist/direct_deploy/revenant-device-tools/bin/revmem /usr/bin/revmem
 ```

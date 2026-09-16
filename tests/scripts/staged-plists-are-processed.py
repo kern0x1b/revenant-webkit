@@ -41,7 +41,7 @@ def staged_plists():
 def main():
     plists = staged_plists()
     if not plists:
-        print("FAIL  no staged framework carries an Info.plist; run make build first")
+        print("FAIL  no staged framework carries an Info.plist; run charon build first")
         return 1
     failures = []
     for plist in plists:

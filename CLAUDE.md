@@ -11,7 +11,7 @@ and the machinery that runs it. There are two ways the engine is used:
 
 1. **Standalone app** — the engine hosted in this repo's own application
    (`app/`), which exists to exercise the engine directly. Built by
-   `make build VARIANT=prefixed`.
+   `charon build --variant prefixed`.
 2. **Safari substitution** — the engine dropped underneath the phone's own Mobile
    Safari by a MobileSubstrate tweak. This is the current focus; the screenshots
    in the README are of it.
@@ -47,7 +47,7 @@ CMake from `platform/CMakeLists.txt` like the dylibs beside it — that writes t
   those two frameworks read that type with the old layout. The symptom is not a
   crash log: the engine initialises cleanly, Safari's chrome draws with no text at
   all, and the process disappears with no REVCRASH line and no crash report. After
-  any header change run the full `conan build`, which builds everything, then
+  any header change run the full `charon build`, which builds everything, then
   deploy.
 - **Load-time undefined symbols.** A dylib that links clean (`ninja`/`clang`
   exit 0) can still fail to load on iOS 6, silently — dyld gives up and, for the
@@ -84,11 +84,11 @@ CMake from `platform/CMakeLists.txt` like the dylibs beside it — that writes t
 
 ## Where to look
 
-- Build: `make build` (`make build VARIANT=prefixed` for the standalone application's engine); see `docs/building.md`. It ends with the device filesystem tree in `build/system/stage`.
-- Package: `make package` writes
+- Build: `charon build` (`charon build --variant prefixed` for the standalone application's engine); see `docs/building.md`. It ends with the device filesystem tree in `build/system/stage`.
+- Package: `charon package` writes
   `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`, engine
   frameworks included; `packaging/` holds only the `control` file and the
   `DEBIAN/postinst` script. The version is `version` in `charon.toml`.
-- Deploy: `dpkg -i` that package through `make device ARGS="copy ..."`; `make deploy` for the engine alone.
+- Deploy: `dpkg -i` that package through `charon device copy ...`; `charon deploy` for the engine alone.
 - Documentation: `docs/` (`architecture.md`, `network.md`, `compatibility.md`, `building.md`, `memory-and-caches.md`).
 - Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.

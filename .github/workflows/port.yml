@@ -31,7 +31,8 @@ jobs:
       - name: Register the toolchain and the port's recipes
         run: |
           conan config install "$GITHUB_WORKSPACE/ios6-toolchain/config"
-          make setup ARGS="$GITHUB_WORKSPACE/ios6-toolchain"
+          ln -sf "$(conan config home)/extensions/charon/charon" /usr/local/bin/charon
+          charon setup "$GITHUB_WORKSPACE/ios6-toolchain"
 
       - name: The declaration parses
         run: python3 -c 'import tomllib; tomllib.load(open("charon.toml","rb")); print("charon.toml parses")'
@@ -40,7 +41,7 @@ jobs:
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
 
       - name: The checks that need neither a phone nor a build
-        run: make test ARGS="--tier scripts"
+        run: charon test --tier scripts
 
       - name: The application's trust store is the reviewed one
         run: scripts/check-cacert.py
@@ -58,7 +59,7 @@ jobs:
 
       - name: conan.lock pins what the declaration resolves to
         run: |
-          make generate
+          charon generate
           conan graph info build/system/charon -pr:h build/system/charon/profile -pr:b default --lockfile=conan.lock
 
       - name: ICU as the engine uses it
