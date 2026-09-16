@@ -18,8 +18,8 @@ Scripts import it instead of building SSH option strings of their own.
 
 ## Push everything
 
-`conan build` leaves one package with the whole substitution in it; install it
-the way any tweak is installed:
+`charon build` stages the whole substitution and `charon package` packs it into
+one .deb; install it the way any tweak is installed:
 
 ```sh
 charon package

@@ -35,8 +35,8 @@ ninja = "1.13.2"
 ldid = "2.1.5@ios6/stable"
 ios6-imports-check = "1.0@ios6/stable"
 
-[checks]
-before-build = ["scripts/carry-check.py", "scripts/port-delta.py"]
+[integrate]
+before-build = ["task:carry-check", "task:port-delta"]
 
 [conf]
 "user.ios6:llvm_prefix" = "a path to an LLVM, because cctools runs llvm-config to find libLTO when the ld64 package is built from source; export LLVM_PREFIX before the first build on a machine"
@@ -296,12 +296,23 @@ replaces = "/System/Library/PrivateFrameworks/WebKit.framework/WebKit"
 control = "packaging/control"
 maintainer-scripts = "packaging/DEBIAN"
 
-[tasks]
-carry-check = "scripts/carry-check.py"
-port-delta = "scripts/port-delta.py"
-compat-audit = "tools/compat-audit.py --compat {target:ios6compat} --engine-build {build} --icu {pkg:icu}"
-symbol-check = "tools/symbol-check.py --build {build}"
-prefix-exports = "tools/prefix-exports.py {stubs}/ios6_class_prefix.h {engine-exports} {exports}"
+[tasks.carry-check]
+script = "scripts/carry-check.py"
+
+[tasks.port-delta]
+script = "scripts/port-delta.py"
+
+[tasks.compat-audit]
+script = "tools/compat-audit.py"
+args = "--compat {target:ios6compat} --engine-build {build} --icu {pkg:icu}"
+
+[tasks.symbol-check]
+script = "tools/symbol-check.py"
+args = "--build {build}"
+
+[tasks.prefix-exports]
+script = "tools/prefix-exports.py"
+args = "{stubs}/ios6_class_prefix.h {engine-exports} {exports}"
 
 [pipeline]
 system = [

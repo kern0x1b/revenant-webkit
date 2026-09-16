@@ -40,8 +40,8 @@ no crash log. `docs/building.md` has the whole sequence.
 ## Safari-substitution artifacts
 
 The same `charon build` finishes them: after the engine it runs the carry,
-compat and symbol checks, builds loader, compat, TLS and prefs with CMake from
-`platform/`, and lays everything out as the device filesystem in
+compat and symbol checks, builds loader, compat, TLS and prefs from the device
+libraries `charon.toml` declares, and lays everything out as the device filesystem in
 `build/system/stage` (frameworks in `stage/usr/lib/rev-fw`). Every
 binary is stripped and signed with `ldid -S`.
 
@@ -53,8 +53,13 @@ packs that stage into
 `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
 The version is `version` in `charon.toml`.
 
-Add `charon build -c user.ios6:dyld_shared_cache=<path>` with a copy of the phone's
-`dyld_shared_cache_armv7` to have the build refuse imports iOS 6 does not export.
+With the phone attached, `charon test --tier imports` refuses anything staged that
+imports a symbol iOS 6 does not export. It fetches the phone's shared cache once
+into `~/.charon`; the build itself never needs the phone.
+
+A step of your own is a task in `charon.toml` - `[tasks.NAME]` with `script`,
+`shell` or `python` - placed in `[pipeline]` as `task:NAME`, or run alone with
+`charon task NAME`.
 
 ## After building an injected dylib — always verify it will load
 
