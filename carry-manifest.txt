@@ -111,9 +111,9 @@ grep  Source/cmake/OptionsCocoa.cmake WEBKIT_ADD_SDK_IMPORTED_LIBRARY(LibXml2::L
 grep  Source/WebKitLegacy/PlatformCocoa.cmake -exported_symbols_list ${WEBKIT_IOS6_EXPORTS}
 
 # ---- the build settings the device depends on -----------------------------
-set   conanfile.py "ENABLE_JIT": "ON"
-set   conanfile.py "ENABLE_C_LOOP": "OFF"
-set   conanfile.py "ENABLE_DFG_JIT": "ON"
+set   charon.toml ENABLE_JIT = "ON"
+set   charon.toml ENABLE_C_LOOP = "OFF"
+set   charon.toml ENABLE_DFG_JIT = "ON"
 
 # ---- the port's own notes -------------------------------------------------
 file  PORTING-IOS6.md

@@ -109,7 +109,7 @@ first. Three artifacts do this:
 | Artifact | On device | Built by | Role |
 | --- | --- | --- | --- |
 | **Loader** | `/Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib` | `RevSafari` in `platform/CMakeLists.txt` | Reads the enabled-apps preference and re-execs an enabled app with the engine's `DYLD_*` set. Skips SpringBoard. |
-| **Engine** | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `conan build` from `conanfile.py`, which also lays it out under the system's names | The WebKit build itself. |
+| **Engine** | `/usr/lib/rev-fw/{JavaScriptCore,WebCore,WebKit}.framework` | `make build` from `charon.toml`, which also lays it out under the system's names | The WebKit build itself. |
 | **Compat / hooks** | `/usr/lib/rev-safari-compat.dylib` | `rev-safari-compat` in `platform/CMakeLists.txt` | The ABI symbols iOS 6 predates, plus the bookmarks start page, WebAssembly, and preference reads. Inserted by the loader. |
 
 The loader and the compat dylib are two different files with two different jobs —
@@ -157,7 +157,7 @@ and the result loads and then misbehaves with no crash to read.
 builds everything that goes on the device around it with CMake from
 `platform/`. `conan export-pkg` packs that tree into
 `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
-The version is `version` in `conanfile.py` - change it there and build.
+The version is `version` in `charon.toml` - change it there and build.
 
 One `.deb` carries all of it: the loader and its MobileSubstrate filter, the
 compatibility and hook dylib, the TLS library, the Settings bundle with its

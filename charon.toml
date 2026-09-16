@@ -231,12 +231,12 @@ prefixed = [
 transport = "tests/device/harness.py:bind"
 
 [tests.scripts]
-runs = [
-    "tests/scripts/build-lookup.py",
-    "tests/scripts/declaration-matches-recipe.py",
-    "tests/scripts/flag-paths-exist.py",
-]
+runs = ["tests/scripts/build-lookup.py"]
 needs = []
+
+[tests.flags]
+runs = ["tests/scripts/flag-paths-exist.py", "tests/scripts/staged-plists-are-processed.py"]
+needs = ["build"]
 
 [tests.host]
 runs = ["tests/run-tests.py:run_host_tests"]

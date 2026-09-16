@@ -46,7 +46,7 @@ apply.
 
 ## 2. The libraries iOS 6 cannot supply
 
-They are declared, not scripted. `conanfile.py` names them and `conan.lock` pins
+They are declared, not scripted. `charon.toml` names them and `conan.lock` pins
 the exact recipe and binary of each; `recipes/` holds the recipe for every one,
 and each names a git URL and a commit rather than vendoring a copy:
 
@@ -76,7 +76,7 @@ behind one reference overwrite each other's packages in the shared cache.
 The target comes from ios6-toolchain's shared `ios6-armv7` profile, which says
 only what is true of armv7 on iOS 6. What is this port's own - C++23, and
 tuning for the Cortex-A9 in the iPhone 4S and iPad 2 - is in
-`profiles/revenant-armv7`, which includes the shared one. A 3GS is a
+`charon.toml`, from which Charon writes a profile that includes the shared one. A 3GS is a
 Cortex-A8, and another port on the same toolchain has no reason to inherit
 either choice.
 
@@ -102,7 +102,7 @@ after the toolchain changes. `make provenance` says which copy is answering.
 `IOS6_HOST_<NAME>=path` line per library and `IOS6_BUILD_<NAME>=path` per build
 tool, so `IOS6_BUILD_LD64` is the linker. Nothing names a version, an
 architecture or a folder layout. Change a version in
-`conanfile.py` and everything follows. Building builds whatever is missing and
+`charon.toml` and everything follows. Building builds whatever is missing and
 reuses whatever is not.
 
 `libios6compat.a` holds only this port's own stubs. It used to carry copies of
@@ -124,7 +124,8 @@ standalone application carries against the hash this project reviewed, and with
 make build
 ```
 
-`conanfile.py` is the whole build, the way a Gradle or Maven build file is: it
+`charon.toml` declares the whole build, the way a Gradle build file does, and
+Charon writes the recipe from it: that recipe
 installs the libraries, writes the CMake toolchain and cache - every path taken
 from the dependency graph, the linker from the `ld64` package - and then runs
 the steps in the order that fails cheapest first:
@@ -235,7 +236,7 @@ builds `RevSafari.dylib`, `rev-safari-compat.dylib`, `rev-TLS.dylib` and
 `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb` with
 ios6-base's `DebianPackage`: `debian-binary`, `control.tar.gz` and
 `data.tar.lzma`, the same members `dpkg-deb` writes. To release a new version,
-change `version` in `conanfile.py` and build. `packaging/` holds only
+change `version` in `charon.toml` and build. `packaging/` holds only
 `packaging/control`, which carries no version of its own, and
 `packaging/DEBIAN/postinst`.
 
@@ -285,7 +286,7 @@ make run ARGS="--wait 20"
 
 The prefixed build ends in `build/prefixed/RevWebViewHost.app`,
 the engine and the C++ runtime bundled inside it and its version taken from
-`conanfile.py`; `conan export-pkg` with the same option puts it in
+`charon.toml`; `make package VARIANT=prefixed` puts it in
 `<package folder>/RevWebViewHost.app`. The runner installs it, opens it through its
 `revwebviewhost:` scheme and brings back the log. It needs the device
 address in `device.env` at the root of the checkout, as everything that reaches

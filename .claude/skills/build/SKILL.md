@@ -17,7 +17,7 @@ Theos is not used.
 ./fetch-source.py     # webkit-254, a submodule on the fork's main branch
 ```
 
-One command builds the libraries iOS 6 predates (declared in `conanfile.py`,
+One command builds the libraries iOS 6 predates (declared in `charon.toml`,
 pinned in `conan.lock`), `libios6compat.a` and the engine:
 
 ```sh
@@ -51,7 +51,7 @@ make package
 
 packs that stage into
 `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
-The version is `version` in `conanfile.py`.
+The version is `version` in `charon.toml`.
 
 Add `make build ARGS="-c user.ios6:dyld_shared_cache=<path>"` with a copy of the phone's
 `dyld_shared_cache_armv7` to have the build refuse imports iOS 6 does not export.

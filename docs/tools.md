@@ -23,7 +23,7 @@ each with the entitlements it needs:
 
 ```sh
 conan install --requires=revenant-device-tools/1.0.0@revenant/stable --lockfile="" \
-  -pr:h profiles/revenant-armv7 -pr:b default --build=missing \
+  -pr:h build/system/charon/profile -pr:b default --build=missing \
   --deployer=direct_deploy --deployer-folder=dist --output-folder=dist/conan
 make device ARGS="copy dist/direct_deploy/revenant-device-tools/bin/revmem /usr/bin/revmem"
 ```

@@ -1,7 +1,7 @@
 # Third-party code, and where each piece stands
 
 This repository contains no third-party source. Every dependency below is
-declared in `conanfile.py`, pinned in `conan.lock`, and built by a recipe that
+declared in `charon.toml`, pinned in `conan.lock`, and built by a recipe that
 names the upstream git commit it fetches; nothing is vendored. The engine is a
 git submodule pointing at a fork of WebKit, so its code and its licenses live in
 that repository rather than this one.

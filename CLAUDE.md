@@ -88,7 +88,7 @@ CMake from `platform/CMakeLists.txt` like the dylibs beside it — that writes t
 - Package: `make package` writes
   `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`, engine
   frameworks included; `packaging/` holds only the `control` file and the
-  `DEBIAN/postinst` script. The version is `version` in `conanfile.py`.
+  `DEBIAN/postinst` script. The version is `version` in `charon.toml`.
 - Deploy: `dpkg -i` that package through `make device ARGS="copy ..."`; `make deploy` for the engine alone.
 - Documentation: `docs/` (`architecture.md`, `network.md`, `compatibility.md`, `building.md`, `memory-and-caches.md`).
 - Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.

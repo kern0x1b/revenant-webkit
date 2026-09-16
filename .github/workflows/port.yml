@@ -39,6 +39,9 @@ jobs:
       - name: Every Python file compiles
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
 
+      - name: The checks that need neither a phone nor a build
+        run: make test ARGS="--tier scripts"
+
       - name: The application's trust store is the reviewed one
         run: scripts/check-cacert.py
 
@@ -53,8 +56,10 @@ jobs:
       - name: The engine still carries what the port depends on
         run: scripts/carry-check.py
 
-      - name: conan.lock pins what the recipes resolve to
-        run: conan graph info . -pr:h profiles/revenant-armv7 -pr:b default --lockfile=conan.lock
+      - name: conan.lock pins what the declaration resolves to
+        run: |
+          make generate
+          conan graph info build/system/charon -pr:h build/system/charon/profile -pr:b default --lockfile=conan.lock
 
       - name: ICU as the engine uses it
         run: tests/run-tests.py host
