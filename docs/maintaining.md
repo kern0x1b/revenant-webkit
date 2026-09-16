@@ -63,7 +63,7 @@ What it asserts about a merged tree:
   armv7, `USE(JSVALUE32_64)` reached by the armv7 configuration, the CMake
   entries that name the files above.
 - **The symbol surface**, in `carry-symbols.txt` and checked by
-  `tools/symbol-check.py` as a step of `conan build`: every symbol the three
+  `tools/symbol-check.py` as a step of `charon build`: every symbol the three
   frameworks leave undefined - 6486 of them - and every Objective-C class they
   export by name. A *new* undefined symbol is the important one: it means an
   upstream change reached for API this system may not have, and dyld kills the

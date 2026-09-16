@@ -97,7 +97,7 @@ checkout, and from nowhere else.
 `conan config install` copies rather than references, so run `charon setup` again
 after the toolchain changes. `charon provenance` says which copy is answering.
 
-`conan build` writes `build/system/conan/ios6-deps.env` through the
+`charon build` writes `build/system/conan/ios6-deps.env` through the
 `ios6-base` generator, straight from the dependency graph - one
 `IOS6_HOST_<NAME>=path` line per library and `IOS6_BUILD_<NAME>=path` per build
 tool, so `IOS6_BUILD_LD64` is the linker. Nothing names a version, an
@@ -170,7 +170,7 @@ can sit in a process beside the system one. When a process takes our frameworks
 through `DYLD_FRAMEWORK_PATH` the system engine is never loaded, there is
 nothing to collide with, and UIKit needs the classes under their real names - it
 links `_OBJC_CLASS_$_WebView`, not a prefixed spelling. The recipe therefore
-builds the unprefixed engine by default; `VARIANT=prefixed` builds the prefixed
+builds the unprefixed engine by default; `charon build --variant prefixed` builds the prefixed
 one for the standalone application.
 
 **The recipe arranges that build as the system frameworks a process expects**,
@@ -211,7 +211,7 @@ charon build \
 
 `build/` is reproducible and gitignored.
 
-**A change to a WebCore header means a full build - `conan build`, which builds
+**A change to a WebCore header means a full build - `charon build`, which builds
 everything.** A partial build leaves
 WebKit and WebKitLegacy compiled against the old class size, and the result loads
 and then behaves wrongly — empty text in the interface, and a silent death with no
@@ -233,7 +233,7 @@ charon package
 `[[device-library]]` blocks of `charon.toml` build `RevSafari.dylib`,
 `rev-safari-compat.dylib`, `rev-TLS.dylib` and
 `RevPrefs.bundle` - and laid it out with the engine in
-`build/system/stage`. `conan export-pkg` runs the recipe's
+`build/system/stage`. `charon package` runs the recipe's
 `package()`, which copies that tree into `<package folder>/root` and writes
 `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb` with
 ios6-base's `DebianPackage`: `debian-binary`, `control.tar.gz` and

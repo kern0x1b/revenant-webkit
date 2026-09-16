@@ -147,15 +147,15 @@ sequence, and why each piece exists, is in **[docs/building.md](docs/building.md
 | `charon build` | the libraries iOS 6 predates, `libios6compat.a`, the engine and everything around it, laid out as the device filesystem in `build/system/stage` |
 | `charon package` | the `.deb` |
 
-A change to a WebCore header means a full build, which `conan build` is: a
+A change to a WebCore header means a full build, which `charon build` is: a
 partial build leaves the other frameworks compiled against the old class size,
 and the result loads and then misbehaves with no crash to read.
 
 ### The Safari substitution, as a package
 
-`conan build` lays out the engine as the system frameworks it replaces, and
-builds everything that goes on the device around it with CMake from
-`platform/`. `conan export-pkg` packs that tree into
+`charon build` lays out the engine as the system frameworks it replaces, and
+builds everything that goes on the device around it from the device libraries
+`charon.toml` declares. `charon package` packs that tree into
 `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
 The version is `version` in `charon.toml` - change it there and build.
 
