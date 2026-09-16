@@ -95,10 +95,24 @@ def host_libraries(root: Path) -> dict:
         output / "conan-install.log", output / "ios6-deps.env", ("IOS6_HOST_ICU",))
 
 
+def recipe_and_profile(root: Path) -> tuple:
+    for tree in engine_builds(root, "system"):
+        written = tree / "charon"
+        if (written / "conanfile.py").is_file() and (written / "profile").is_file():
+            return written, written / "profile"
+    if (root / "conanfile.py").is_file():
+        profiles = sorted((root / "profiles").glob("*")) if (root / "profiles").is_dir() else []
+        if profiles:
+            return root, profiles[0]
+    raise DependencyInstallError(
+        f"neither a generated recipe under a build tree of {root / 'build'} nor a recipe at {root} - "
+        "run the build first, so the libraries the batteries need can be installed")
+
+
 def device_libraries(root: Path) -> dict:
+    where, profile = recipe_and_profile(root)
     return install_dependencies(
-        ["conan", "install", root, "-pr:h", root / "profiles" / "revenant-armv7", "-pr:b", "default",
-         "--build=missing"],
+        ["conan", "install", where, "-pr:h", profile, "-pr:b", "default", "--build=missing"],
         root / "build" / "deps-install.log",
         lambda: next(iter(engine_builds(root, "system")), root / "build") / MARKER,
         ("IOS6_HOST_LIBCXX",), env={**os.environ, "IOS_SDK": ios_sdk()})
