@@ -297,6 +297,7 @@ compatibility-version = "1.0.0"
 
 [package]
 control = "packaging/control"
+variant = "system"
 maintainer-scripts = "packaging/DEBIAN"
 
 [tasks.carry-check]
