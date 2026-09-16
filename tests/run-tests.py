@@ -126,6 +126,7 @@ def print_last_lines(argv: list, count: int) -> bool:
 
 
 def run_host_tests(root: Path) -> int:
+    speak()
     try:
         icu = Path(host_libraries(root)["IOS6_HOST_ICU"])
     except DependencyInstallError as error:
@@ -266,7 +267,17 @@ def default_engine_build(root: Path) -> Path:
     return found[0]
 
 
+def speak() -> None:
+    if log.handlers or logging.getLogger().handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+
+
 def run_device_tests(root: Path, build: Path, device) -> int:
+    speak()
     if not device.reachable(12):
         log.error("device tests: the phone is not reachable - check device.env (see device.env.example)")
         return 1
