@@ -63,4 +63,4 @@ jobs:
           conan graph info build/system/charon -pr:h build/system/charon/profile -pr:b default --lockfile=conan.lock
 
       - name: ICU as the engine uses it
-        run: tests/run-tests.py host
+        run: charon test --tier host
