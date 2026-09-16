@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse a staged framework whose Info.plist is the unprocessed one.
+"""Refuse a staged framework whose Info.plist is the unprocessed one, or absent.
 
     tests/scripts/staged-plists-are-processed.py
 
@@ -9,6 +9,10 @@ that reconfigures and relinks nothing loses that race and stages the default:
 no MinimumOSVersion, no UIDeviceFamily, an empty CFBundleName. It loads, it runs,
 and nothing says the bundle lost what identifies it - which is why this refuses
 rather than warns.
+
+Which bundles must carry one comes from charon.toml: a framework staged with its
+resources is opened as a bundle, so a missing plist is the same loss arriving
+quietly. Walking the plists that happen to be there cannot see that.
 """
 import plistlib
 import sys
@@ -20,45 +24,61 @@ MANIFEST = ROOT / "charon.toml"
 REQUIRED = ("MinimumOSVersion", "UIDeviceFamily", "CFBundleSupportedPlatforms")
 
 
-def engine_location():
+def staging():
     with MANIFEST.open("rb") as handle:
         declared = tomllib.load(handle)
-    where = declared.get("stage", {}).get("engine-location")
+    stage = declared.get("stage", {})
+    where = stage.get("engine-location")
     if not where:
         raise SystemExit("{} declares no stage engine-location, so where the frameworks land is unknown".format(
             MANIFEST))
-    return where
+    bundles = sorted(spec.get("as", name) for name, spec in stage.get("frameworks", {}).items()
+                     if spec.get("resources"))
+    if not bundles:
+        raise SystemExit("{} declares no framework staged with its resources, so nothing here has a "
+                         "bundle to identify".format(MANIFEST))
+    return where, bundles
 
 
-def staged_plists():
-    found = []
-    for stage in sorted((ROOT / "build").glob("*/stage")):
-        for plist in sorted((stage / engine_location()).glob("*.framework/Info.plist")):
-            found.append(plist)
-    return found
+def unprocessed(plist, described):
+    faults = []
+    missing = [key for key in REQUIRED if not described.get(key)]
+    if missing:
+        faults.append("{} lacks {} - it is the plist CMake generates, not the one the engine "
+                      "processes".format(plist.relative_to(ROOT), ", ".join(missing)))
+    if not described.get("CFBundleName"):
+        faults.append("{} carries an empty CFBundleName".format(plist.relative_to(ROOT)))
+    return faults
 
 
 def main():
-    plists = staged_plists()
-    if not plists:
-        print("FAIL  no staged framework carries an Info.plist; run make build first")
+    where, bundles = staging()
+    stages = sorted((ROOT / "build").glob("*/stage"))
+    if not stages:
+        print("FAIL  no staged tree under {}; run make build first".format(ROOT / "build"))
         return 1
+
     failures = []
-    for plist in plists:
-        with plist.open("rb") as handle:
-            described = plistlib.load(handle)
-        missing = [key for key in REQUIRED if not described.get(key)]
-        if missing:
-            failures.append("{} lacks {} - it is the plist CMake generates, not the one the engine "
-                            "processes".format(plist.relative_to(ROOT), ", ".join(missing)))
-        if not described.get("CFBundleName"):
-            failures.append("{} carries an empty CFBundleName".format(plist.relative_to(ROOT)))
+    checked = 0
+    for stage in stages:
+        for bundle in bundles:
+            plist = stage / where / "{}.framework".format(bundle) / "Info.plist"
+            if not plist.is_file():
+                failures.append("{} is staged with its resources and carries no Info.plist - the engine "
+                                "opens it as a bundle".format(plist.parent.relative_to(ROOT)))
+                continue
+            with plist.open("rb") as handle:
+                described = plistlib.load(handle)
+            failures.extend(unprocessed(plist, described))
+            checked += 1
+
     for line in failures:
         print("FAIL  {}".format(line))
     if failures:
-        print("{} staged framework(s) carry an unprocessed Info.plist".format(len(failures)))
+        print("{} staged framework plist(s) missing or unprocessed".format(len(failures)))
         return 1
-    print("ok    {} staged framework plists carry the keys the device is identified by".format(len(plists)))
+    print("ok    {} staged framework plists carry the keys the device is identified by, "
+          "one for every bundle declared with resources".format(checked))
     return 0
 
 
