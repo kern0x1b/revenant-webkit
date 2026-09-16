@@ -110,6 +110,9 @@ grep  Source/cmake/OptionsCocoa.cmake WEBKIT_ADD_SDK_IMPORTED_LIBRARY(LibXml2::L
 # ---- the class-prefixed engine exports its classes under their prefixed names ---
 grep  Source/WebKitLegacy/PlatformCocoa.cmake -exported_symbols_list ${WEBKIT_IOS6_EXPORTS}
 
+# ---- the framework bundles keep the Info.plist the engine processed -------
+grep  Source/cmake/WebKitMacros.cmake MACOSX_FRAMEWORK_INFO_PLIST
+
 # ---- the build settings the device depends on -----------------------------
 set   charon.toml ENABLE_JIT = "ON"
 set   charon.toml ENABLE_C_LOOP = "OFF"
