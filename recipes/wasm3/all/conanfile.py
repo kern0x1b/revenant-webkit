@@ -28,9 +28,7 @@ class Wasm3Conan(ConanFile):
         Git(self, folder="src").fetch_commit(source["url"], source["commit"])
 
     def generate(self):
-        tc = CMakeToolchain(self)
-        tc.extra_cflags += ["-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=0"]
-        tc.generate()
+        CMakeToolchain(self).generate()
 
     def build(self):
         cmake = CMake(self)

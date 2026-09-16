@@ -52,9 +52,11 @@ packs that stage into
 `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
 The version is `version` in `charon.toml`.
 
-With the phone attached, `charon test --tier imports` refuses anything staged that
-imports a symbol iOS 6 does not export. It fetches the phone's shared cache once
-into `~/.charon`; the build itself never needs the phone.
+Every build ends its pipeline with `check:imports`, which refuses anything staged
+or bundled that imports a symbol iOS 6 does not export, checked against the
+phone's shared cache held in `~/.charon/dyld`. With the phone attached,
+`charon test --tier imports` fetches that cache once per machine; after that the
+build never needs the phone.
 
 A step of your own is a task in `charon.toml` - `[tasks.NAME]` with `script`,
 `shell` or `python` - placed in `[pipeline]` as `task:NAME`, or run alone with

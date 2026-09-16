@@ -1,6 +1,6 @@
 from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps, cmake_layout
-from conan.tools.files import copy, replace_in_file
+from conan.tools.files import copy
 from conan.tools.scm import Git
 import os
 
@@ -25,14 +25,12 @@ class Woff2Conan(ConanFile):
     def source(self):
         source = self.conan_data["sources"][self.version]
         Git(self).fetch_commit(source["url"], source["commit"])
-        replace_in_file(self, os.path.join(self.source_folder, "CMakeLists.txt"),
-                        "if (NOT BUILD_SHARED_LIBS)\n  install(\n    TARGETS woff2_decompress woff2_compress woff2_info",
-                        "if (FALSE)\n  install(\n    TARGETS woff2_decompress woff2_compress woff2_info")
 
     def generate(self):
         CMakeDeps(self).generate()
         tc = CMakeToolchain(self)
         tc.cache_variables["BUILD_SHARED_LIBS"] = False
+        tc.cache_variables["CMAKE_MACOSX_BUNDLE"] = False
         tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5"
         brotli = self.dependencies["brotli"].cpp_info
         tc.cache_variables["CANONICAL_PREFIXES"] = True

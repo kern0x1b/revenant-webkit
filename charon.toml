@@ -34,7 +34,6 @@ wasm3 = "0.9.1-beta.1+7.gdeeaca9@revenant/stable"
 cmake = "4.4.3"
 ninja = "1.13.2"
 ldid = "2.1.5-procursus7+23.gaf86971@charon/stable"
-dyld-imports-check = "1.0@charon/stable"
 
 [integrate]
 before-build = ["task:carry-check", "task:port-delta"]
@@ -331,6 +330,7 @@ system = [
     "stage:frameworks",
     "stage:plists-to-binary",
     "check:no-encryption-info",
+    "check:imports",
 ]
 prefixed = [
     "task:carry-check",
@@ -341,6 +341,7 @@ prefixed = [
     "task:compat-audit",
     "build:application",
     "sign:application",
+    "check:imports",
 ]
 
 [tests]
@@ -368,8 +369,8 @@ runs = ["tests/device/run.py:run_gate"]
 needs = ["device"]
 
 [tests.imports]
-runs = ["tests/device/imports-are-exported.py:run_imports"]
-needs = ["device", "build"]
+runs = ["tests/device/hold-shared-cache.py:hold_cache"]
+needs = ["device"]
 
 [tests.batteries]
 runs = ["tests/run-tests.py:run_device_tests"]
