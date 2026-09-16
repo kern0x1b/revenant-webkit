@@ -52,13 +52,23 @@ def pinned():
     return {line for line in PIN.read_text().splitlines() if line and not line.startswith("#")}
 
 
+def default_build():
+    engines = ROOT / "build" / "engine"
+    built = sorted(path for path in engines.glob("*-system") if path.is_dir()) if engines.is_dir() else []
+    if len(built) != 1:
+        found = ", ".join(path.name for path in built) or "none"
+        raise SystemExit(f"{engines} holds {found} - pass --build with the build to check")
+    return built[0]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--build", type=Path, default=ROOT / "build" / "engine" / "armv7-system")
+    parser.add_argument("--build", type=Path,
+                        help="engine build to check; default: the system build under build/engine")
     parser.add_argument("--pin", action="store_true", help="write this build's surface as the baseline")
     args = parser.parse_args()
 
-    current = surface(args.build)
+    current = surface(args.build or default_build())
     if args.pin:
         PIN.write_text(PIN_HEADER + "".join(f"{entry}\n" for entry in sorted(current)))
         print(f"pinned {len(current)} symbols")

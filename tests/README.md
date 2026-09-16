@@ -35,7 +35,8 @@ The same fault takes two seconds to find here.
 ## device
 
 `tests/js/*.js` run under `jsc` on the phone with the freshly built engine.
-The engine comes from `ENGINE_BUILD`, `build/engine/armv7-system` unless set. The runner
+The engine comes from `ENGINE_BUILD`, or from the system build under
+`build/engine` when that is the only one there. The runner
 syncs `jsc` and any framework whose size differs, so the batteries
 never run against a stale engine, and it pins the connection to the iPhone's
 UDID through iproxy so a connected iPad cannot answer instead.
