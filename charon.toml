@@ -2,6 +2,7 @@
 name = "revenant-webkit"
 version = "0.1.0"
 description = "WebKit for armv7 / iOS 6"
+index = "revenant"
 
 [checks]
 before-build = ["scripts/carry-check.py", "scripts/port-delta.py"]
