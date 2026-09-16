@@ -56,7 +56,7 @@ def pinned():
 def default_build():
     build = ROOT / "build"
     found = [marker.parent.parent for marker in build.glob(f"**/{MARKER.as_posix()}")
-             if "system" in marker.parent.parent.name] if build.is_dir() else []
+             if marker.parent.parent != build and "system" in marker.parent.parent.name] if build.is_dir() else []
     if found:
         nearest = min(len(path.parts) for path in found)
         found = [path for path in found if len(path.parts) == nearest]
