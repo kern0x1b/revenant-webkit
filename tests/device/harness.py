@@ -36,14 +36,14 @@ def __getattr__(name):
 
 
 def _found():
-    for folder in (ROOT / "tools", _shared()):
-        if (folder / "device.py").is_file():
-            if "device" not in sys.modules:
-                sys.path.insert(0, str(folder))
-            import device
-            return device
-    raise SystemExit(f"no device.py in {ROOT / 'tools'} or {_shared()} - "
-                     "has conan config install been run on this machine?")
+    folder = _shared()
+    if not (folder / "device.py").is_file():
+        raise SystemExit(f"no device.py in {folder} - has conan config install been run on this machine?")
+    if "device" not in sys.modules:
+        sys.path.insert(0, str(folder))
+    import device
+    device.bind(ROOT)
+    return device
 
 
 def _shared():
