@@ -77,8 +77,9 @@ CMake that Charon writes from `charon.toml`, like the dylibs beside it — that 
   `device.env` (gitignored). Never commit device credentials, IP addresses,
   hostnames, or absolute `/Users/<name>/...` paths — use `$HOME` /
   placeholders in scripts and docs.
-- **Commit messages:** plain imperative subject describing the change. No AI or
-  tool attribution.
+- **Commit messages:** plain imperative subject describing the change. This is an
+  openly AI-built public product — keep AI/tool attribution (e.g.
+  `Co-Authored-By: Claude`); we mark our work, we do not hide it.
 - **Build artifacts** (`build/`, `*.dylib`, `*.a`, `*.log`) are
   gitignored and reproducible from the recipe — do not commit them.
 
