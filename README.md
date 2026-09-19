@@ -302,3 +302,6 @@ cannot supply is fetched from its own upstream by a Conan recipe under
 its version, its license, and the recipe that fetches it - and what this project
 deliberately does not carry, including anybody else's fonts, pages or test
 suites.
+
+Built with Claude (Anthropic). This project is developed with AI assistance,
+openly — see the commit history.
