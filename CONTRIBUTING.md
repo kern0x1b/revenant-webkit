@@ -2,7 +2,7 @@
 
 This is an openly AI-built project (developed with Claude). Contributions are
 welcome; the working guide — architecture, gotchas, how to build and test —
-lives in [CLAUDE.md](CLAUDE.md).
+lives in [AGENTS.md](AGENTS.md).
 
 - **Commits:** plain imperative subject. Keep the `Co-Authored-By: Claude
   <noreply@anthropic.com>` trailer — we mark AI-built work, we do not hide it.

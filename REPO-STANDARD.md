@@ -37,8 +37,8 @@ add it just to fill a checklist.
 | --- | --- | --- |
 | `README.md` | The front door. | Template in §2. |
 | `LICENSE` | The repo's own licence, full text. | Filename is exactly `LICENSE`, no extension, even for forks whose upstream used `LICENSE.txt` — unless the licence text itself dictates the name. |
-| `CLAUDE.md` | Agent- and contributor-facing working map. | House title **"Contributor guide"**. See §1 note below. |
-| `CONTRIBUTING.md` | How to work on it, for a human who isn't us. | Short; points at `CLAUDE.md` for the deep guide. Template below. |
+| `AGENTS.md` | Agent- and contributor-facing working map. | House title **"Contributor guide"**. See §1 note below. |
+| `CONTRIBUTING.md` | How to work on it, for a human who isn't us. | Short; points at `AGENTS.md` for the deep guide. Template below. |
 | `SECURITY.md` | How to report a vulnerability privately. | Template below; pairs with GitHub Private Vulnerability Reporting. |
 | `CHANGELOG.md` | Notable changes, newest first. | Keep a Changelog 1.1.0 + SemVer. §3. |
 | `.gitignore` | Build artifacts, scratch, and all personal-data files. | Must ignore `device.env*` and absolute-path scratch. |
@@ -54,12 +54,12 @@ add it just to fill a checklist.
 | `.clang-format` | the repo has C/C++/Obj-C source. | `shade` and `umbra` already have one; standardise its contents across C/C++ repos. |
 | `CODE_OF_CONDUCT.md` | **only if a real outside contributor community forms.** | Deliberately **omitted** by default — see decision below. |
 
-**`CLAUDE.md` vs `CONTRIBUTING.md`.** They are different audiences and both are
-committed and public. `CLAUDE.md` ("Contributor guide") is the working map —
+**`AGENTS.md` vs `CONTRIBUTING.md`.** They are different audiences and both are
+committed and public. `AGENTS.md` ("Contributor guide") is the working map —
 architecture, gotchas, where things live, playbooks — written for whoever (human
 or AI) is actually building. `CONTRIBUTING.md` is the short outside-contributor
 front door: licence of contributions, commit convention, the no-personal-data
-rule, and a pointer into `CLAUDE.md`. Because `CLAUDE.md` is public it obeys the
+rule, and a pointer into `AGENTS.md`. Because `AGENTS.md` is public it obeys the
 no-personal-data rule like any other file.
 
 **CODE_OF_CONDUCT decision — omit by default.** These are AI-built personal
@@ -258,7 +258,7 @@ Naming and style, common to all:
 
 This is an openly AI-built project (developed with Claude). Contributions are
 welcome; the working guide — architecture, gotchas, how to build and test —
-lives in [CLAUDE.md](CLAUDE.md).
+lives in [AGENTS.md](AGENTS.md).
 
 - **Commits:** plain imperative subject. Keep the `Co-Authored-By: Claude
   <noreply@anthropic.com>` trailer — we mark AI-built work, we do not hide it.
@@ -366,7 +366,7 @@ Ordered by effort. None of this has been done — it is the proposed work.
 ### `charon` (MIT, original, public)
 - [ ] Add `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `.editorconfig`,
       `.gitattributes`.
-- [ ] Add `CLAUDE.md` ("Contributor guide") if absent; it has `DESIGN.md` and a
+- [ ] Add `AGENTS.md` ("Contributor guide") if absent; it has `DESIGN.md` and a
       README but no agent map at root.
 - [ ] Rewrite the description to lead with "Charon"; add topics
       (`cross-compilation`, `toolchain`, `conan`, `xmake`, `ios`, `armv7`).
@@ -378,7 +378,7 @@ Ordered by effort. None of this has been done — it is the proposed work.
       with the product name.
 - [ ] Add the missing core files: `CONTRIBUTING.md`, `SECURITY.md`,
       `.editorconfig`, `.gitattributes`.
-- [ ] Add topics (§3). Keep `README`, `CHANGELOG`, `THIRD-PARTY.md`, `CLAUDE.md`,
+- [ ] Add topics (§3). Keep `README`, `CHANGELOG`, `THIRD-PARTY.md`, `AGENTS.md`,
       CI — they already match the standard and set the bar.
 - [ ] Add the one-line "Built with Claude" statement to the README.
 - [ ] Leave `LICENSE` clean MIT so GitHub stops showing "Other"; the submodule's
