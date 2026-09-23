@@ -99,6 +99,9 @@ CMake that Charon writes from `charon.toml`, like the dylibs beside it — that 
   agent's own `Co-Authored-By:` trailer); we mark our work, we do not hide it.
 - **Build artifacts** (`build/`, `*.dylib`, `*.a`, `*.log`) are
   gitignored and reproducible from the recipe — do not commit them.
+- **No pull requests to other people's repositories.** Fixes worth sending to WebKit collect in
+  `docs/upstream.md`; they go upstream once, as one batch, only after the engine is fully tested
+  and only when the owner says so.
 
 ## Where to look
 
