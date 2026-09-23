@@ -72,3 +72,20 @@ The package puts each file where it belongs:
 Respring with `charon device run 15 "killall SpringBoard"`, wait for it to come back
 (`launchctl list | grep com.apple.SpringBoard`), then verify — see
 `.claude/skills/test`.
+
+## Proving the phone holds this build
+
+The stage differs from the build tree by design: it strips local symbols
+(`strip -S -x`; WebCore is about half the size staged), retargets install names
+and re-signs each binary, renames per `as` (`WebKitLegacy.framework` is staged as
+`WebKit.framework`), turns plists binary (`stage:plists-to-binary`) and copies
+resources only where `resources = true` (WebCore). Size and md5 compare only
+within one side — stage against phone. Across tree and stage compare what
+survives strip and re-signing:
+
+```sh
+otool -l FILE | awk '$1=="uuid"{print $2; exit}'   # LC_UUID; the line after LC_UUID is cmdsize
+nm -gU FILE | wc -l                                  # exported symbol count
+```
+
+Compare plists by parsed content (`plistlib`), never by bytes.

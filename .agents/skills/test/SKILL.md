@@ -25,6 +25,14 @@ All commands go through `charon device <run|copy|fetch> ...` with
 
 The device tiers do not check the claim themselves.
 
+After any change under `webkit-254/Source/JavaScriptCore`, run `--tier batteries`
+as well as `gate`: the gate's pages rarely keep a function hot enough to enter
+the DFG, so the gate can stay green while every OSR entry into DFG code crashes;
+the batteries run `tests/js/*.js` under `jsc` with the JIT tiers on. A
+32-bit-only crash after taking upstream code is first looked for among upstream
+commits that removed 32-bit branches:
+`git -C webkit-254 log -S '<removed line>' -- <file>`.
+
 ## Launching an app
 
 - `/private/var/tmp/sblaunch <bundle-id>` where it is installed (the iPhone 4S); it is
@@ -42,6 +50,10 @@ The stock engine reports `AppleWebKit/536`; the port reports `AppleWebKit/605`.
   `[tweak] ctor pass`, `WebKitInitialize`, `[jit] reservation … succeeded`.
 - Or check what re-exec'd: `charon device run 12 "cat /tmp/rev-safari-tweak.log"` — only
   apps enabled in `InjectedApps` (Safari by default) should appear.
+- To start the engine log afresh, truncate it (`: > /tmp/rev-safari-stderr.log`);
+  never `rm` it while Safari runs. The loader `freopen`s stderr onto that file,
+  so a running Safari keeps writing to the unlinked inode and every later line
+  is lost.
 
 Ground truth of rendering: the stock engine renders modern Google/YouTube broken;
 the port renders them correctly.
@@ -87,6 +99,24 @@ charon device run 40 "/usr/bin/revmem <mobilesafari-pid>"       # pid from launc
 
 Use it before any memory change to confirm which owner actually holds the dirty
 pages — measured, the heavy pages are malloc/JS-heap bound, not pixel buffers.
+
+## Measuring performance
+
+- Turn every diagnostic switch off first (`WEBKIT_IOS6_*_LOG`, samplers, lock
+  recorders). They pause the web thread and move results by a factor, not a
+  percent.
+- Clear `/tmp/rev-safari-stderr.log` before a run (truncate it, as above): the
+  loader appends to it, so the previous launch's counters are still there.
+- Measure the spread first. Two launches of the same build differ in time to
+  first paint by more than most changes move it, so one run per build compares
+  nothing: alternate builds, several runs each.
+- Two sides of an experiment that agree to the last digit mean a stale file was
+  read. Check the log's name and modification time.
+- Read periodic counters over the whole log, not its `tail`: a counter printed
+  and reset every few seconds shows only the last window, usually after the
+  gesture ended.
+- Symbolicate with the image bases printed by the same launch; ASLR moves them
+  every launch.
 
 ## Driving the UI
 

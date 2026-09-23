@@ -56,6 +56,22 @@ CMake that Charon writes from `charon.toml`, like the dylibs beside it — that 
   dylib, check `nm -u <dylib> | c++filt` and match the linkage of the copy proven
   on device (`otool -L`). The compat dylib framework-links Foundation/CF/objc/
   sqlite; the loader links only libSystem + CoreFoundation.
+- **An excluded engine source needs its feature gate off.** Wrong: dropping a
+  file from the build (a `// ios6:` line in
+  `webkit-254/Source/WebCore/SourcesCocoa.txt`) and aliasing its symbols to
+  `webkitIOS6MediaEngineUnavailable` in `compat/ios6_media_stubs.cpp` while the
+  `HAVE_*`/`ENABLE_*` gate that calls it stays on. Right: turn that gate off
+  under `WEBKIT_IOS6` too, as `HAVE_AVASSETREADER` is in
+  `Source/WTF/wtf/PlatformHave.h`. Reason: the alias returns `0` in a register
+  and never writes a C++ return slot, so a live caller reads garbage and
+  crashes away from the cause.
+- **A new UIKit-delegate selector needs a default.** Wrong: sending a selector
+  through `_UIKitDelegateForwarder` that only UIKit's own delegate implements.
+  Right: also add it, empty, to `WebDefaultUIKitDelegate`
+  (`webkit-254/Source/WebKitLegacy/ios/DefaultDelegates/`). Reason:
+  `_WebSafeForwarder` answers `respondsToSelector:` and
+  `methodSignatureForSelector:` from its default target only, so without the
+  default the send raises an unrecognized selector.
 - **SpringBoard is boot-critical.** The Substrate filter is broad
   (`Filter { Classes = UIApplication }`) so the loader reaches every app, but the
   loader returns immediately for SpringBoard (`getprogname`) and no-ops for any
