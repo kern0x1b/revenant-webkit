@@ -2,7 +2,7 @@
 
 Orientation for anyone — human or AI assistant — working on this repository.
 Read it before making changes. Task-specific playbooks live as skills under
-`.claude/skills/` (build, deploy, test, debug); this file is the map.
+`.agents/skills/` (build, deploy, test, debug); this file is the map.
 
 ## What this is
 
@@ -92,4 +92,4 @@ CMake that Charon writes from `charon.toml`, like the dylibs beside it — that 
   `DEBIAN/postinst` script. The version is `version` in `charon.toml`.
 - Deploy: `dpkg -i` that package through `charon device copy ...`; `charon deploy` for the engine alone.
 - Documentation: `docs/` (`architecture.md`, `network.md`, `compatibility.md`, `building.md`, `memory-and-caches.md`).
-- Playbooks: `.claude/skills/{build,deploy,test,debug}/SKILL.md`.
+- Playbooks: `.agents/skills/{build,deploy,test,debug}/SKILL.md`.
