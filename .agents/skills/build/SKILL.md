@@ -38,19 +38,23 @@ no crash log. `docs/building.md` has the whole sequence.
 
 ## Safari-substitution artifacts
 
-The same `charon build` finishes them: after the engine it runs the carry,
-compat and symbol checks, builds loader, compat, TLS and prefs from the device
-libraries `charon.toml` declares, and lays everything out as the device filesystem in
-`build/system/stage` (frameworks in `stage/usr/lib/rev-fw`). Every
-binary is stripped and signed with `ldid -S`.
+The same `charon build` finishes them. Its steps are `[pipeline]` in
+`charon.toml`: `task:carry-check` runs first, before `build:static-library`;
+after the engine come `check:exports`, `task:compat-audit` and
+`task:symbol-check`; then it builds loader, compat, TLS and prefs from the
+device libraries `charon.toml` declares (`build:device-library`) and lays
+everything out as the device filesystem in `build/system/stage` (frameworks in
+`stage/usr/lib/rev-fw`). The `prefixed` pipeline adds `task:prefix-exports`
+before the libraries and has no `task:symbol-check`. Every binary is stripped
+and signed with `ldid -S`.
 
 ```sh
 charon package
 ```
 
-packs that stage into
-`<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`.
-The version is `version` in `charon.toml`.
+packs that stage and copies
+`space.kern0x1b.rev_<version>_iphoneos-arm.deb` into `build/<variant>/`,
+printing `package <path>`. The version is `version` in `charon.toml`.
 
 Every build ends its pipeline with `check:imports`, which refuses anything staged
 or bundled that imports a symbol iOS 6 does not export, checked against the

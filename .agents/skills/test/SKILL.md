@@ -1,12 +1,35 @@
 ---
 name: test
-description: Verify the Safari substitution and the Settings pane on device — confirm the port's engine is active, capture screenshots, and check SpringBoard health. Use after deploying or when checking a change on the iPhone 4S.
+description: Verify the Safari substitution and the Settings pane — run the declared `charon test` tiers, confirm the port's engine is active on device, launch apps, drive the UI with revtouch, capture screenshots, and check SpringBoard health. Use after deploying or when checking a change on the iPhone 4S.
 ---
 
 # Testing on device
 
 All commands go through `charon device <run|copy|fetch> ...` with
-`device.env` set. See `.claude/skills/deploy`.
+`device.env` set, after claiming the device with `xmake device` — see
+`.claude/skills/device-ssh-access` and `.claude/skills/deploy`.
+
+## The declared tiers
+
+`charon test` runs every tier `charon.toml` declares under `[tests.*]`;
+`charon test --tier NAME` runs one:
+
+| Tier | Needs | Runs |
+| --- | --- | --- |
+| `scripts` | nothing | `tests/scripts/build-lookup.py` |
+| `flags` | a build | the flag, staged-plist and project-include checks in `tests/scripts/` |
+| `host` | the `icu` packages | `tests/run-tests.py:run_host_tests` |
+| `gate` | the device | `tests/device/run.py:run_gate` |
+| `imports` | the device | `tests/device/hold-shared-cache.py:hold_cache` — fetches the shared cache `check:imports` reads |
+| `batteries` | the device and a build | `tests/run-tests.py:run_device_tests` |
+
+The device tiers do not check the claim themselves.
+
+## Launching an app
+
+- `/private/var/tmp/sblaunch <bundle-id>` where it is installed (the iPhone 4S); it is
+  not on `PATH`.
+- `uiopen <url>` otherwise — a web URL opens Safari, `prefs:root=...` opens Settings.
 
 ## Is the port's engine active?
 
@@ -40,10 +63,11 @@ Give heavy sites 15–30 s to finish; re-shoot if content is still loading.
 charon device run 12 'launchctl list | grep com.apple.SpringBoard'   # present == running
 ```
 
-Do **not** trust `ps ax | grep SpringBoard` — the device's busybox `ps` output
-does not match reliably and makes a healthy device look dead. If unsure, take a
-screenshot; if the home screen renders, SpringBoard is fine. A stable pid across
-two checks means it is not crash-looping.
+`killall -0 SpringBoard` (exit 0 == running) works too. The device has no `ps`,
+`head`, `tail`, `wc`, `uptime`, `nohup` or `timeout`; trim output on the host.
+If unsure, take a screenshot; if the home screen renders, SpringBoard is fine.
+The same pid in `launchctl list` across two checks means it is not
+crash-looping.
 
 ## Memory breakdown (the device has no vmmap)
 
@@ -63,6 +87,20 @@ charon device run 40 "/usr/bin/revmem <mobilesafari-pid>"       # pid from launc
 
 Use it before any memory change to confirm which owner actually holds the dirty
 pages — measured, the heavy pages are malloc/JS-heap bound, not pixel buffers.
+
+## Driving the UI
+
+`revtouch` (same package, `tools/revtouch.c`) injects touches in points, on a
+320x480 screen unless `REVTOUCH_W` / `REVTOUCH_H` say otherwise:
+
+```sh
+charon device copy dist/direct_deploy/revenant-device-tools/bin/revtouch /usr/bin/revtouch
+charon device run 10 "revtouch tap 160 240"
+charon device run 10 "revtouch swipe 160 400 160 100"   # X Y X2 Y2
+```
+
+Verbs: `tap`, `down`, `move`, `up` take `X Y`; `swipe` takes `X Y X2 Y2`. Take a
+screenshot first: launching an app does not make it frontmost.
 
 ## The Settings pane
 

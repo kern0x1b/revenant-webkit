@@ -15,18 +15,24 @@ cp device.env.example device.env
 Charon reads it: `charon device run <timeout> "<cmd>"`,
 `charon device copy <local> <remote>` and `charon device fetch <remote> <local>`.
 Scripts import it instead of building SSH option strings of their own.
+Claim the device before any of this; `charon device` does not check claims — see
+`.agents/skills/device-ssh-access`.
 
 ## Push everything
 
-`charon build` stages the whole substitution and `charon package` packs it into
-one .deb; install it the way any tweak is installed:
+`charon build` stages the whole substitution; one command packs and installs it:
 
 ```sh
-charon package
-deb="$(conan cache path revenant-webkit/<version>:<package id>)/deb"
-charon device copy "$deb"/space.kern0x1b.rev_*_iphoneos-arm.deb /tmp/rev.deb
-charon device run 120 "dpkg -i /tmp/rev.deb"
+charon install
 ```
+
+It runs `charon package` (which copies the .deb into `build/<variant>/` and
+prints `package <path>`), copies each .deb to `/tmp` on the phone, runs
+`dpkg -i <deb> && rm -f <deb>`, refuses a .deb whose `/Applications/<App>.app`
+would replace an installed app with another bundle id, and runs
+`su mobile -c uicache` when the package holds an app. The package's
+`packaging/DEBIAN/postinst` kills Mobile Safari and Preferences; no respring is
+needed.
 
 For the engine alone, without rebuilding the package:
 
@@ -34,8 +40,12 @@ For the engine alone, without rebuilding the package:
 charon deploy
 ```
 
-Its postinst restarts Mobile Safari and Preferences; no respring is needed. The
-package puts each file where it belongs:
+It backs up each framework binary to `/usr/lib/rev-fw.bak/<Framework>`, copies
+the binaries and streams their resources, fails if AppleDouble `._*` files
+landed on the phone, and then runs only `killall MobileSafari` — no postinst, so
+kill Preferences yourself if the pane depends on the change.
+
+The package puts each file where it belongs:
 
 | In the package | Device |
 | --- | --- |
@@ -50,8 +60,9 @@ package puts each file where it belongs:
 
 - **Never overwrite the loader with the compat dylib or vice versa** — they are
   different files; swapping them drops Safari to the system engine.
-- **Keep the `.bak` files** the deploy makes. To recover, copy a `.bak` back over
-  its target and respring — see `.claude/skills/debug`.
+- **Keep `/usr/lib/rev-fw.bak/`**: only `charon deploy` makes it, and it holds the
+  engine binaries it replaced. `charon install` keeps no backup; the way back
+  there is reinstalling an earlier .deb — see `.claude/skills/debug`.
 - **Iterating on the Settings pane needs no respring:** redeploy the bundle, then
   `charon device run 15 "killall Preferences"` and reopen it. A respring re-locks the
   device.

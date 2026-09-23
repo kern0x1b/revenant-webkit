@@ -37,13 +37,21 @@ read a connection-reset — the tunnel/USB mechanics there apply here unchanged.
 
 ## Recover to the last good state
 
-The deploy leaves `.bak` copies. Restore and respring:
+Nothing on the device keeps a copy of the loader or the compat dylib. The ways
+back:
+
+- **Anything the .deb installed:** reinstall an earlier .deb (`charon package`
+  leaves each version it builds in `build/<variant>/`):
+  `charon device copy build/system/space.kern0x1b.rev_<version>_iphoneos-arm.deb /tmp/rev.deb`,
+  then `charon device run 300 "dpkg -i /tmp/rev.deb && rm -f /tmp/rev.deb"`.
+- **The engine after `charon deploy`:** it left the replaced binaries in
+  `/usr/lib/rev-fw.bak/<Framework>`; copy each back and restart Safari:
 
 ```sh
-charon device run 15 "cp -f /Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib.bak2 /Library/MobileSubstrate/DynamicLibraries/RevSafari.dylib; killall SpringBoard"
+charon device run 30 'cd /usr/lib/rev-fw.bak && for fw in *; do cp -f "$fw" "/usr/lib/rev-fw/$fw.framework/$fw"; done; killall MobileSafari'
 ```
 
-If a bad **broad** injection makes the UI misbehave, restoring the loader + its
-filter `.bak` and respringing brings it back; the loader guards SpringBoard, so
+If a bad **broad** injection makes the UI misbehave, reinstalling a good
+package and respringing brings it back; the loader guards SpringBoard, so
 the phone stays bootable. If ever truly stuck, booting into **safe mode** (hold
 Volume Up during boot) disables MobileSubstrate so you can SSH in and revert.

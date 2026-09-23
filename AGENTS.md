@@ -2,7 +2,8 @@
 
 Orientation for anyone — human or AI assistant — working on this repository.
 Read it before making changes. Task-specific playbooks live as skills under
-`.agents/skills/` (build, deploy, test, debug); this file is the map.
+`.agents/skills/` (build, deploy, test, debug, device-ssh-access); this file is
+the map.
 
 ## What this is
 
@@ -60,9 +61,9 @@ CMake that Charon writes from `charon.toml`, like the dylibs beside it — that 
   loader returns immediately for SpringBoard (`getprogname`) and no-ops for any
   app not enabled in `InjectedApps`. Never let injection touch SpringBoard.
 - **Checking whether SpringBoard is alive:** use `launchctl list | grep
-  com.apple.SpringBoard`. The device's busybox `ps ax | grep` does **not** match
-  reliably and will make a healthy device look dead. Take a `/usr/bin/shot`
-  screenshot to confirm the UI.
+  com.apple.SpringBoard` or `killall -0 <process>`. The device has no `ps`,
+  `head`, `tail`, `wc`, `uptime`, `nohup` or `timeout`; trim output on the host.
+  Take a `/usr/bin/shot` screenshot to confirm the UI.
 - **Iterating on the Settings pane** needs no respring: redeploy the bundle, then
   `killall Preferences` and reopen. A respring re-locks the device.
 - **`/usr/bin/shot`** always writes `/tmp/screenshot.png` and ignores any path
@@ -86,10 +87,15 @@ CMake that Charon writes from `charon.toml`, like the dylibs beside it — that 
 ## Where to look
 
 - Build: `charon build` (`charon build --variant prefixed` for the standalone application's engine); see `docs/building.md`. It ends with the device filesystem tree in `build/system/stage`.
-- Package: `charon package` writes
-  `<package folder>/deb/space.kern0x1b.rev_<version>_iphoneos-arm.deb`, engine
-  frameworks included; `packaging/` holds only the `control` file and the
-  `DEBIAN/postinst` script. The version is `version` in `charon.toml`.
-- Deploy: `dpkg -i` that package through `charon device copy ...`; `charon deploy` for the engine alone.
+- Package: `charon package` copies
+  `space.kern0x1b.rev_<version>_iphoneos-arm.deb`, engine frameworks included,
+  into `build/<variant>/` and prints `package <path>`; `packaging/` holds only
+  the `control` file and the `DEBIAN/postinst` script. The version is `version`
+  in `charon.toml`.
+- Deploy: `charon install` packages, copies each .deb to `/tmp`, runs
+  `dpkg -i … && rm`, refuses a .deb whose app would replace another bundle id,
+  and runs `su mobile -c uicache` when the package holds an app; `charon deploy`
+  for the engine alone. Claim the device first (`device-ssh-access`).
 - Documentation: `docs/` (`architecture.md`, `network.md`, `compatibility.md`, `building.md`, `memory-and-caches.md`).
-- Playbooks: `.agents/skills/{build,deploy,test,debug}/SKILL.md`.
+- Playbooks: `.agents/skills/{build,deploy,test,debug,device-ssh-access}/SKILL.md`.
+- Workspace-wide procedures are skills in `$HOME/Git/projects/ios/.agents/skills/`: `device-session` (claim, run, install, launch, tap on a real device), `canon-install`, `patch-merge`, `worktree-sweep`, `session-handoff`, `band-launch`, `band-supervise`. A session started inside this repository does not list them — read `<name>/SKILL.md` there.
