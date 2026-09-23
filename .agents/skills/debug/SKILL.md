@@ -32,14 +32,8 @@ The loader did not re-exec Safari, or the engine did not load. Check in order:
 
 ## The device looks dead / SSH resets
 
-- `launchctl list | grep com.apple.SpringBoard` is the reliable liveness check.
-  **`ps ax | grep` on the device's busybox does not match reliably** — an empty
-  result there does *not* mean SpringBoard is down. Take a `/usr/bin/shot`
-  screenshot; a rendered home screen means the UI is fine.
-- `kex_exchange_identification: read: Connection reset by peer` with the host
-  tunnel still listening usually means the USB tunnel glitched or dropbear is
-  rate-limiting rapid connections — slow down and reconnect, or re-seat USB. It is
-  usually **not** a device crash.
+See `.agents/skills/device-ssh-access` for the liveness check, the screenshot probe, and how to
+read a connection-reset — the tunnel/USB mechanics there apply here unchanged.
 
 ## Recover to the last good state
 
