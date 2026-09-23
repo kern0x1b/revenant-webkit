@@ -105,6 +105,17 @@ collide with and UIKit needs the classes under their real names — it links
 is configured without the prefix; the prefix header remains for any build that has
 to share a process with the system engine.
 
+The prefix renames classes, not the selectors of categories, and one category
+matters. iOS 6's UIKit measures and draws strings through methods the system
+WebKit adds to `NSString` (the `_web_draw…` and `_web_size…` family), and a
+category loaded from the port's WebKitLegacy replaces those methods
+process-wide: with both engines in one process every UIKit label, text field
+and the status bar draw nothing, while web text is fine. So
+`WebNSStringExtrasIOS6.mm` renames its eight drawing and measuring selectors to
+`Rev…` when `IOS6_CLASS_PREFIX_H` is defined; under substitution the real names
+stay, because there they are meant to replace the system's. A new category
+method on a system class in the prefixed build needs the same treatment.
+
 ## What UIKit actually needs from an engine
 
 Measured from the shared cache rather than guessed: across the 18 system libraries

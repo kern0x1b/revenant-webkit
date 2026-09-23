@@ -142,6 +142,7 @@ Two more sat in the injected dylib and reported invented numbers:
 | `+[LSAppLink openWithURL:…]` | "no app link" | No app-link resolver exists on this system to ask. The honest "no" is what makes the caller open the link in the browser itself, rather than a crash from an unimplemented class method |
 | `+[WebView _allowCookies]`, `currentCFHTTPCookieStorage()` | `YES`, `0` | Untouched on purpose: the real backing exists, and changing the cookie-accept policy risks the logged-in sessions this port is used with. WebCore uses its own default behind the null |
 | `-_touchEventRegions` | `nil` | Measured on the device: reporting a region made UIKit deliver neither mouse nor touch events |
+| `RenderLayerCompositor::allowBackingStoreDetachingForFixedPosition` | `false` | `WebChromeClientIOS::updateViewportConstrainedLayers` moves fixed layers on every scroll frame, while the engine's estimate of where they are comes from the last layout, which is rare here. Once the two diverge the engine takes the header and footer for off screen and drops their backing store: the layers stay in place and paint empty. Keeping them costs about 145 KB for a typical header and footer at 320 points |
 | `+drainLayerPool` | `{}` | `LayerPool::drain()` exists and was deliberately reverted once — it caused live fixed-bar jitter. Not to be re-enabled without a live re-test |
 | `_addVisitedLinksToPageGroup:` | `{}` | The bulk seed only. Per-URL visit recording and `:visited` styling already work through `_visitedURL:withTitle:`, which is real |
 | DumpRenderTree, NPAPI, AppCache, remote inspector, `WebHTMLView`'s AppKit category, every `finalize` | `{}` | The feature is genuinely gone from 2.54, or is Mac-only, or is GC-only under manual retain/release. Empty is correct |
@@ -168,6 +169,19 @@ Two more sat in the injected dylib and reported invented numbers:
   it is made rather than an oversight. Found by JSC's own
   `JSTests/stress/big-int-less-than-general.js`, which compares `0n` against
   `Number.MIN_VALUE`.
+- **`new WebAssembly.Instance(module)` throws.** WebAssembly here is the wasm3
+  interpreter behind `platform/safari/RevWasm.m`. Its bootstrap answers
+  `validate`, `compile`, `instantiate` and the synchronous `new
+  WebAssembly.Module(bytes)`, but exports a stub for the synchronous `Instance`
+  constructor that throws `sync Instance unsupported`, although a working
+  `Instance` is defined in the same `kRevWasmBootstrap`. A page that
+  instantiates synchronously fails until the export is switched to it.
+- **`mix-blend-mode: hue | saturation | color | luminosity` on an element is
+  drawn unblended**, while the separable modes are exact and all four are
+  exact through a canvas (`tests/device/gradients-and-blends.html`). The
+  element is not composited; the tile Safari paints into is not a bitmap
+  context, and this CoreGraphics drops the non-separable modes there. The
+  measurements and the one attempt not to repeat are in `tests/device/README.md`.
 
 ## Soft-linked constants
 
@@ -207,6 +221,14 @@ not available", which removes most of the rest. The ones that actually fired:
 - `AVAudioSessionPortCarAudio` (CarPlay, iOS 7) — reached from
   `MediaSessionHelperIOS::updateCarPlayIsConnected()`, which had no guard at
   all. Added `HAVE_AVAUDIOSESSION_CARAUDIO_PORT`.
+
+One is avoided by construction. The camera source for `getUserMedia`
+(`RevCameraSource::deliverSampleBuffer` in
+`WebCore/platform/mediastream/rev/RevCameraCaptureSource.mm`) hands
+`VideoFrameCV::create` an explicit, empty colour space. The overload without
+one computes the space from the buffer's attachments by comparing them with
+soft-linked CoreMedia constants (DCI-P3, P3-D65, BT.2020) that iOS 6 does not
+export, so it would assert on the first frame.
 
 The assert in `WTF/wtf/cocoa/SoftLinking.h` now names the symbol and its
 framework, so the next one is a one-line diagnosis rather than a backtrace to

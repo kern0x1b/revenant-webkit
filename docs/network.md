@@ -5,6 +5,9 @@ handshake with a current server: measured against a live host, every CBC/SHA-1
 suite is refused and only AEAD suites — AES-GCM, ChaCha20-Poly1305 — are
 offered, none of which this system speaks. The certificate side is fine, the
 device already trusts ISRG Root X1 and X2; the connection never gets that far.
+Those roots were issued after this firmware, so the device trusts more than its
+root filesystem shows: judge trust on the device, with `SecTrustEvaluate` on a
+real chain, never from the anchors of an extracted root filesystem.
 
 So the port brings its own protocol, over OpenSSL built for armv7, in two
 places. `platform/safari/tls-openssl.c` becomes `rev-TLS.dylib`, which the

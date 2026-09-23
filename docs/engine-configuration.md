@@ -59,6 +59,13 @@ except the script interpreter. The engine's own mapped code measured ninety one
 megabytes against a page that uses forty, in a process the system kills at about
 a hundred and seventy.
 
+**Hot/cold splitting stays off.** `-mllvm -hot-cold-split=false` in `[flags]
+common` of `charon.toml` is not an oversight. Under ThinLTO an `-mllvm` flag
+reaches code generation only when the link carries it as well, and turned on
+there splitting grows `__text` by 1.4-1.6% in each of the three frameworks:
+every outlined cold block gets a prologue and epilogue of its own. It buys
+instruction-cache locality, not size.
+
 **Notifications and fullscreen.** Both are on. Fullscreen has a real UIKit bridge,
 and it needed one upstream gap closed: `requestFullscreen()` is enabled by
 `FullScreenEnabled` in `WebCore::Settings`, but WebKitLegacy's hand-maintained
